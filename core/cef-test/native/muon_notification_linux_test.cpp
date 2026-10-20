@@ -25,7 +25,7 @@ static cardio::promise<void> Control(GDBusConnection* connection,
   g_variant_unref(result);
 }
 static cardio::promise<void> RunTests() {
-  auto backend = CreateMuonLinuxNotificationBackend("Muon native test", "dev.muon.Test");
+  auto backend = CreateMuonLinuxNotificationBackend("Muon native test", "dev.muon.Test", "test", "");
   const auto caps = co_await backend.capabilities();
   Expect(caps.available && caps.actions, "running service capabilities were not read");
   Expect(!caps.persistence.has_value(), "server persistence advertisement claimed retention after process exit");
@@ -34,7 +34,7 @@ static cardio::promise<void> RunTests() {
         g_bus_get(G_BUS_TYPE_SESSION, cancel, callback, data);
       }, [](GObject*, GAsyncResult* result, GError** error) { return g_bus_get_finish(result, error); });
   auto received = cardio::promise_source<std::string>{};
-  backend.set_activation([&](std::string token, std::optional<std::string> action) {
+  backend.set_activation([&](std::string token, std::optional<std::string> action, std::string) {
     received.resolve(token + ":" + action.value_or("<activate>"));
   });
   auto post = ParseMuonNotificationPost(R"({"id":"same","title":"Title","body":"<plain & body>","actions":[{"id":"default","title":"Named action"}]})", "");

@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <type_traits>
+#include <utility>
 
 using muon_internal::MuonNotificationService;
 static std::shared_ptr<MuonNotificationService> notification_service;
@@ -123,10 +124,12 @@ void InitializeMuonBuiltinNotifications(const MuonConfig& config) {
     auto backend = muon_internal::CreateMuonWindowsNotificationBackend({
         config.app_id, config.notifications.windows_display_name,
         muon_internal::FilesystemPathToUtf8(config.notifications.windows_icon_path),
-        config.notifications.windows_activator_clsid});
+        config.notifications.windows_activator_clsid,
+        muon_internal::FilesystemPathToUtf8(config.launcher_path)});
 #else
     const auto path = (config.browser.profile / "notifications.json").string();
-    auto backend = muon_internal::CreateMuonLinuxNotificationBackend(config.app_id, config.desktop_id);
+    auto backend = muon_internal::CreateMuonLinuxNotificationBackend(
+        config.app_id, config.desktop_id, config.app_id, config.launcher_path);
 #endif
     notification_service = std::make_shared<MuonNotificationService>(path,
         config.notifications.default_category, std::move(backend), [] {
@@ -144,6 +147,14 @@ const muon_plugin_metadata* GetMuonBuiltinNotificationsMetadata() {
   return notification_service ? &metadata : nullptr;
 #else
   return nullptr;
+#endif
+}
+void SetMuonBuiltinNotificationActivationHandler(std::function<void(std::string)> callback) {
+#if defined(__linux__) || defined(_WIN32)
+  if (notification_service)
+    notification_service->SetActivationHandler(std::move(callback));
+#else
+  (void)callback;
 #endif
 }
 void ShutdownMuonBuiltinNotifications() {

@@ -19,6 +19,8 @@ struct MuonWindowsNotificationOptions {
   std::string icon_path;
   /** Stable COM activator identifier associated with this application identity. */
   std::string activator_clsid;
+  /** Absolute originating launcher path; empty for direct runtime execution. */
+  std::string launcher_path;
 };
 
 /**

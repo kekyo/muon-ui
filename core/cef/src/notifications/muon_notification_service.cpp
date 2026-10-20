@@ -28,6 +28,8 @@ struct MuonNotificationService::Impl {
   std::string default_category;
   MuonNotificationBackend backend;
   std::function<int64_t()> clock;
+  std::function<void(std::string)> on_activation;
+  std::optional<std::string> pending_startup_id;
   cardio::dispatcher* dispatcher;
   cardio::primitives::mutex serial;
   MuonNotificationSnapshot state;
@@ -89,14 +91,29 @@ static void Diagnose(const char* operation, const std::exception& error) {
 static void BeginStop(NotificationImpl& impl) {
   if (impl.stopping) return;
   impl.stopping = true;
+  impl.on_activation = {};
+  impl.pending_startup_id.reset();
   for (auto& [token, lease] : impl.leases) CloseLease(impl, lease);
   impl.leases.clear();
   impl.backend.stop();
 }
 
+static void Present(NotificationImpl& impl, std::string startup_id) {
+  if (impl.stopping) return;
+  if (!impl.on_activation) {
+    // Several early interactions need one window; retain the latest user time.
+    impl.pending_startup_id = std::move(startup_id);
+    return;
+  }
+  // A window failure cannot undo delivery or prevent OS cancellation.
+  try { impl.on_activation(std::move(startup_id)); }
+  catch (const std::exception& error) { Diagnose("activation window", error); }
+}
+
 static cardio::promise<void> Activate(std::shared_ptr<NotificationImpl> impl,
                                        std::string token,
                                        std::optional<std::string> action,
+                                       std::string startup_id,
                                        cardio::promise<cardio::primitives::lock_handle> ticket) {
   try {
     auto lock = std::move(co_await ticket);
@@ -110,6 +127,8 @@ static cardio::promise<void> Activate(std::shared_ptr<NotificationImpl> impl,
     co_await Commit(*impl, std::move(candidate));
     // A failed OS cancellation must not suppress an already durable event.
     Notify(*impl);
+    // Present the application only for a newly accepted durable interaction.
+    Present(*impl, std::move(startup_id));
     if (handle.id != 0) co_await impl->backend.cancel(handle);
   } catch (const std::exception& error) {
     Diagnose("activation", error);
@@ -118,11 +137,13 @@ static cardio::promise<void> Activate(std::shared_ptr<NotificationImpl> impl,
 
 MuonNotificationService::MuonNotificationService(
     std::string path, std::string default_category, MuonNotificationBackend backend,
-    std::function<int64_t()> clock) : impl_(std::make_shared<Impl>()) {
+    std::function<int64_t()> clock, std::function<void(std::string)> on_activation)
+    : impl_(std::make_shared<Impl>()) {
   impl_->path = std::move(path);
   impl_->default_category = std::move(default_category);
   impl_->backend = std::move(backend);
   impl_->clock = std::move(clock);
+  impl_->on_activation = std::move(on_activation);
   impl_->dispatcher = &cardio::get_current_dispatcher();
 }
 
@@ -134,16 +155,34 @@ MuonNotificationService::~MuonNotificationService() {
   catch (const std::exception& error) { Diagnose("destruction", error); }
 }
 
+void MuonNotificationService::SetActivationHandler(std::function<void(std::string)> callback) {
+  RequireRunning(*impl_);
+  impl_->on_activation = std::move(callback);
+  if (impl_->on_activation && impl_->pending_startup_id) {
+    auto startup_id = std::move(*impl_->pending_startup_id);
+    impl_->pending_startup_id.reset();
+    Present(*impl_, std::move(startup_id));
+  }
+}
+
 void MuonNotificationService::Start() {
   auto weak = std::weak_ptr<Impl>(impl_);
-  impl_->backend.set_activation([weak](std::string token, std::optional<std::string> action) {
+  if (impl_->backend.set_application_activation) {
+    impl_->backend.set_application_activation([weak](std::string startup_id) {
+      if (auto impl = weak.lock(); impl && !impl->stopping)
+        Present(*impl, std::move(startup_id));
+    });
+  }
+  impl_->backend.set_activation([weak](std::string token, std::optional<std::string> action, std::string startup_id) {
     if (auto impl = weak.lock(); impl && !impl->stopping) {
       // Reserve queue order in the signal callback. Stop must wait for this
       // accepted interaction even if its dispatcher task has not run yet.
       auto ticket = impl->serial.lock();
       FireAndForgetOnDispatcher(impl->dispatcher,
-          [impl, token = std::move(token), action = std::move(action), ticket = std::move(ticket)]() mutable {
-            cardio::fire_and_forget(Activate(impl, std::move(token), std::move(action), std::move(ticket)));
+          [impl, token = std::move(token), action = std::move(action),
+           startup_id = std::move(startup_id), ticket = std::move(ticket)]() mutable {
+            cardio::fire_and_forget(Activate(impl, std::move(token), std::move(action),
+                                            std::move(startup_id), std::move(ticket)));
           });
     }
   });
@@ -263,7 +302,7 @@ cardio::promise<std::string> MuonNotificationService::GetCapabilities() {
   const auto caps = co_await impl->backend.capabilities();
   const auto action_reason = caps.available ? "server-actions-unavailable" : caps.reason;
   co_return "{\"interaction\":" + Capability(caps.available && caps.actions, action_reason) +
-            ",\"launch\":" + Capability(false, "process-launch-not-implemented") +
+            ",\"launch\":" + Capability(caps.launch, caps.launch_reason) +
             ",\"persistence\":" + Capability(caps.available ? caps.persistence : false,
                 caps.available && caps.persistence.has_value()
                     ? "server-persistence-unavailable" : caps.reason) +

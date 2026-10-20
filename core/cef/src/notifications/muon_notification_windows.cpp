@@ -10,6 +10,8 @@
 #include <windows.h>
 #include <roapi.h>
 #include <shobjidl.h>
+#include <shellapi.h>
+#include <algorithm>
 #include <atomic>
 #include <iomanip>
 #include <mutex>
@@ -208,7 +210,7 @@ class ToastActivationCallback final : public notification_abi::NotificationActiv
       if (state->stopped) return S_OK;
       FireAndForgetOnDispatcher(state->dispatcher,
           [state, token, action = std::move(action)] {
-            if (!state->stopped && state->activation) state->activation(token, action);
+            if (!state->stopped && state->activation) state->activation(token, action, {});
           });
       return S_OK;
     } catch (...) {
@@ -272,8 +274,7 @@ static void SetToastRegistryString(HKEY key, const wchar_t* name,
       "Register Windows notification identity");
 }
 
-static void CheckToastRegistryString(HKEY key, const wchar_t* name,
-                                    const std::wstring& expected) {
+static std::wstring ReadToastRegistryString(HKEY key, const wchar_t* name) {
   DWORD size = 0;
   CheckToastResult(HRESULT_FROM_WIN32(RegGetValueW(key, nullptr, name,
       RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, nullptr, nullptr, &size)),
@@ -285,7 +286,88 @@ static void CheckToastRegistryString(HKEY key, const wchar_t* name,
       RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND, nullptr, value.data(), &size)),
       "Read Windows notification registration");
   value.resize(std::wcslen(value.c_str()));
+  return value;
+}
+
+static void CheckToastRegistryString(HKEY key, const wchar_t* name,
+                                    const std::wstring& expected) {
+  const auto value = ReadToastRegistryString(key, name);
   if (value != expected) throw std::runtime_error("Windows notification registration does not match this application");
+}
+
+static std::wstring NormalizeToastLauncherPath(std::wstring value) {
+  std::replace(value.begin(), value.end(), L'/', L'\\');
+  const auto absolute = value.size() >= 3 &&
+      ((value[1] == L':' && value[2] == L'\\') ||
+       (value[0] == L'\\' && value[1] == L'\\'));
+  if (!absolute) throw std::runtime_error("Notification launcher path is not absolute");
+  const auto size = GetFullPathNameW(value.c_str(), 0, nullptr, nullptr);
+  if (size == 0 || size > 32768)
+    throw std::runtime_error("Notification launcher path cannot be resolved");
+  std::wstring result(size, L'\0');
+  const auto written = GetFullPathNameW(value.c_str(), size, result.data(), nullptr);
+  if (!written || written >= size)
+    throw std::runtime_error("Notification launcher path cannot be resolved");
+  result.resize(written);
+  return result;
+}
+
+static bool SameToastLauncherPath(const std::wstring& expected,
+                                  const std::wstring& actual) {
+  const auto normalized = NormalizeToastLauncherPath(actual);
+  return CompareStringOrdinal(expected.c_str(), -1, normalized.c_str(), -1,
+                              TRUE) == CSTR_EQUAL;
+}
+
+static cardio::promise<std::string> ReadToastLaunchRegistration(
+    const MuonWindowsNotificationOptions options) {
+  if (options.launcher_path.empty())
+    co_return "windows-notification-launcher-unavailable";
+  auto reason = std::make_shared<std::string>();
+  co_await RunMuonWindowsNotificationTask([options, reason] {
+    try {
+      const auto launcher = NormalizeToastLauncherPath(ToastWide(options.launcher_path));
+      const auto attributes = GetFileAttributesW(launcher.c_str());
+      if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        *reason = "windows-notification-launcher-unavailable";
+        return;
+      }
+      ToastRegistryKey key;
+      const auto path = L"Software\\Classes\\CLSID\\" +
+          ToastWide(options.activator_clsid) + L"\\LocalServer32";
+      const auto status = RegOpenKeyExW(HKEY_CURRENT_USER, path.c_str(), 0,
+          KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key.value);
+      if (status == ERROR_FILE_NOT_FOUND || status == ERROR_PATH_NOT_FOUND) {
+        *reason = "windows-notification-launch-registration-missing";
+        return;
+      }
+      CheckToastResult(HRESULT_FROM_WIN32(status), "Read Windows notification launch registration");
+      if (ReadToastRegistryString(key.value, L"MuonAppId") != ToastWide(options.app_id) ||
+          !SameToastLauncherPath(launcher, ReadToastRegistryString(key.value, L"ServerExecutable"))) {
+        *reason = "windows-notification-launch-registration-mismatch";
+        return;
+      }
+      // COM appends -Embedding to this command. The registered command itself
+      // must identify only this launcher and the framework activation entry.
+      const auto command = ReadToastRegistryString(key.value, nullptr);
+      int count = 0;
+      auto** arguments = CommandLineToArgvW(command.c_str(), &count);
+      bool matches = false;
+      try {
+        matches = arguments && count == 2 &&
+            SameToastLauncherPath(launcher, arguments[0]) &&
+            std::wstring(arguments[1]) == L"--muon-notification-activation";
+      } catch (...) {
+        if (arguments) LocalFree(arguments);
+        throw;
+      }
+      if (arguments) LocalFree(arguments);
+      if (!matches) *reason = "windows-notification-launch-registration-mismatch";
+    } catch (const std::exception&) {
+      *reason = "windows-notification-launch-registration-unavailable";
+    }
+  });
+  co_return *reason;
 }
 
 static cardio::promise<void> EnsureToastIdentity(std::shared_ptr<WindowsToastState> state) {
@@ -331,8 +413,18 @@ static cardio::promise<MuonNotificationBackendCapabilities> ReadToastCapabilitie
     std::shared_ptr<WindowsToastState> state) {
   try {
     co_await EnsureToastIdentity(state);
-    co_return MuonNotificationBackendCapabilities{true, true, std::nullopt,
+    auto result = MuonNotificationBackendCapabilities{true, true, std::nullopt,
         "post-exit-persistence-unverified", true};
+    result.launch_reason = co_await ReadToastLaunchRegistration(state->options);
+    RequireToastRunning(*state);
+    result.launch = result.launch_reason.empty();
+    if (result.launch == true) {
+      // A deployed launcher with owned COM registration supports retained
+      // notifications and activation after the posting process has exited.
+      result.persistence = true;
+      result.reason.clear();
+    }
+    co_return result;
   } catch (const std::exception& error) {
     co_return MuonNotificationBackendCapabilities{false, false, false,
         std::string("windows-notification-registration-unavailable: ") + error.what(), true};

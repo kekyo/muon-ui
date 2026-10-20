@@ -2880,6 +2880,8 @@ static bool ReadLauncherConfig(yyjson_val* root,
   config->default_version_policy = "tested";
   config->desktop_id = "muon";
   config->app_id = SanitizeAppId(GetStartupAppId());
+  config->launcher_path.clear();
+  GetEnvironmentPath("MUON_LAUNCHER_PATH", &config->launcher_path);
   const auto launcher = yyjson_obj_get(root, kMuonConfigLauncherKey);
   if (launcher == nullptr) {
     return true;

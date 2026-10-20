@@ -916,6 +916,8 @@ add_library(muon_ui SHARED
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
   src/plugins/builtin/muon_builtin_fs_helpers.h
   src/ui/muon_ui_fs_dialogs.h
+  src/ui/muon_ui_notification_activation.cpp
+  src/ui/muon_ui_notification_activation.h
   src/ui/muon_ui_title_bar.cpp
   src/ui/muon_ui_title_bar.h
   )
@@ -1186,8 +1188,10 @@ list(APPEND APP_HEADERS
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   list(APPEND APP_SOURCES
     src/notifications/muon_notification_store.cpp
+    src/notifications/muon_notification_maintenance.cpp
     src/notifications/muon_notification_service.cpp
-    src/notifications/muon_notification_linux.cpp)
+    src/notifications/muon_notification_linux.cpp
+    src/notifications/muon_notification_portal.cpp)
 elseif(WIN32)
   list(APPEND APP_SOURCES
     src/notifications/muon_notification_store_windows.cpp
@@ -1684,6 +1688,13 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES AND MUON_CONFIG_COPY_MODE STREQUAL "always")
     )
 endif()
 if(MUON_BUILD_TESTS AND WIN32)
+  add_executable(muon_notification_maintenance_test
+    ../../builder/test/windows_notification_test.c
+    ../../builder/src/muon_notification_windows.c)
+  target_compile_features(muon_notification_maintenance_test PRIVATE c_std_99)
+  target_compile_options(muon_notification_maintenance_test PRIVATE -Wall -Wextra -pedantic)
+  target_include_directories(muon_notification_maintenance_test PRIVATE ../../builder/src)
+  target_link_libraries(muon_notification_maintenance_test PRIVATE runtimeobject ole32 shell32 advapi32)
   add_executable(muon_notification_windows_observer
     ../cef-test/native/muon_notification_windows_observer.cpp)
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_windows_observer)
@@ -2040,7 +2051,8 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       src/notifications/muon_notification_model.cpp
       src/notifications/muon_notification_store.cpp
       src/notifications/muon_notification_service.cpp
-      src/notifications/muon_notification_linux.cpp)
+      src/notifications/muon_notification_linux.cpp
+      src/notifications/muon_notification_portal.cpp)
     SET_EXECUTABLE_TARGET_PROPERTIES(muon_builtin_notifications_test)
     target_compile_features(muon_builtin_notifications_test PRIVATE cxx_std_20)
     target_include_directories(muon_builtin_notifications_test PRIVATE src
@@ -2064,6 +2076,19 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     MUON_APPLY_SANITIZERS(muon_notification_store_test)
     add_test(NAME notification_store COMMAND muon_notification_store_test)
     set_tests_properties(notification_store PROPERTIES TIMEOUT 30)
+    add_executable(muon_notification_maintenance_test
+      ../cef-test/native/muon_notification_maintenance_test.cpp
+      src/notifications/muon_notification_model.cpp
+      src/notifications/muon_notification_store.cpp
+      src/notifications/muon_notification_maintenance.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_maintenance_test)
+    target_compile_features(muon_notification_maintenance_test PRIVATE cxx_std_20)
+    target_include_directories(muon_notification_maintenance_test PRIVATE src)
+    target_link_libraries(muon_notification_maintenance_test PRIVATE
+      yyjson muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
+    MUON_APPLY_SANITIZERS(muon_notification_maintenance_test)
+    add_test(NAME notification_maintenance COMMAND muon_notification_maintenance_test)
+    set_tests_properties(notification_maintenance PROPERTIES TIMEOUT 30)
     add_executable(muon_notification_service_test
       ../cef-test/native/muon_notification_service_test.cpp
       src/notifications/muon_notification_model.cpp
@@ -2081,7 +2106,8 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     add_executable(muon_notification_linux_test
       ../cef-test/native/muon_notification_linux_test.cpp
       src/notifications/muon_notification_model.cpp
-      src/notifications/muon_notification_linux.cpp)
+      src/notifications/muon_notification_linux.cpp
+      src/notifications/muon_notification_portal.cpp)
     SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_linux_test)
     target_compile_features(muon_notification_linux_test PRIVATE cxx_std_20)
     target_include_directories(muon_notification_linux_test PRIVATE src)
@@ -2092,6 +2118,43 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
       ${CMAKE_CURRENT_SOURCE_DIR}/../cef-test/native/run_notification_linux_test.sh
       $<TARGET_FILE:muon_notification_test_server> $<TARGET_FILE:muon_notification_linux_test>)
     set_tests_properties(notification_linux PROPERTIES TIMEOUT 30)
+    add_executable(muon_notification_portal_test
+      ../cef-test/native/muon_notification_portal_test.cpp
+      src/notifications/muon_notification_model.cpp
+      src/notifications/muon_notification_linux.cpp
+      src/notifications/muon_notification_portal.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_portal_test)
+    target_compile_features(muon_notification_portal_test PRIVATE cxx_std_20)
+    target_include_directories(muon_notification_portal_test PRIVATE src)
+    target_link_libraries(muon_notification_portal_test PRIVATE
+      yyjson muon_cardio PkgConfig::MUON_GLIB)
+    MUON_APPLY_SANITIZERS(muon_notification_portal_test)
+    add_test(NAME notification_portal COMMAND dbus-run-session --
+      $<TARGET_FILE:muon_notification_portal_test>)
+    set_tests_properties(notification_portal PROPERTIES TIMEOUT 30)
+    add_test(NAME notification_portal_legacy COMMAND dbus-run-session --
+      $<TARGET_FILE:muon_notification_portal_test> --legacy)
+    set_tests_properties(notification_portal_legacy PROPERTIES TIMEOUT 30)
+    add_test(NAME notification_portal_route COMMAND dbus-run-session --
+      $<TARGET_FILE:muon_notification_portal_test> --route)
+    set_tests_properties(notification_portal_route PROPERTIES TIMEOUT 30)
+    add_test(NAME notification_portal_stop COMMAND dbus-run-session --
+      $<TARGET_FILE:muon_notification_portal_test> --stop)
+    set_tests_properties(notification_portal_stop PROPERTIES TIMEOUT 30)
+    add_executable(muon_notification_portal_driver
+      ../cef-test/native/muon_notification_portal_driver.cpp
+      src/notifications/muon_notification_model.cpp
+      src/notifications/muon_notification_store.cpp
+      src/notifications/muon_notification_service.cpp
+      src/notifications/muon_notification_linux.cpp
+      src/notifications/muon_notification_portal.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_portal_driver)
+    target_compile_features(muon_notification_portal_driver PRIVATE cxx_std_20)
+    target_include_directories(muon_notification_portal_driver PRIVATE
+      src "${MUON_COMMON_ROOT}/src")
+    target_link_libraries(muon_notification_portal_driver PRIVATE
+      yyjson muon_cardio PkgConfig::MUON_GLIB)
+    MUON_APPLY_SANITIZERS(muon_notification_portal_driver)
     pkg_check_modules(MUON_GIO_UNIX REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.74)
     add_executable(muon_notification_test_server
       ../cef-test/native/muon_notification_test_server.cpp)

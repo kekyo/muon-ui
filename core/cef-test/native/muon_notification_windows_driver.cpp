@@ -28,6 +28,75 @@ static constexpr const wchar_t* kProbeName = L"Muon Notification Probe 32";
 static constexpr const wchar_t* kProbeClsid = L"{BD34C9A0-4D75-4B36-BD46-18BCE46A0E32}";
 #endif
 
+static std::wstring ProbeRegistrationPath() {
+  return std::wstring(L"Software\\Classes\\CLSID\\") + kProbeClsid + L"\\LocalServer32";
+}
+
+static void WriteProbeLaunchRegistration(const std::wstring& launcher,
+                                          const std::wstring& owner,
+                                          const std::wstring& command) {
+  HKEY key = nullptr;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, ProbeRegistrationPath().c_str(), 0,
+      nullptr, 0, KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &key, nullptr) != ERROR_SUCCESS)
+    throw std::runtime_error("Cannot create the probe launch registration");
+  auto result = ERROR_SUCCESS;
+  for (const auto& entry : {
+      std::pair<const wchar_t*, std::wstring>{nullptr, command},
+      {L"ServerExecutable", launcher}, {L"MuonAppId", owner}}) {
+    const auto status = RegSetValueExW(key, entry.first, 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(entry.second.c_str()),
+        static_cast<DWORD>((entry.second.size() + 1) * sizeof(wchar_t)));
+    if (status != ERROR_SUCCESS) result = status;
+  }
+  RegCloseKey(key);
+  if (result != ERROR_SUCCESS) throw std::runtime_error("Cannot write probe launch registration");
+}
+
+static cardio::promise<void> VerifyLaunchRegistration(
+    const muon_internal::MuonNotificationBackend& backend,
+    const std::wstring& launcher) {
+  const auto key = ProbeRegistrationPath();
+  RegDeleteKeyExW(HKEY_CURRENT_USER, key.c_str(), KEY_WOW64_64KEY, 0);
+  const auto owner = std::wstring(kProbeAppId, kProbeAppId + std::strlen(kProbeAppId));
+  const auto command = L"\"" + launcher + L"\" --muon-notification-activation";
+  try {
+    const auto absent = co_await backend.capabilities();
+    if (absent.launch != false || absent.launch_reason.empty())
+      throw std::runtime_error("Absent launch registration was not diagnosed");
+    if (absent.persistence.has_value())
+      throw std::runtime_error("Unregistered launch persistence was not unknown");
+    WriteProbeLaunchRegistration(launcher, L"dev.muon.NotificationProbe.Other", command);
+    const auto foreign = co_await backend.capabilities();
+    if (foreign.launch != false || foreign.launch_reason.empty())
+      throw std::runtime_error("Another application owns the launch registration");
+    WriteProbeLaunchRegistration(launcher + L".other", owner, command);
+    if ((co_await backend.capabilities()).launch != false)
+      throw std::runtime_error("Another launcher was accepted");
+    WriteProbeLaunchRegistration(launcher, owner, command + L" --unexpected");
+    if ((co_await backend.capabilities()).launch != false)
+      throw std::runtime_error("Additional COM launch arguments were accepted");
+    WriteProbeLaunchRegistration(launcher, owner, command);
+    const auto owned = co_await backend.capabilities();
+    if (owned.launch != true)
+      throw std::runtime_error("Owned launch registration was not supported");
+    if (owned.persistence != true || !owned.reason.empty())
+      throw std::runtime_error("Owned launch registration did not support persistence");
+    RegDeleteKeyExW(HKEY_CURRENT_USER, key.c_str(), KEY_WOW64_64KEY, 0);
+    if ((co_await backend.capabilities()).launch != false)
+      throw std::runtime_error("Removed launch registration remained supported");
+  } catch (...) {
+    RegDeleteKeyExW(HKEY_CURRENT_USER, key.c_str(), KEY_WOW64_64KEY, 0);
+    RegDeleteKeyExW(HKEY_CURRENT_USER,
+        (std::wstring(L"Software\\Classes\\CLSID\\") + kProbeClsid).c_str(),
+        KEY_WOW64_64KEY, 0);
+    throw;
+  }
+  RegDeleteKeyExW(HKEY_CURRENT_USER,
+      (std::wstring(L"Software\\Classes\\CLSID\\") + kProbeClsid).c_str(),
+      KEY_WOW64_64KEY, 0);
+  std::cout << "owned launch registration supported; absent, foreign and changed registrations rejected\n";
+}
+
 static cardio::promise<void> RunDriver(bool& passed, const std::string& mode) {
   const auto exercise = mode == "--exercise" || mode == "--exercise-default";
   const auto missing_registration = mode == "--missing-registration";
@@ -48,7 +117,8 @@ static cardio::promise<void> RunDriver(bool& passed, const std::string& mode) {
         kProbeAppId, std::string(kProbeName, kProbeName + std::wcslen(kProbeName)),
         (std::filesystem::path(executable).parent_path() / L"muon.png").string(),
         missing_registration ? std::string{} :
-            std::string(kProbeClsid, kProbeClsid + std::wcslen(kProbeClsid))});
+            std::string(kProbeClsid, kProbeClsid + std::wcslen(kProbeClsid)),
+        mode == "--launch-registration" ? std::filesystem::path(executable).string() : std::string{}});
     const auto capabilities = co_await backend.capabilities();
     if (missing_registration) {
       if (capabilities.available || capabilities.reason.empty())
@@ -68,6 +138,13 @@ static cardio::promise<void> RunDriver(bool& passed, const std::string& mode) {
     }
     if (!capabilities.available || !capabilities.actions) {
       throw std::runtime_error("Registered Windows notifications are unavailable");
+    }
+    if (mode == "--launch-registration") {
+      co_await VerifyLaunchRegistration(backend, executable);
+      backend.stop();
+      passed = true;
+      PostQuitMessage(0);
+      co_return;
     }
     const auto status = co_await backend.status();
     if (mode == "--disabled") {
@@ -89,7 +166,8 @@ static cardio::promise<void> RunDriver(bool& passed, const std::string& mode) {
     std::cout << "capabilities and setting " << status.enabled.value_or(false) << " " << status.reason << '\n' << std::flush;
     if (exercise) {
       auto activated = cardio::promise_source<std::string>{};
-      backend.set_activation([&activated](std::string token, std::optional<std::string> action) {
+      backend.set_activation([&activated](std::string token, std::optional<std::string> action,
+                                         std::string) {
         activated.resolve(token + ":" + action.value_or("<activate>"));
       });
       const auto token = std::string("f716b7a0-82e6-4ddf-b2aa-811cda210001");

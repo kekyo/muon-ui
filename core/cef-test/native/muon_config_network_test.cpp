@@ -1007,6 +1007,8 @@ static bool RunLaunchSourceProfilePathTest(
   SetTestLaunchSource("none");
   const auto state_home = SetTestStateHome(test_directory, "profile-state");
   SetEnvironmentValue("MUON_LAUNCHER_APP_ID", "com.example Launcher");
+  const auto launcher_path = test_directory / "launcher with spaces";
+  SetEnvironmentValue("MUON_LAUNCHER_PATH", launcher_path.string());
   const auto env_path = test_directory / "profile-env.json";
   if (!Expect(WriteFile(env_path, "{}"),
               "failed to write environment appId profile config") ||
@@ -1015,6 +1017,8 @@ static bool RunLaunchSourceProfilePathTest(
   }
   if (!Expect(config.app_id == "com.example.Launcher",
               "environment appId was not used") ||
+      !Expect(config.launcher_path == launcher_path,
+              "originating distribution launcher path was not preserved") ||
       !Expect(config.browser.profile ==
                   GetTestDefaultProfilePath(state_home,
                                             "com.example.Launcher"),
@@ -1064,6 +1068,10 @@ static bool RunLaunchSourceProfilePathTest(
   }
 
   ClearEnvironment("MUON_LAUNCHER_APP_ID");
+  ClearEnvironment("MUON_LAUNCHER_PATH");
+  if (!LoadConfigExpectSuccess(env_path, &config) ||
+      !Expect(config.launcher_path.empty(),
+              "direct runtime execution inherited a previous launcher path")) return false;
   return true;
 }
 

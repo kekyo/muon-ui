@@ -37,10 +37,15 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
   auto fail_cancel = false;
   auto fail_post = false;
   auto stop_count = 0;
+  auto activated_count = 0;
+  auto startup_ids = std::vector<std::string>{};
+  auto capabilities = MuonNotificationBackendCapabilities{true, true, true, "", true};
+  capabilities.launch = true;
+  capabilities.launch_reason.clear();
   auto status = MuonNotificationBackendStatus{true, ""};
   auto backend = MuonNotificationBackend{};
-  backend.capabilities = []() -> cardio::promise<MuonNotificationBackendCapabilities> {
-    co_return MuonNotificationBackendCapabilities{true, true, true, "", true};
+  backend.capabilities = [&]() -> cardio::promise<MuonNotificationBackendCapabilities> {
+    co_return capabilities;
   };
   backend.status = [&]() -> cardio::promise<MuonNotificationBackendStatus> { co_return status; };
   backend.post = [&](MuonNotificationPost, std::string token) -> cardio::promise<MuonNotificationHandle> {
@@ -69,17 +74,33 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
   {
     auto stopped = std::make_shared<MuonNotificationService>(path, "general", backend, [] { return 1; });
     stopped->Start();
+    auto window_owner = std::make_shared<int>(0);
+    auto weak_window_owner = std::weak_ptr(window_owner);
+    stopped->SetActivationHandler([window_owner](std::string) { ++*window_owner; });
+    window_owner.reset();
     co_await stopped->Stop();
+    Expect(weak_window_owner.expired(), "stopping retained the window presentation owner");
     co_await stopped->Stop();
     stopped.reset();
     Expect(stop_count == 2, "repeated Stop or destruction stopped the backend twice");
   }
-  auto service = std::make_shared<MuonNotificationService>(path, "general", backend, [] { return 10; });
+  auto service = std::make_shared<MuonNotificationService>(path, "general", backend,
+      [] { return 10; }, [&](std::string id) { ++activated_count; startup_ids.push_back(std::move(id)); });
   service->Start();
   Expect((co_await service->GetStatus("{}")).find("\"app\":{\"state\":\"enabled\"") != std::string::npos,
          "observable enabled OS status was not exposed");
   Expect((co_await service->GetCapabilities()).find("\"appStatus\":{\"state\":\"supported\"") != std::string::npos,
          "OS status capability was not exposed");
+  Expect((co_await service->GetCapabilities()).find("\"launch\":{\"state\":\"supported\",\"reason\":null}") != std::string::npos,
+         "verified process activation registration was not exposed");
+  capabilities.launch = std::nullopt;
+  capabilities.launch_reason = "registration-unobservable";
+  Expect((co_await service->GetCapabilities()).find("\"launch\":{\"state\":\"unknown\",\"reason\":\"registration-unobservable\"}") != std::string::npos,
+         "unobservable process activation was guessed");
+  capabilities.launch = false;
+  capabilities.launch_reason = "registration-missing";
+  Expect((co_await service->GetCapabilities()).find("\"launch\":{\"state\":\"unsupported\",\"reason\":\"registration-missing\"}") != std::string::npos,
+         "unregistered process activation was confused with running interactions");
   status = {false, "disabled-for-application"};
   const auto disabled = co_await service->GetStatus(R"({"category":"arbitrary"})");
   Expect(disabled.find("\"app\":{\"state\":\"disabled\",\"reason\":\"disabled-for-application\"}") != std::string::npos &&
@@ -106,14 +127,21 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
     co_await service->WatchEvents("{\"operation\":\"release\",\"token\":\"" + token + "\"}", "2:frame:1");
   } catch (const std::exception&) { rejected = true; }
   Expect(rejected, "another renderer released a watch");
-  activation(posted[0], std::nullopt);
-  activation(posted[1], std::nullopt);
+  activation(posted[0], std::nullopt, "desktop-user_TIME1234");
+  activation(posted[1], std::nullopt, "desktop-user_TIME1234");
   const auto batch = co_await next;
   Expect(batch.find("\"data\":2") != std::string::npos &&
              batch.find(posted[0]) == std::string::npos,
          "watch delivered stale revision data");
   const auto pending = co_await service->GetPendingEvents();
   Expect(pending.find(posted[1]) != std::string::npos, "event was not durable");
+  Expect(activated_count == 1, "a durable interaction did not activate its application");
+  Expect(startup_ids == std::vector<std::string>{"desktop-user_TIME1234"},
+         "desktop activation context was lost before presenting the window");
+  activation(posted[1], std::nullopt, "desktop-user_TIME1234");
+  activation("unknown-token", std::nullopt, "desktop-user_TIME1234");
+  co_await service->GetPendingEvents();
+  Expect(activated_count == 1, "a stale or unknown interaction activated its application");
   auto held = service->WatchEvents("{\"operation\":\"next\",\"token\":\"" + token + "\",\"afterCursor\":1}", "1:frame:1");
   service->ReleaseOwner("1:frame:1");
   const auto terminal = co_await held;
@@ -127,7 +155,8 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
   co_await service->Stop();
   const auto snapshot = co_await LoadMuonNotificationSnapshot(path);
   Expect(snapshot.pending.empty(), "ACK did not persist");
-  service = std::make_shared<MuonNotificationService>(path, "general", backend, [] { return 12; });
+  service = std::make_shared<MuonNotificationService>(path, "general", backend,
+      [] { return 12; }, [&](std::string id) { ++activated_count; startup_ids.push_back(std::move(id)); });
   service->Start();
   co_await service->Post(R"({"id":"retry-cancel","title":"Retry","body":""})");
   const auto cancel_count = canceled.size();
@@ -140,14 +169,15 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
   co_await service->Cancel("retry-cancel");
   Expect(canceled.size() == cancel_count + 1, "failed OS cancel could not be retried");
   co_await service->Post(R"({"id":"shutdown","title":"Shutdown","body":""})");
-  activation(posted.back(), std::nullopt);
+  activation(posted.back(), std::nullopt, "desktop-user_TIME1234");
   co_await service->Stop();
   const auto stopped_snapshot = co_await LoadMuonNotificationSnapshot(path);
   Expect(stopped_snapshot.pending.size() == 1 && stopped_snapshot.pending[0].id == "shutdown",
          "shutdown lost an already accepted activation");
+  Expect(activated_count == 1, "an accepted shutdown interaction reopened its application");
 
   service = std::make_shared<MuonNotificationService>((directory / "failures.json").string(),
-      "general", backend, [] { return 20; });
+      "general", backend, [] { return 20; }, [&](std::string id) { ++activated_count; startup_ids.push_back(std::move(id)); });
   service->Start();
   auto acquiring = service->WatchEvents(R"({"operation":"acquire"})", "gone");
   service->ReleaseOwner("gone");
@@ -169,24 +199,74 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
   catch (const std::exception&) { rejected = true; }
   Expect(rejected, "concurrent next waits were accepted");
   std::filesystem::create_directory(directory / "failures.json.next");
-  activation(saved_token, std::nullopt);
+  activation(saved_token, std::nullopt, "desktop-user_TIME1234");
   // This read is ordered after the signal's reserved queue slot.
   Expect((co_await service->GetPendingEvents()) == "[]" && !waiting.is_ready(),
          "failed persistence was delivered as a durable event");
+  Expect(activated_count == 1, "an unsaved interaction activated its application");
   std::filesystem::remove(directory / "failures.json.next");
   fail_cancel = true;
-  activation(saved_token, std::nullopt);
+  activation(saved_token, std::nullopt, "desktop-user_TIME1234");
   const auto delivered = co_await waiting;
   Expect(delivered.find("\"data\":42") != std::string::npos,
          "rollback lost the old revision or OS cancellation suppressed durable delivery");
   Expect((co_await service->GetPendingEvents()).find(saved_token) != std::string::npos,
          "failed OS cancellation lost the durable event");
+  Expect(activated_count == 2, "OS cancellation failure suppressed application activation");
   fail_cancel = false;
   auto terminal_wait = service->WatchEvents("{\"operation\":\"next\",\"token\":\"" + live + "\",\"afterCursor\":1}", "live");
   co_await service->WatchEvents("{\"operation\":\"release\",\"token\":\"" + live + "\"}", "live");
   Expect((co_await terminal_wait).find("\"events\":null") != std::string::npos,
          "explicit release did not finish a held wait");
   co_await service->Stop();
+
+  // A notification may reach the native service before the first browser and
+  // its presentation callback exist. Keep its OS context until that window is ready.
+  const auto early_path = (directory / "early.json").string();
+  service = std::make_shared<MuonNotificationService>(early_path, "", backend, [] { return 30; });
+  service->Start();
+  co_await service->Post(R"({"id":"early","title":"Cold start","body":""})");
+  const auto early_token = posted.back();
+  co_await service->Stop();
+  service = std::make_shared<MuonNotificationService>(early_path, "", backend, [] { return 31; });
+  service->Start();
+  activation(early_token, std::nullopt, "cold-desktop_TIME5678");
+  Expect((co_await service->GetPendingEvents()).find(early_token) != std::string::npos,
+         "an early notification interaction was not durable");
+  auto early_presentations = std::vector<std::string>{};
+  service->SetActivationHandler([&](std::string id) {
+    early_presentations.push_back(std::move(id));
+  });
+  Expect(early_presentations == std::vector<std::string>{"cold-desktop_TIME5678"},
+         "early OS context was lost before the window callback was installed");
+  service->SetActivationHandler([&](std::string id) {
+    early_presentations.push_back(std::move(id));
+  });
+  Expect(early_presentations.size() == 1, "installing a callback replayed window presentation");
+  co_await service->Stop();
+
+  // DBusActivatable desktop entries also deliver ordinary menu launches.
+  // Present those without manufacturing a notification interaction.
+  auto application_activation = std::function<void(std::string)>{};
+  backend.set_application_activation = [&](std::function<void(std::string)> callback) {
+    application_activation = std::move(callback);
+  };
+  auto ordinary = std::make_shared<MuonNotificationService>(
+      (directory / "ordinary.json").string(), "", backend, [] { return 40; });
+  ordinary->Start();
+  Expect(static_cast<bool>(application_activation), "ordinary application activation was not connected");
+  application_activation("menu_TIME9012");
+  auto ordinary_presentations = std::vector<std::string>{};
+  ordinary->SetActivationHandler([&](std::string context) {
+    ordinary_presentations.push_back(std::move(context));
+  });
+  Expect(ordinary_presentations == std::vector<std::string>{"menu_TIME9012"},
+         "ordinary early activation lost the desktop context");
+  Expect((co_await ordinary->GetPendingEvents()) == "[]",
+         "ordinary menu activation became a notification event");
+  co_await ordinary->Stop();
+  application_activation("late_TIME9999");
+  Expect(ordinary_presentations.size() == 1, "ordinary activation presented a stopped application");
 }
 
 #if defined(_WIN32)

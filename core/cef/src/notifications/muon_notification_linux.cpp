@@ -4,6 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 #include "notifications/muon_notification_linux.h"
+#include "notifications/muon_notification_portal.h"
 #include <gio/gio.h>
 #include <map>
 #include <memory>
@@ -19,6 +20,7 @@ using Variant = std::unique_ptr<GVariant, decltype(&g_variant_unref)>;
 struct LinuxNotificationRecord {
   std::string token;
   std::map<std::string, std::optional<std::string>> actions;
+  std::string startup_id;
 };
 struct LinuxNotificationBackend {
   std::string application_name;
@@ -83,6 +85,13 @@ static void OnNotificationSignal(GDBusConnection*, const gchar* sender, const gc
     guint32 id = 0, reason = 0;
     g_variant_get(parameters, "(uu)", &id, &reason);
     impl->records.erase(id);
+  } else if (std::string_view(member) == "ActivationToken" &&
+             g_variant_is_of_type(parameters, G_VARIANT_TYPE("(us)"))) {
+    guint32 id = 0;
+    const gchar* startup_id = nullptr;
+    g_variant_get(parameters, "(u&s)", &id, &startup_id);
+    const auto found = impl->records.find(id);
+    if (found != impl->records.end()) found->second.startup_id = startup_id;
   } else if (std::string_view(member) == "ActionInvoked" &&
              g_variant_is_of_type(parameters, G_VARIANT_TYPE("(us)"))) {
     guint32 id = 0;
@@ -94,7 +103,8 @@ static void OnNotificationSignal(GDBusConnection*, const gchar* sender, const gc
     if (selected == found->second.actions.end() || !impl->activation) return;
     // Keep the mapping until durable acceptance/cancellation. If saving fails,
     // another user interaction may retry instead of losing the notification.
-    impl->activation(found->second.token, selected->second);
+    impl->activation(found->second.token, selected->second,
+                     std::exchange(found->second.startup_id, ""));
   }
 }
 static void DeleteWeak(gpointer data) {
@@ -171,7 +181,7 @@ static cardio::promise<MuonNotificationHandle> Post(
   const auto capabilities = co_await ReadCapabilities(impl, owner);
   if (!post.actions.empty() && !capabilities.contains("actions"))
     throw std::runtime_error("Notification actions are unsupported by the service");
-  auto record = LinuxNotificationRecord{std::move(token), {}};
+  auto record = LinuxNotificationRecord{std::move(token), {}, ""};
   auto action_values = std::vector<std::string>{};
   if (capabilities.contains("actions")) {
     action_values = {"default", "Open"};
@@ -219,7 +229,7 @@ static cardio::promise<void> Cancel(std::shared_ptr<LinuxNotificationBackend> im
       G_VARIANT_TYPE_UNIT), g_variant_unref);
   impl->records.erase(handle.id);
 }
-MuonNotificationBackend CreateMuonLinuxNotificationBackend(
+static MuonNotificationBackend CreateFreedesktopBackend(
     std::string application_name, std::string desktop_id) {
   auto impl = std::make_shared<LinuxNotificationBackend>();
   impl->application_name = std::move(application_name);
@@ -243,6 +253,40 @@ MuonNotificationBackend CreateMuonLinuxNotificationBackend(
   backend.status = []() -> cardio::promise<MuonNotificationBackendStatus> {
     co_return MuonNotificationBackendStatus{std::nullopt, "app-status-unavailable"};
   };
+  return backend;
+}
+MuonNotificationBackend CreateMuonLinuxNotificationBackend(
+    std::string application_name, std::string desktop_id,
+    std::string application_id, std::string launcher_path) {
+  auto fdo = CreateFreedesktopBackend(std::move(application_name), desktop_id);
+  auto portal = CreateMuonPortalNotificationBackend(
+      {std::move(application_id), std::move(desktop_id), std::move(launcher_path)});
+  auto backend = MuonNotificationBackend{};
+  backend.capabilities = [fdo, portal]() -> cardio::promise<MuonNotificationBackendCapabilities> {
+    const auto installed = co_await portal.capabilities();
+    if (installed.available) co_return installed;
+    auto running = co_await fdo.capabilities();
+    running.launch = false;
+    running.launch_reason = installed.launch_reason;
+    co_return running;
+  };
+  backend.post = [fdo, portal](MuonNotificationPost post, std::string token)
+      -> cardio::promise<MuonNotificationHandle> {
+    const auto installed = co_await portal.capabilities();
+    if (installed.available) co_return co_await portal.post(std::move(post), std::move(token));
+    co_return co_await fdo.post(std::move(post), std::move(token));
+  };
+  backend.cancel = [fdo, portal](MuonNotificationHandle handle) -> cardio::promise<void> {
+    if (handle.backend == "portal") co_await portal.cancel(std::move(handle));
+    else co_await fdo.cancel(std::move(handle));
+  };
+  backend.set_activation = [fdo, portal](MuonNotificationActivation callback) {
+    fdo.set_activation(callback);
+    portal.set_activation(std::move(callback));
+  };
+  backend.status = fdo.status;
+  backend.set_application_activation = portal.set_application_activation;
+  backend.stop = [fdo, portal] { fdo.stop(); portal.stop(); };
   return backend;
 }
 }  // namespace muon_internal

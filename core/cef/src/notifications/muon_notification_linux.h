@@ -10,8 +10,12 @@ namespace muon_internal {
 /** Creates an asynchronous freedesktop backend for the current session bus.
  * @param application_name Human-readable name shown by notification services.
  * @param desktop_id Desktop entry ID without the .desktop suffix.
- * @remarks The backend reports interactions only while this process is running.
+ * @param application_id Runtime application identifier for installation ownership.
+ * @param launcher_path Absolute distributed launcher path; empty for direct runtime execution.
+ * @remarks Registered installations use Portal activation. Other environments
+ * use the freedesktop notification service and report their launch limitation.
  */
 MuonNotificationBackend CreateMuonLinuxNotificationBackend(
-    std::string application_name, std::string desktop_id);
+    std::string application_name, std::string desktop_id,
+    std::string application_id, std::string launcher_path);
 }  // namespace muon_internal

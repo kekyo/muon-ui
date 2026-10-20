@@ -24,7 +24,7 @@ import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createConnection } from "@playwright/mcp";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createMuonCapabilityModuleResolver } from "../../ui/common/capability.js";
 import { resolveMuonCefNotificationFunctionPaths } from "../../ui/cef/notifications.js";
@@ -480,7 +480,29 @@ describe.skipIf(process.platform !== "linux")(
             try {
               await runNotificationDesktopCase(
                 evaluate,
-                driver,
+                {
+                  ...driver,
+                  activateNotification: async (title, action, screenshot) => {
+                    await driver.activateNotification(
+                      title,
+                      action,
+                      screenshot,
+                    );
+                    await vi.waitFor(
+                      async () => {
+                        const { stdout } = await execute(
+                          "xdotool",
+                          ["getwindowfocus", "getwindowname"],
+                          { timeout: 15000 },
+                        );
+                        expect(stdout.trim()).toBe(
+                          `Muon Notifications ${mode}`,
+                        );
+                      },
+                      { timeout: 30000 },
+                    );
+                  },
+                },
                 artifacts,
                 mode,
                 "linux",

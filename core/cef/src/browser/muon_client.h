@@ -97,6 +97,12 @@ class MuonClient final : public CefClient,
   /** Detaches the browser client from the CEF RPC transport. */
   ~MuonClient() override;
 
+  /** Presents an existing application window after a durable notification interaction.
+   * Defers presentation until the first browser is created when startup is ongoing.
+   * @param startup_id OS context for foreground activation, or empty when absent.
+   */
+  void ActivateNotificationWindow(std::string startup_id);
+
   /**
    * Returns this object as the browser lifetime handler.
    */
@@ -668,6 +674,8 @@ class MuonClient final : public CefClient,
   std::shared_ptr<MuonNetworkPolicy> plugin_page_policy_;
   std::shared_ptr<MuonNetworkPolicy> unsafe_parent_access_policy_;
   std::map<int, CefRefPtr<CefBrowser>> browsers_by_id_;
+  bool notification_activation_pending_ = false;
+  std::string notification_startup_id_;
   int pending_fs_dialog_calls_ = 0;
   std::map<int, int> pending_fs_dialog_calls_by_browser_;
   std::map<int, int> pending_keep_alive_fs_dialog_calls_by_browser_;

@@ -59,6 +59,11 @@ const stringValue = (value: string): string => {
 
 /** Native GNOME notification observation through AT-SPI and pointer activation. */
 export interface GnomeNotificationDriver {
+  /** Waits for a newly installed application to appear in the shell's app grid.
+   * @param name Exact application display name belonging to the fixture.
+   * @returns When the desktop has consumed the new registration.
+   */
+  waitForApplication(name: string): Promise<void>;
   /** Waits for the exact test notification title to become visible, then captures its container.
    * @param title Exact title belonging to the test application.
    * @param screenshotPath Destination PNG path for the visible notification.
@@ -453,6 +458,43 @@ export const createGnomeNotificationDriver =
       await click(buttons[0]!);
     };
     return {
+      waitForApplication: async (name) => {
+        await execute("xdotool", ["key", "Super_L+a"]);
+        try {
+          const signal = AbortSignal.timeout(60000);
+          while (true) {
+            signal.throwIfAborted();
+            const previous = revision;
+            const cache = await call(
+              { bus: shellRoot.bus, path: "/org/a11y/atspi/cache" },
+              "org.a11y.atspi.Cache.GetItems",
+              [],
+            );
+            // Cache.GetItems returns each object's interfaces, name and role
+            // together. Match the exact app name without traversing unrelated
+            // windows or making a separate D-Bus call for every grid item.
+            // A new app on an unmapped page exposes its label before its button.
+            for (const match of cache.matchAll(
+              /\], ('(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"), (?:uint32 )?(\d+),/g,
+            ))
+              if (
+                [29, 43].includes(Number(match[2])) &&
+                stringValue(match[1]!) === name
+              )
+                return;
+            await waitForChange(previous, signal);
+          }
+        } catch (error) {
+          throw new Error(
+            `Desktop application registration wait failed: ${name}`,
+            {
+              cause: error,
+            },
+          );
+        } finally {
+          await execute("xdotool", ["key", "Escape"]);
+        }
+      },
       waitForNotification: async (title, path) => {
         const matched = await wait(title, true);
         if (!matched) throw new Error(`Notification disappeared: ${title}`);

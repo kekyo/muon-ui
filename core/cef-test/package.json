@@ -9,6 +9,7 @@
     "build:windows-cdp-relay": "node build-windows-cdp-relay.mjs",
     "test:vitest": "xvfb-run -a node ../../scripts/run-dbus-session-command.mjs node ../../scripts/run-xvfb-command.mjs vitest run --exclude plugin-e2e-windows.test.ts --exclude windows-path.test.ts --exclude windows-builder-path.test.ts --exclude notifications-windows.test.ts",
     "test:notifications-desktop": "MUON_TEST_NOTIFICATION_DESKTOP=1 vitest run notifications-linux.test.ts",
+    "test:notifications-portal": "MUON_TEST_NOTIFICATION_DESKTOP=1 vitest run notifications-portal.test.ts",
     "test:windows-e2e": "vite build && npm run test:windows-e2e:vitest",
     "test:windows-e2e:vitest": "vitest run windows-path.test.ts && vitest run windows-builder-path.test.ts && MUON_E2E_WINDOWS_TARGET=windows-i686 vitest run plugin-e2e-windows.test.ts && MUON_E2E_WINDOWS_TARGET=windows-amd64 vitest run plugin-e2e-windows.test.ts && npm run test:windows-notifications",
     "test": "npm run build:target --workspace muon-core -- test Release linux-amd64 && npm run build:target --workspace muon-core -- test Debug linux-amd64 && vite build && npm run test:vitest && npm run test:windows-e2e:vitest",

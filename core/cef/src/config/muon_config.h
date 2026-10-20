@@ -579,6 +579,8 @@ struct MuonConfig {
    * Stable application identifier used for runtime state directories.
    */
   std::string app_id = "muon";
+  /** Absolute originating distribution launcher path, empty for direct runtime execution. */
+  std::filesystem::path launcher_path;
   /**
    * Application-defined string key-value configuration exposed through the
    * built-in environments plugin.

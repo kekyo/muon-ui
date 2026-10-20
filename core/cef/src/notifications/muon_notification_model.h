@@ -36,11 +36,11 @@ struct MuonNotificationPost {
   std::vector<MuonNotificationAction> actions;
 };
 
-/** OS handle scoped to the service instance which issued it. */
+/** OS handle scoped to a notification backend's ownership identity. */
 struct MuonNotificationHandle {
   /** Backend name; future backends must not interpret another backend's ID. */
   std::string backend;
-  /** Backend ownership key: a Linux service epoch or a Windows revision UUID. */
+  /** Backend ownership key: a service epoch, Portal app/revision, or Windows revision UUID. */
   std::string owner;
   /** Backend identifier, interpreted only with backend and owner. */
   uint32_t id = 0;

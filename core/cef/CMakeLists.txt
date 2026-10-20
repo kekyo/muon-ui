@@ -2129,21 +2129,28 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     target_link_libraries(muon_notification_portal_test PRIVATE
       yyjson muon_cardio PkgConfig::MUON_GLIB)
     MUON_APPLY_SANITIZERS(muon_notification_portal_test)
-    add_test(NAME notification_portal COMMAND dbus-run-session --
+    set(MUON_PORTAL_TEST_SESSION
+      "${CMAKE_CURRENT_SOURCE_DIR}/../cef-test/native/notification-portal/session.conf")
+    add_test(NAME notification_portal COMMAND dbus-run-session
+      --config-file=${MUON_PORTAL_TEST_SESSION} --
       $<TARGET_FILE:muon_notification_portal_test>)
     set_tests_properties(notification_portal PROPERTIES TIMEOUT 30)
-    add_test(NAME notification_portal_unregistered COMMAND dbus-run-session --
+    add_test(NAME notification_portal_unregistered COMMAND dbus-run-session
+      --config-file=${MUON_PORTAL_TEST_SESSION} --
       $<TARGET_FILE:muon_notification_portal_test> --unregistered)
     set_tests_properties(notification_portal_unregistered PROPERTIES TIMEOUT 30)
-    add_test(NAME notification_portal_fallback COMMAND dbus-run-session -- bash
+    add_test(NAME notification_portal_fallback COMMAND dbus-run-session
+      --config-file=${MUON_PORTAL_TEST_SESSION} -- bash
       ${CMAKE_CURRENT_SOURCE_DIR}/../cef-test/native/run_notification_linux_test.sh
       $<TARGET_FILE:muon_notification_test_server>
       $<TARGET_FILE:muon_notification_portal_test> --fallback)
     set_tests_properties(notification_portal_fallback PROPERTIES TIMEOUT 30)
-    add_test(NAME notification_portal_route COMMAND dbus-run-session --
+    add_test(NAME notification_portal_route COMMAND dbus-run-session
+      --config-file=${MUON_PORTAL_TEST_SESSION} --
       $<TARGET_FILE:muon_notification_portal_test> --route)
     set_tests_properties(notification_portal_route PROPERTIES TIMEOUT 30)
-    add_test(NAME notification_portal_stop COMMAND dbus-run-session --
+    add_test(NAME notification_portal_stop COMMAND dbus-run-session
+      --config-file=${MUON_PORTAL_TEST_SESSION} --
       $<TARGET_FILE:muon_notification_portal_test> --stop)
     set_tests_properties(notification_portal_stop PROPERTIES TIMEOUT 30)
     add_executable(muon_notification_portal_driver

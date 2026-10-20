@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=org.freedesktop.portal.Desktop
+# StartServiceByName needs a service definition even while the fixture owns the
+# name. Unexpected activation must fail instead of launching a desktop portal.
+Exec=/bin/false

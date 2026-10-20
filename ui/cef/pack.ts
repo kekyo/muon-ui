@@ -35,12 +35,11 @@ import {
 } from "../common/build.js";
 import {
   resolveMuonViteBuildOptions,
-  runMuonBuildSequence,
+  resolveMuonBuildSequenceOptions,
   type MuonBuildSequenceProject,
   type MuonBuildSequenceOptions,
 } from "../common/build-sequence.js";
 import type { MuonViteBuildOptions } from "../common/vite.js";
-import { createVitePackagedAssetOptions } from "../common/vite-assets.js";
 import {
   type MuonDesktopTarget as MuonBuildTarget,
   allMuonTargets,
@@ -1147,88 +1146,10 @@ const signPackWindowsExecutables = async (
   }
 };
 
-const createPortableBuildOptions = (input: {
-  project: MuonBuildSequenceProject;
-  pluginBuildOptions: MuonViteBuildOptions;
-  options: MuonPackOptions;
-  outputRoot: string;
-  targets: readonly MuonBuildTarget[];
-  windowsResourceOptions: MuonWindowsResourceOptions | undefined;
-  windowsCodeSigningOptions: false | MuonWindowsCodeSigningOptions | undefined;
-  linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
-  iconPath: string | undefined;
-  environment: NodeJS.ProcessEnv;
-  progress: MuonProgressCallback | undefined;
-}): MuonBuildOptions => {
-  const buildOptions: MuonBuildOptions = {
-    root: input.project.root,
-    targets: input.targets,
-    allTargets: false,
-    outputRoot: input.outputRoot,
-  };
-
-  if (input.project.pluginOptions !== undefined) {
-    if (input.project.viteOutputDirectory === undefined) {
-      throw new Error("Vite output directory could not be resolved.");
-    }
-    Object.assign(buildOptions, input.pluginBuildOptions);
-    const packagedAssetOptions = createVitePackagedAssetOptions(
-      input.project.viteBase ?? "/",
-    );
-    buildOptions.assetSourcePath = input.project.viteOutputDirectory;
-    buildOptions.assetPrefix = packagedAssetOptions.assetPrefix;
-    if (packagedAssetOptions.browserStartPage !== undefined) {
-      buildOptions.browserStartPage = packagedAssetOptions.browserStartPage;
-    }
-  }
-
-  buildOptions.targets = input.targets;
-  buildOptions.allTargets = false;
-  buildOptions.outputRoot = input.outputRoot;
-  if (input.options.configPath !== undefined) {
-    buildOptions.configPath = input.options.configPath;
-  }
-  if (input.iconPath !== undefined) {
-    buildOptions.iconPath = input.iconPath;
-  }
-  if (input.options.appName !== undefined) {
-    buildOptions.appName = input.options.appName;
-  }
-  if (input.options.appId !== undefined) {
-    buildOptions.appId = input.options.appId;
-  }
-  if (input.options.packageDirectory !== undefined) {
-    buildOptions.packageDirectory = input.options.packageDirectory;
-  }
-  if (input.windowsResourceOptions !== undefined) {
-    buildOptions.windowsResource = input.windowsResourceOptions;
-  }
-  if (input.windowsCodeSigningOptions !== undefined) {
-    buildOptions.windowsCodeSigning = input.windowsCodeSigningOptions;
-  }
-  if (input.linuxDesktopOptions !== undefined) {
-    buildOptions.linuxDesktop = input.linuxDesktopOptions;
-  }
-  if (input.progress !== undefined) {
-    (buildOptions as InternalMuonBuildOptions).progress = input.progress;
-  }
-  (buildOptions as InternalMuonBuildOptions).environment = input.environment;
-  (buildOptions as InternalMuonBuildOptions).browserProfilePathOverride =
-    portableProfilePath;
-  return buildOptions;
-};
-
 const buildPortableTargets = async (input: {
-  project: MuonBuildSequenceProject;
-  pluginBuildOptions: MuonViteBuildOptions;
-  options: MuonPackOptions;
+  buildOptions: MuonBuildOptions;
   packageBuildRoot: string;
   targets: readonly MuonBuildTarget[];
-  windowsResourceOptions: MuonWindowsResourceOptions | undefined;
-  windowsCodeSigningOptions: false | MuonWindowsCodeSigningOptions | undefined;
-  linuxDesktopOptions: MuonLinuxDesktopOptions | undefined;
-  iconPath: string | undefined;
-  environment: NodeJS.ProcessEnv;
   progress: MuonProgressCallback | undefined;
 }): Promise<Map<MuonBuildTarget, MuonBuildTargetResult>> => {
   if (input.targets.length === 0) {
@@ -1238,21 +1159,13 @@ const buildPortableTargets = async (input: {
     phase: "pack",
     status: "Building portable distributions",
   });
-  const result = await buildMuonApp(
-    createPortableBuildOptions({
-      project: input.project,
-      pluginBuildOptions: input.pluginBuildOptions,
-      options: input.options,
-      outputRoot: join(input.packageBuildRoot, "portable-build"),
-      targets: input.targets,
-      windowsResourceOptions: input.windowsResourceOptions,
-      windowsCodeSigningOptions: input.windowsCodeSigningOptions,
-      linuxDesktopOptions: input.linuxDesktopOptions,
-      iconPath: input.iconPath,
-      environment: input.environment,
-      progress: input.progress,
-    }),
-  );
+  const result = await buildMuonApp({
+    ...input.buildOptions,
+    outputRoot: join(input.packageBuildRoot, "portable-build"),
+    targets: input.targets,
+    allTargets: false,
+    browserProfilePathOverride: portableProfilePath,
+  } as InternalMuonBuildOptions);
   const build = {
     ...result,
     targets: result.targets.map(requireDesktopTarget),
@@ -1379,7 +1292,11 @@ export const packDesktopMuonApp = async (
     phase: "pack",
     status: "Building distributions",
   });
-  const result = await runMuonBuildSequence(buildOptions, project);
+  const resolvedBuildOptions = await resolveMuonBuildSequenceOptions(
+    buildOptions,
+    project,
+  );
+  const result = await buildMuonApp(resolvedBuildOptions);
   const build = {
     ...result,
     targets: result.targets.map(requireDesktopTarget),
@@ -1410,16 +1327,9 @@ export const packDesktopMuonApp = async (
   await rm(join(artifactsRoot, "nsis"), { recursive: true, force: true });
   await mkdir(artifactsRoot, { recursive: true });
   const portableTargetsByTarget = await buildPortableTargets({
-    project,
-    pluginBuildOptions,
-    options,
+    buildOptions: resolvedBuildOptions,
     packageBuildRoot,
     targets: portableTargets,
-    windowsResourceOptions,
-    windowsCodeSigningOptions,
-    linuxDesktopOptions,
-    iconPath,
-    environment,
     progress,
   });
   if (options.packageVersion !== undefined) {

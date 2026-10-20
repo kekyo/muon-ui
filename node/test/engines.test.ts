@@ -139,6 +139,15 @@ describe('muon Node project engines', () => {
     try {
       await mkdir(fixtureNodeDirectory, { recursive: true });
       await mkdir(fixtureUiDirectory, { recursive: true });
+      await writeFile(
+        join(fixtureUiDirectory, 'package.json'),
+        JSON.stringify({ type: 'module' })
+      );
+      await symlink(
+        join(workspaceDirectory, 'core'),
+        join(root, 'core'),
+        process.platform === 'win32' ? 'junction' : 'dir'
+      );
       await copyFile(
         join(packageDirectory, 'vite.config.ts'),
         join(fixtureNodeDirectory, 'vite.config.ts')
@@ -152,6 +161,7 @@ describe('muon Node project engines', () => {
         `${JSON.stringify(
           {
             name: 'muon-node',
+            type: 'module',
             engines: {
               node: supportedNodeRange,
             },

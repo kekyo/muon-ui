@@ -184,6 +184,20 @@ int muon_windows_main(int argc, wchar_t **argv, int (*entry)(int, char **)) {
   abort();
 }
 
+int muon_launcher_get_embedded_notification_clsid(char **clsid) {
+  (void)clsid;
+  abort();
+}
+
+int muon_notification_clear_history(const char *app_id,
+                                    const char *launcher_path,
+                                    const char *activator_clsid) {
+  (void)app_id;
+  (void)launcher_path;
+  (void)activator_clsid;
+  abort();
+}
+
 char *muon_utf8_from_wide(const wchar_t *value) {
   int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
                                   NULL, 0, NULL, NULL);
@@ -261,6 +275,13 @@ int muon_write_text_file(const char *path, const char *content) {
   (void)path;
   (void)content;
   return -1;
+}
+
+int muon_copy_file(const char *source, const char *destination, int mode) {
+  (void)source;
+  (void)destination;
+  (void)mode;
+  abort();
 }
 
 yyjson_doc *muon_json_read_file(const char *path) {

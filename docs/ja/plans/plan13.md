@@ -658,3 +658,28 @@ GNOME Shell 46.0とPortal 1.20.3を使い、公開CLIで生成したtar.gz配布
 Portalのホスト登録APIがない環境では、終了済みアプリの起動を非対応とし、理由を返す。通知表示と実行中の操作は従来の通知サービスで扱う。旧scope方式の削除前に失敗するテストを確認し、削除後のネイティブ通知・設定テスト13件が成功した。
 
 Windows実機のamd64・i686各8件、NSISの2件、GNOME・KDEの上記結果を段階8の完了条件と照合した。全体の完了は、段階9の全体テストと配布形式・OS境界の確認、利用文書の更新後に判定する。
+
+### 段階9の全体検証と残る問題
+
+2026年10月20日、Linux amd64、Windows i686・amd64、Android arm64-v8a・x86_64の配布用ビルドとSDK配置の検証が成功した。Linuxの追加配布試験では、依存情報を含む配布用ランタイムからAppImageとdebを生成した。
+
+| 検証入口・対象 | 結果 |
+| --- | --- |
+| `npm test --workspace muon-builder` | 全処理が成功。Linuxのファイル操作とキャッシュ、Windowsの進捗表示、圧縮・展開、リソース更新を含む。 |
+| `npm test --workspace muon-node` | 40件成功。 |
+| `npm run test:vitest --workspace muon-core-tester` | 226件成功、30件省略、928.43秒。省略分は成功件数に含めない。実デスクトップの通知試験は別記。 |
+| `npm run test:windows-nsis-e2e --workspace muon-ui` | 実機で6件すべて成功、163.71秒。32bit・64bitの導入先検証、通知登録、更新、削除を確認。 |
+| GNOMEのtar.gz配布アプリ | simple・validateの2件が成功、285.79秒。更新前の通知からの起動、保存済みイベント、配置先の移動、無効化と再有効化、登録解除を再確認。 |
+| KDEのAppImage・deb配布アプリ | 両モードの計4件が成功、406.90秒。実行中の操作と新規起動、未受領イベントと受領確認、履歴削除、登録解除を確認。 |
+
+AppImage・debの試験は`MUON_TEST_NOTIFICATION_PACKAGE_FORMATS=appimage,deb`を指定して`notifications-linux-launch.test.ts`を実行する。debは試験ごとに異なるパッケージ名で導入・削除するため、破棄可能なデスクトップ環境と、対象パッケージに限った管理権限を使う。今回のAppImageはFUSEを使わないコンテナで`APPIMAGE_EXTRACT_AND_RUN=1`により起動した。[AppImageの公式実行方法](https://docs.appimage.org/user-guide/troubleshooting/fuse.html)
+
+全体テストで見つかった試験用コードの不整合も修正した。ランチャーの単体試験に通知関連の依存を追加し、Nodeの利用アプリ試験には共有rendererを参照できる構成を用意した。GTKの操作試験は、起動した別アプリとCEFのプロファイルが競合しないよう、試験専用の状態ディレクトリを指定した。競合を再現した後、対象10件と上記のLinux全体試験が成功した。Windowsの日本語パス試験は古い配布用バイナリを現行版で作り直すことで成功し、診断のための一時変更は取り除いた。
+
+`EMPTY_IMPORT_META`はホスト向けViteビルドの対象をNodeとして指定して解消し、CJS・Android hostの読み込みを動作で確認した。`PLUGIN_TIMINGS`は、必須の整形・型検査が小さなバンドルの処理時間の大半を占めるという診断だった。各処理の時間表示を維持し、この比率に対する警告だけを無効にした。出力の正しさに関する検査は維持している。[Rolldownの時間比率診断](https://rolldown.rs/reference/InputOptions.checks#bundlertimings)
+
+APKセット生成はJDK 21.0.12.1でも確認し、JDK 25で発生したbundletoolのUnsafe警告を避けられた。Linux配布用ビルドでは、GTKモジュールが推移的に参照するGDKシンボルについて、既存の`dpkg-shlibdeps`警告が出た。同梱ライブラリを含む依存監査は183個のELFを検査して問題0件となったため、外部モジュールは変更せず、解析上の警告として記録した。[dpkg-shlibdepsの診断](https://manpages.debian.org/bookworm/dpkg-dev/dpkg-shlibdeps.1.en.html)
+
+Windows全体の入口はファイル操作の実機試験で止まった。Defenderが`C:\muon-e2e\builder-path-0\windows-amd64-builder-test.exe`を`Trojan:Win32/Bearfoos.A!ml`として隔離し、`CreateProcessW`が225を返した後、ファイルが存在しなくなった。このファイルは`builder/test/windows_filesystem_test.c`からビルドした試験用実行ファイルで、SHA-256は`7e6a1b5d1ced144361f526a159ef18b338592ad0c83a52a667e12ea06e7631e2`である。対象122件のうち93件が成功し、29件はこの遮断で失敗した。誤検知とは断定せず、検出の扱いを利用者へ確認している。[Windowsのエラー225](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-)
+
+Android API 35では、Activity再生成後に初回Insetsが届かず、ページ読み込みが始まらない問題を再現した。あわせて、Activityの破棄と別スレッドのアセット読み込みが重なる競合を調査している。API 35・36の境界試験、修正後のPixel 6・16 KiB環境、Windowsの遮断された試験、ルートの`npm test`の最終確認が残っている。段階9と全体の完了条件は引き続き未達成である。

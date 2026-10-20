@@ -69,6 +69,9 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
       target: "node20",
       rolldownOptions: {
         platform: "node",
+        // Required formatting and type checking dominate these small bundles.
+        // prettier-max reports their timings; retain output correctness checks.
+        checks: { bundlerTimings: false },
         external: [
           /^node:/,
           "adm-zip",

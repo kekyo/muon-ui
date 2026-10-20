@@ -46,6 +46,11 @@ export default defineConfig({
   publicDir: false,
   build: {
     ...muonNotificationRendererBuildOptions,
+    rolldownOptions: {
+      // Required formatting and type checking dominate this small bundle.
+      // prettier-max reports their timings; retain output correctness checks.
+      checks: { bundlerTimings: false },
+    },
     emptyOutDir: true,
     outDir: '.build/notification-renderer',
   },

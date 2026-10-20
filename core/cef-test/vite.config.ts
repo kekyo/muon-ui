@@ -31,6 +31,11 @@ export default defineConfig(async (): Promise<UserConfig> => ({
     minify: false,
     sourcemap: true,
     target: "node22",
+    rolldownOptions: {
+      // Required formatting and type checking dominate this small bundle.
+      // prettier-max reports their timings; retain output correctness checks.
+      checks: { bundlerTimings: false },
+    },
   },
   test: {
     environment: "node",

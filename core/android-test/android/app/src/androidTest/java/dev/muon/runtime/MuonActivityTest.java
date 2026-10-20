@@ -22,6 +22,7 @@ import android.view.WindowInsetsAnimation;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SdkSuppress;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebMessageCompat;
 
@@ -41,6 +42,42 @@ import java.nio.charset.StandardCharsets;
 
 @RunWith(AndroidJUnit4.class)
 public final class MuonActivityTest {
+    @Test
+    @SdkSuppress(minSdkVersion = 26)
+    public void servesAnInFlightAssetRequestAfterActivityDestruction() throws Exception {
+        AtomicReference<WebViewClient> client = new AtomicReference<>();
+        AtomicReference<WebView> view = new AtomicReference<>();
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activity = new AtomicReference<>();
+            scenario.onActivity(activity::set);
+            assertTrue(activity.get().awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            scenario.onActivity(current -> {
+                view.set(current.getWebViewForTest());
+                client.set(view.get().getWebViewClient());
+            });
+        }
+        // The request callback can already be queued on WebView's background
+        // thread when the Activity destroys its host on the main thread.
+        WebResourceRequest request = new WebResourceRequest() {
+            @Override public android.net.Uri getUrl() {
+                return android.net.Uri.parse(MuonActivity.TRUSTED_ORIGIN + "/index.html");
+            }
+            @Override public boolean isForMainFrame() { return false; }
+            @Override public boolean isRedirect() { return false; }
+            @Override public boolean hasGesture() { return false; }
+            @Override public String getMethod() { return "GET"; }
+            @Override public java.util.Map<String, String> getRequestHeaders() {
+                return Collections.emptyMap();
+            }
+        };
+        WebResourceResponse response = client.get().shouldInterceptRequest(view.get(), request);
+        assertNotNull("A trusted asset must not fall through to the network", response);
+        assertEquals(200, response.getStatusCode());
+        try (var body = response.getData()) {
+            assertTrue(body.read() >= 0);
+        }
+    }
+
     @Test
     public void rejectsForeignAndSubframeRpcBeforeNativeExecution() throws Exception {
         try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {

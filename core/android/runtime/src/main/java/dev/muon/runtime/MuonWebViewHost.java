@@ -11,6 +11,8 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowInsets;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -76,6 +78,9 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
             content.addView(webView, new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
             assets.configureWebViewSettings(webView.getSettings());
+            // Interception runs off the UI thread and can finish after close().
+            // Keep its immutable loader alive for this WebViewClient's lifetime.
+            final MuonAssetRequestHandler requestAssets = assets;
             webView.setWebViewClient(new WebViewClient() {
                 @Override
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
@@ -92,7 +97,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
                 @Override
                 public WebResourceResponse shouldInterceptRequest(
                         WebView view, WebResourceRequest request) {
-                    return assets.shouldInterceptRequest(request);
+                    return requestAssets.shouldInterceptRequest(request);
                 }
 
                 @Override
@@ -137,6 +142,27 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
         }
         listener.beforePageLoad(webView, bridge);
         nativeReady = true;
+        // A recreated Activity can reuse its Window without redispatching unchanged
+        // insets on API 35. Wait for its new bounds before reading the root snapshot;
+        // attachment can still expose the previous full-screen window's geometry.
+        content.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override public void onLayoutChange(View view, int left, int top, int right,
+                    int bottom, int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                WindowInsets insets = view.getRootWindowInsets();
+                if (insets != null) {
+                    view.removeOnLayoutChangeListener(this);
+                    if (bridge.getSystemBarsService().getCssScript() != null) { return; }
+                    // Preserve the decor's consumption in multi-window mode.
+                    WindowInsets remaining = activity.getWindow().getDecorView()
+                            .dispatchApplyWindowInsets(insets);
+                    // If the reused hierarchy did not deliver to this new subtree,
+                    // seed it with the remainder after decor consumption.
+                    if (bridge.getSystemBarsService().getCssScript() == null) {
+                        view.dispatchApplyWindowInsets(remaining);
+                    }
+                }
+            }
+        });
         activity.setContentView(content);
         ViewCompat.requestApplyInsets(content);
         updateInsets();

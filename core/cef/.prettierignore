@@ -1,0 +1,7 @@
+# CEF contains native sources and downloaded distributions. Format only renderer inputs.
+*
+!renderer/
+!renderer/**
+!renderer.vite.config.ts
+!tsconfig.json
+!package.json

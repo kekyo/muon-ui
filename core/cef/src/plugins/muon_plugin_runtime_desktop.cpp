@@ -14,6 +14,7 @@
 #include "plugins/builtin/muon_builtin_executor.h"
 #include "plugins/builtin/muon_builtin_fs.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
+#include "plugins/builtin/muon_builtin_notifications.h"
 
 #include <cardio.h>
 
@@ -67,6 +68,7 @@ CreateDesktopPlatformAdapter(
                         &adapter->reserved_namespaces);
   AddMetadataNamespaces(GetMuonBuiltinFsDialogsPluginMetadata(),
                         &adapter->reserved_namespaces);
+  adapter->reserved_namespaces.push_back("muon.notifications");
 
   MuonPluginRuntimePlatformNamespace browser_namespace;
   browser_namespace.plugin_namespace =
@@ -128,11 +130,15 @@ CreateDesktopPlatformAdapter(
     initialization->plugins.push_back(
         {GetMuonBuiltinFsDialogsPluginMetadata(),
          "<builtin muon fs dialogs>"});
+    if (const auto* metadata = GetMuonBuiltinNotificationsMetadata()) {
+      initialization->plugins.push_back({metadata, "<builtin muon notifications>"});
+    }
     initialization->cancel_owner_operations.push_back(
         &muon_builtin_fs_dialogs_cancel_owner_browser);
     return true;
   };
   adapter->shutdown = []() {
+    ShutdownMuonBuiltinNotifications();
     ShutdownMuonBuiltinExecutor();
     ShutdownMuonBuiltinFsDialogs();
     ShutdownMuonBuiltinFs();

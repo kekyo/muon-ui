@@ -774,6 +774,26 @@ describe("muon build", () => {
     expect(await exists(join(output, "libcef.so"))).toBe(false);
   });
 
+  it.each([null, { enabled: "true" }, { enabled: true, defaultCategory: " " }])(
+    "rejects invalid desktop notification settings before packaging: %j",
+    async (notifications) => {
+      const root = await createTemporaryDirectory(
+        "muon-notifications-invalid-",
+      );
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({ name: "notification-test" }),
+      );
+      await writeFile(
+        join(root, "muon.json"),
+        JSON.stringify({ notifications }),
+      );
+      await expect(
+        buildMuonApp({ root, targets: ["linux-amd64"] }),
+      ).rejects.toThrow(/notifications/);
+    },
+  );
+
   it("creates a CEF-free target distribution with embedded config and SHA-256-signed assets", async () => {
     const root = await createTemporaryDirectory("muon-build-app-");
     const packageDirectory = await createFakeMuonPackageDist(root);
@@ -792,6 +812,7 @@ describe("muon build", () => {
         {
           asset: { sourcePath: "./old-assets" },
           android: { sdkPath: "/missing/android-sdk", quickjs: true },
+          notifications: { enabled: true, defaultCategory: "orders" },
           browser: { userAgent: "PackagedApp/1.0" },
           network: {
             allow: ["asset://main/**"],
@@ -817,6 +838,10 @@ describe("muon build", () => {
     const [target] = result.targets;
     expect(target?.target).toBe("linux-amd64");
     expect(target?.embeddedConfig).not.toHaveProperty("android");
+    expect(target?.embeddedConfig.notifications).toEqual({
+      enabled: true,
+      defaultCategory: "orders",
+    });
     expect(target?.runtimeAppId).toBe("scope.muon-sample");
     expect(target?.outputPath).toBe(join(root, "dist-muon/linux-amd64"));
     expect(target?.launcherPath).toBe(
@@ -2834,6 +2859,7 @@ describe("muon build", () => {
         appId: "missing-config-sample",
         desktopId: "missing-config-sample",
       },
+      notifications: { enabled: false },
       plugin: {
         mode: "simple",
       },

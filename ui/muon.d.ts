@@ -50,7 +50,7 @@ declare global {
     | readonly MuonNotificationData[]
     | { readonly [key: string]: MuonNotificationData };
 
-  /** A named notification button that opens the application. */
+  /** A named notification action, independently of support for starting an exited app. */
   interface MuonNotificationAction {
     /** Nonempty ID of up to 128 UTF-16 code units, unique within this notification. */
     readonly id: string;
@@ -70,7 +70,7 @@ declare global {
     readonly category?: string;
     /** JSON data for notification interaction; maximum encoded size is 16384 UTF-8 bytes and depth is 64. */
     readonly data?: MuonNotificationData;
-    /** Up to three named launch buttons; requires the actions capability. */
+    /** Up to three named action buttons; requires the actions capability. */
     readonly actions?: readonly MuonNotificationAction[];
   }
 
@@ -164,6 +164,8 @@ declare global {
      * Removal by the user or OS does not release its reserved slot; use
      * cancel(), replace that ID, or let the revision expire.
      * OS submission and local persistence are not one atomic transaction.
+     * Linux updates submit a distinct OS notification before withdrawing the old
+     * revision; both may briefly appear during replacement.
      * Android APK replacement may clear posted notifications; they are not
      * automatically reposted after an update.
      */
@@ -184,6 +186,9 @@ declare global {
     /**
      * Reads support for each notification feature in the current environment.
      * @returns Support and diagnostics; does not imply user permission.
+     * @remarks Linux's direct notification backend cannot launch an exited app.
+     * A service advertising persistence does not establish retention after process
+     * exit, so that backend reports unknown unless the service lacks persistence.
      */
     readonly getCapabilities: () => Promise<MuonNotificationCapabilities>;
     /**

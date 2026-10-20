@@ -547,10 +547,20 @@ struct MuonAssetConfig {
   std::vector<uint8_t> salt;
 };
 
+/** Local notification settings shared by supported native backends. */
+struct MuonNotificationsConfig {
+  /** Whether the built-in notification namespace is registered. */
+  bool enabled = false;
+  /** Default application category used only when posting notifications. */
+  std::string default_category;
+};
+
 /**
  * Root muon.json configuration.
  */
 struct MuonConfig {
+  /** Application-owned local notification settings. */
+  MuonNotificationsConfig notifications;
   /**
    * Default CEF version selection policy used when launcher settings omit one.
    */

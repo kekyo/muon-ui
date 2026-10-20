@@ -789,6 +789,9 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_launcher.cpp
   src/plugins/builtin/muon_builtin_environment_helpers.cpp
   src/plugins/builtin/muon_builtin_environments.cpp
+  src/plugins/builtin/muon_builtin_notifications.cpp
+  src/notifications/muon_notification_rpc.cpp
+  src/notifications/muon_notification_model.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
   src/plugins/builtin/muon_builtin_fs.cpp
   src/plugins/builtin/muon_builtin_fs_gio_read_source.cpp
@@ -1180,7 +1183,28 @@ list(APPEND APP_HEADERS
   "${MUON_CORE_VERSION_HEADER_PATH}"
   "${MUON_RUNTIME_INFO_HEADER_PATH}"
   )
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  list(APPEND APP_SOURCES
+    src/notifications/muon_notification_store.cpp
+    src/notifications/muon_notification_service.cpp
+    src/notifications/muon_notification_linux.cpp)
+  set(MUON_NOTIFICATION_RENDERER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.build/notification-renderer")
+  add_custom_command(
+    OUTPUT "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h"
+    COMMAND npm run build:notification-renderer --workspace muon-core
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+    DEPENDS renderer/notifications.ts renderer.vite.config.ts
+      ../common/renderer/notifications.ts ../common/build-notification-renderer.mts
+    COMMENT "Building the shared notification renderer"
+    VERBATIM)
+  add_custom_target(muon_notification_renderer
+    DEPENDS "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h")
+endif()
 add_executable(${APP_NAME} ${APP_SOURCES} ${APP_HEADERS})
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  add_dependencies(${APP_NAME} muon_notification_renderer)
+  target_include_directories(${APP_NAME} PRIVATE "${MUON_NOTIFICATION_RENDERER_DIR}")
+endif()
 SET_EXECUTABLE_TARGET_PROPERTIES(${APP_NAME})
 target_compile_features(${APP_NAME} PRIVATE cxx_std_20)
 set_target_properties(${APP_NAME} PROPERTIES
@@ -1939,8 +1963,101 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   if(WIN32)
     target_link_libraries(muon_internal_helpers_test PRIVATE muon_windows_path)
   endif()
+  add_executable(muon_notification_rpc_test
+    ../cef-test/native/muon_notification_rpc_test.cpp
+    src/notifications/muon_notification_rpc.cpp
+    ${MUON_COMMON_ROOT}/src/plugins/muon_plugin_metadata.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_rpc_test)
+  target_compile_features(muon_notification_rpc_test PRIVATE cxx_std_20)
+  target_include_directories(muon_notification_rpc_test PRIVATE src)
+  target_link_libraries(muon_notification_rpc_test PRIVATE muon_rpc_core)
+  MUON_APPLY_SANITIZERS(muon_notification_rpc_test)
+  add_test(NAME notification_rpc COMMAND muon_notification_rpc_test)
+  add_executable(muon_notification_model_test
+    ../cef-test/native/muon_notification_model_test.cpp
+    src/notifications/muon_notification_model.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_model_test)
+  target_compile_features(muon_notification_model_test PRIVATE cxx_std_20)
+  target_include_directories(muon_notification_model_test PRIVATE src)
+  target_link_libraries(muon_notification_model_test PRIVATE yyjson)
+  MUON_APPLY_SANITIZERS(muon_notification_model_test)
+  add_test(NAME notification_model COMMAND muon_notification_model_test)
+  if(NOT WIN32)
+    add_executable(muon_builtin_notifications_test
+      ../cef-test/native/muon_builtin_notifications_test.cpp
+      src/plugins/builtin/muon_builtin_notifications.cpp
+      src/notifications/muon_notification_model.cpp
+      src/notifications/muon_notification_store.cpp
+      src/notifications/muon_notification_service.cpp
+      src/notifications/muon_notification_linux.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_builtin_notifications_test)
+    target_compile_features(muon_builtin_notifications_test PRIVATE cxx_std_20)
+    target_include_directories(muon_builtin_notifications_test PRIVATE src
+      "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/../../sdk/include"
+      "${MUON_NOTIFICATION_RENDERER_DIR}")
+    target_link_libraries(muon_builtin_notifications_test PRIVATE
+      yyjson muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
+    add_dependencies(muon_builtin_notifications_test muon_notification_renderer)
+    MUON_APPLY_SANITIZERS(muon_builtin_notifications_test)
+    add_test(NAME notification_builtin COMMAND muon_builtin_notifications_test)
+    set_tests_properties(notification_builtin PROPERTIES TIMEOUT 30)
+    add_executable(muon_notification_store_test
+      ../cef-test/native/muon_notification_store_test.cpp
+      src/notifications/muon_notification_model.cpp
+      src/notifications/muon_notification_store.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_store_test)
+    target_compile_features(muon_notification_store_test PRIVATE cxx_std_20)
+    target_include_directories(muon_notification_store_test PRIVATE src)
+    target_link_libraries(muon_notification_store_test PRIVATE
+      yyjson muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
+    MUON_APPLY_SANITIZERS(muon_notification_store_test)
+    add_test(NAME notification_store COMMAND muon_notification_store_test)
+    set_tests_properties(notification_store PROPERTIES TIMEOUT 30)
+    add_executable(muon_notification_service_test
+      ../cef-test/native/muon_notification_service_test.cpp
+      src/notifications/muon_notification_model.cpp
+      src/notifications/muon_notification_store.cpp
+      src/notifications/muon_notification_service.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_service_test)
+    target_compile_features(muon_notification_service_test PRIVATE cxx_std_20)
+    target_include_directories(muon_notification_service_test PRIVATE
+      src "${MUON_COMMON_ROOT}/src")
+    target_link_libraries(muon_notification_service_test PRIVATE
+      yyjson muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
+    MUON_APPLY_SANITIZERS(muon_notification_service_test)
+    add_test(NAME notification_service COMMAND muon_notification_service_test)
+    set_tests_properties(notification_service PROPERTIES TIMEOUT 30)
+    add_executable(muon_notification_linux_test
+      ../cef-test/native/muon_notification_linux_test.cpp
+      src/notifications/muon_notification_model.cpp
+      src/notifications/muon_notification_linux.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_linux_test)
+    target_compile_features(muon_notification_linux_test PRIVATE cxx_std_20)
+    target_include_directories(muon_notification_linux_test PRIVATE src)
+    target_link_libraries(muon_notification_linux_test PRIVATE
+      yyjson muon_cardio PkgConfig::MUON_GLIB)
+    MUON_APPLY_SANITIZERS(muon_notification_linux_test)
+    add_test(NAME notification_linux COMMAND dbus-run-session -- bash
+      ${CMAKE_CURRENT_SOURCE_DIR}/../cef-test/native/run_notification_linux_test.sh
+      $<TARGET_FILE:muon_notification_test_server> $<TARGET_FILE:muon_notification_linux_test>)
+    set_tests_properties(notification_linux PROPERTIES TIMEOUT 30)
+    pkg_check_modules(MUON_GIO_UNIX REQUIRED IMPORTED_TARGET gio-unix-2.0>=2.74)
+    add_executable(muon_notification_test_server
+      ../cef-test/native/muon_notification_test_server.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_test_server)
+    target_compile_features(muon_notification_test_server PRIVATE cxx_std_20)
+    target_link_libraries(muon_notification_test_server PRIVATE
+      yyjson muon_cardio PkgConfig::MUON_GIO_UNIX)
+    add_executable(muon_atspi_event_observer
+      ../cef-test/native/muon_atspi_event_observer.cpp)
+    SET_EXECUTABLE_TARGET_PROPERTIES(muon_atspi_event_observer)
+    target_compile_features(muon_atspi_event_observer PRIVATE cxx_std_20)
+    target_link_libraries(muon_atspi_event_observer PRIVATE
+      muon_cardio PkgConfig::MUON_GIO_UNIX)
+  endif()
   add_executable(muon_config_network_test
     ../cef-test/native/muon_config_network_test.cpp
+    src/notifications/muon_notification_model.cpp
     ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
     src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp

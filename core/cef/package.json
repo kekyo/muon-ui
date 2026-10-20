@@ -2,7 +2,9 @@
   "name": "muon-core",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "scripts": {
+    "build:notification-renderer": "vite build --config renderer.vite.config.ts",
     "build": "bash ./build.sh dev Debug linux-amd64 && bash ./build.sh check Release windows-i686 && bash ./build.sh check Release windows-amd64",
     "build:dist": "bash ./build.sh dist Release linux-amd64 && bash ./build.sh dist Release windows-i686 && bash ./build.sh dist Release windows-amd64",
     "build:target": "bash ./build.sh",
@@ -12,6 +14,11 @@
     "test": "npm run build:test && xvfb-run -a node ../../scripts/run-xvfb-command.mjs ctest --test-dir .build/test/linux-amd64/release --output-on-failure"
   },
   "devDependencies": {
-    "screw-up": ">=1.35.0"
+    "@types/node": "^26.6.4",
+    "funcity": "^1.5.0",
+    "prettier-max": "^1.16.0",
+    "screw-up": ">=1.35.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.2"
   }
 }

@@ -32,6 +32,7 @@ import {
   stageMuonNativePlugins,
 } from "../common/native-plugins.js";
 import { resolveMuonPluginAccessOptions } from "../common/plugin-access.js";
+import { resolveMuonNotificationConfig } from "../common/notification-config.js";
 
 import AdmZip from "adm-zip";
 
@@ -145,6 +146,9 @@ export const buildDesktopMuonApp = async (
   const appName = resolveAppName(packageJson, options.appName);
   const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
+  const notifications = resolveMuonNotificationConfig(
+    buildConfig.config.notifications,
+  );
   const sourcePluginConfig = buildConfig.config.plugin;
   const hasNativeReferences =
     isJsonObject(sourcePluginConfig) &&
@@ -194,7 +198,10 @@ export const buildDesktopMuonApp = async (
   }
   const { android: _androidBuildConfig, ...desktopConfig } = buildConfig.config;
   const sourceConfig = createPackagedMuonNodeConfig(
-    applyRuntimePluginConfig(desktopConfig, runtimePluginConfig),
+    applyRuntimePluginConfig(
+      { ...desktopConfig, notifications },
+      runtimePluginConfig,
+    ),
     nodeProject,
   );
   if (nativeArtifacts.size > 0) {

@@ -142,7 +142,7 @@ Web側に渡す値はCSSピクセルを基本とし、端末の物理ピクセ�
 
 同じ`id`を再投稿すると、その通知を更新する。`cancel(id)`は該当通知を取り消し、存在しないIDでも完了する。標準のタップ・クリック操作を受け取ったら通知を取り消す。アプリが識別する`id`をプロセス再起動後も同じ通知へ対応させ、更新や取り消しが別の通知へ作用しないようにする。OSや通知サービスが再起動して対応を確認できない場合は、その状態を診断し、古いOS識別子を別の通知へ誤適用しない。
 
-`post()`の成功は、利用するOS APIへ投稿を依頼する処理が完了したことを表す。OSの受領確認を返さないAPIでは、通知サービスへの到達まで保証しない。ユーザーが見たことや、必ず音・画面表示が発生することも保証しない。既知の権限拒否、通知全体の無効化、指定チャンネルの無効化は呼び出し時に診断する。事前に状態を取得した後でOS設定が変わる場合も扱う。[GApplication.send_notificationの戻り値と表示の扱い](https://docs.gtk.org/gio/method.Application.send_notification.html)
+`post()`の成功は、利用するOS APIへ投稿を依頼する処理が完了したことを表す。OSの受領確認を返さないAPIでは、通知サービスへの到達まで保証しない。ユーザーが見たことや、必ず音・画面表示が発生することも保証しない。既知の権限拒否、通知全体の無効化、指定チャンネルの無効化は呼び出し時に診断する。事前に状態を取得した後でOS設定が変わる場合も扱う。[Linuxの通知要求と応答の仕様](https://specifications.freedesktop.org/notification/latest/protocol.html)
 
 `getStatus()`は、引数を省略した場合にはアプリ全体の投稿可否を返す。`category`を指定した場合には、アプリ全体とその分類の状態を区別して返す。投稿可能、無効、判定できない状態を表し、通知の閲覧状態や一時的な表示の抑制とは分ける。Android固有の詳細は専用APIの権限状態とチャンネル情報で取得する。
 
@@ -179,7 +179,7 @@ Androidの`channels`と`smallIcon`は`android.notifications`へ残す。共通�
 
 Androidでは`category`とチャンネルIDを同じ文字列にする。ここでの`category`はmuonの用途分類であり、Androidのアラームなどを表すシステム分類とは別である。別の対応表や登録ハンドルは導入しない。[Androidのチャンネルとシステム分類](https://developer.android.com/develop/ui/compose/notifications/channels)
 
-CEFでは任意の用途分類キーを受け付け、OSのチャンネル登録を要求しない。Linuxの`email.arrived`などのシステム分類へ文字列をそのまま流用しない。分類別の通知制御がないOSへ、Androidと同等のユーザー設定があるようには公開しない。[GNotificationの分類](https://docs.gtk.org/gio/method.Notification.set_category.html)
+CEFでは任意の用途分類キーを受け付け、OSのチャンネル登録を要求しない。Linuxの`email.arrived`などのシステム分類へ文字列をそのまま流用しない。分類別の通知制御がないOSへ、Androidと同等のユーザー設定があるようには公開しない。[FDOの通知分類](https://specifications.freedesktop.org/notification/latest/categories.html)
 
 ## Androidの通知拡張
 
@@ -277,19 +277,23 @@ Windowsのアプリ通知へ接続し、アプリ名とアイコン、同一ID�
 
 ### Linux
 
-既存のGIO依存を使う`GNotification`を第一候補とする。安定した文字列IDによる更新・取り消しを共通APIへ対応させる。通知の送信完了だけで表示されたとは判断しない。[現在のGIO依存](../../../core/cef/CMakeLists.txt)、[GApplication.send_notificationのAPI仕様とコメント](https://docs.gtk.org/gio/method.Application.send_notification.html)
+段階6では既存のGIO依存を使い、`org.freedesktop.Notifications`のD-Busプロトコルへ非同期で接続する。第一候補だった`GNotification`は検証したGLib 2.74・2.80でアプリ登録や初回バックエンド選択に同期D-Bus呼び出しを含むため採用しない。cardioとGIOの非同期APIを組み合わせ、通知用の待機スレッドは追加しない。[GIOの非同期D-Bus呼び出し](https://docs.gtk.org/gio/method.DBusConnection.call.html)、[GApplicationの登録処理](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/gapplicationimpl-dbus.c)、[GNotificationのバックエンド選択](https://gitlab.gnome.org/GNOME/glib/-/blob/2.80.0/gio/ggtknotificationbackend.c)
 
-`GNotification`の利用には、アプリIDと対応する`.desktop`の配置が必要である。終了したアプリを通知から起動する場合は、`GApplication`とD-Busによる起動連携も用意する。通知操作はアプリ単位のアクションへ接続し、すでに存在しない通知オブジェクトやページを配送先にしない。通知の保持はデスクトップ環境の対応に依存する。[GNotificationの要件とAPIコメント](https://docs.gtk.org/gio/class.Notification.html)
+アプリが指定する文字列IDと、OSの通知IDを分けて管理する。更新前の通知操作を新しい投稿へ誤って結び付けないよう、同じ文字列IDの更新でも新しいOS通知を投稿してから古い通知を閉じる。処理途中には新旧の通知が一時的に並ぶ場合があり、OSへの投稿と取り消し全体を原子的には実行できない。取り消し先は通知サービスの接続先と組にし、サービス再起動後に再利用された数値IDを操作しない。[通知IDと操作イベントの仕様](https://specifications.freedesktop.org/notification/latest/protocol.html)
 
-既存の`.desktop`生成は通常の`Exec`を扱い、通知からの起動連携は未実装である。アプリID、desktop ID、アイコン、起動実行ファイルをそろえ、D-Busから起動するサービス登録を追加する。AppImageなど起動位置が変わり得る配布物は、既存のdesktop連携と更新時のパス更新を含めて確認する。配置・登録が不足する場合は、必要な条件を診断して対応状況に反映する。[Linux desktop連携](../../../ui/cef/linux-desktop.ts)
+実行中の操作はアプリ単位の保存領域へ記録し、その後で各ページへ配送する。保存済みの未受領イベント、受領確認、上限と期限は共通契約に従う。追加ボタンはサービスの対応状況から判断し、アプリ全体と用途分類別の投稿可否を取得できない場合は`unknown`を返す。通知の送信完了だけで、表示された、あるいはユーザーが許可したとは判断しない。
 
-GIOのAPIが存在することだけで、どの環境でも保持や操作を利用できるとは扱わない。通知サービスの有無、GNOME・KDEなどの環境差、サービス再起動後の状態を検証する。OSの状態を取得できない場合は`unknown`を返し、ユーザーが通知を許可したと推定しない。
+アプリ名とアイコンを対応させるため、appId、desktop ID、`.desktop`、アイコンをそろえる。GNOME 46では、前面のアプリが投稿した保持型通知のバナーを抑止するため、実画面の試験はアプリを最小化した状態でも行う。通知欄への保存とバナー表示を別々に確認する。また、GNOME 46では通知サービスが`persistence`を広告していても、投稿元アプリの接続終了で通知の発行元が削除される。FDO経由では広告値だけからプロセス終了後の保持を保証せず、保持機能が広告されている場合の`persistence`は`unknown`、機能自体がない場合は`unsupported`とする。[GNOMEの通知処理とコメント](https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/46.0/js/ui/notificationDaemon.js)
+
+プロセス終了後のクリック起動は段階6では非対応とする。段階8ではPortal Notificationと`org.freedesktop.Application.ActivateAction`を使うD-Bus起動を検証し、対応する配布環境へ接続する。既存の通常の`Exec`に加え、D-Busサービス登録とアプリ識別が必要となる。AppImageなど起動位置が変わり得る配布物では、更新時の登録先も検証する。登録不足や非対応の環境を、起動対応済みとは扱わない。[Portal Notification](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Notification.html)、[D-Busアプリケーションの操作](https://specifications.freedesktop.org/desktop-entry-spec/latest/dbus.html)、[既存のLinux desktop連携](../../../ui/cef/linux-desktop.ts)
+
+通知サービスの有無、GNOME・KDEの環境差、サービス再起動後の状態を検証する。OSによる通知の保持と、受け取った操作イベントの永続化は区別する。
 
 ### 通知クリックによる起動
 
 実行中の通知クリックは既存のアプリへ届け、必要なウインドウを開くか前面化する。プロセスが存在しない場合は、配布したアプリのlauncherを通る起動経路へ接続し、共通ランタイムだけを誤って起動しない。ネイティブ側で操作情報を保持してから、ページの初期化と共通イベントの受け取りへ進める。
 
-CEFの既存プロセスへの引数配送には、`root_cache_path`に対応する単一起動機構と`OnAlreadyRunningAppRelaunch`を利用する。Linuxの`GApplication`も既存プロセスへ操作を渡すため、両方の機構が二重のウインドウやイベントを作らないよう接続する。生の起動引数はOSごとに解釈し、アプリ側へは共通イベントを渡す。[CEFの再起動通知とAPIコメント](https://github.com/chromiumembedded/cef/blob/master/include/cef_browser_process_handler.h)
+CEFの既存プロセスへの引数配送には、`root_cache_path`に対応する単一起動機構と`OnAlreadyRunningAppRelaunch`を利用する。LinuxのD-Bus起動も既存プロセスへ操作を渡すため、両方の機構が二重のウインドウやイベントを作らないよう接続する。生の起動引数はOSごとに解釈し、アプリ側へは共通イベントを渡す。[CEFの再起動通知とAPIコメント](https://github.com/chromiumembedded/cef/blob/master/include/cef_browser_process_handler.h)
 
 通知の保持と未処理イベントの永続化は別々に検証する。OSから届いた操作を保持することと、OSがまだ届けていない操作の発生を保証することを混同しない。インストール済み配布物でのクリック起動を完成させた後、未登録の展開実行などでは実際に利用できる範囲を返す。
 
@@ -454,7 +458,7 @@ Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。�
 
 ## 進捗記録
 
-2026年10月20日時点で、`feature/plan13`の段階1〜5を完了した。CEFの通知は段階6以降で実装する。
+2026年10月20日時点で、`feature/plan13`の段階1〜6を完了した。AndroidとCEF Linuxで共通通知APIを利用できる。Windows対応、CEFの通知からの起動と配布登録、全体検証は段階7〜9で進める。
 
 | 段階 | 状態 | 実装・検証した範囲 |
 | --- | --- | --- |
@@ -463,7 +467,8 @@ Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。�
 | 3 | 完了 | 自アプリの設定画面、通知設定画面、通知権限の状態取得と明示的な要求を実装した。無効ビルドでは通知専用APIを公開せず、設定から復帰したときに現在の状態を再取得できる。 |
 | 4 | 完了 | 共通の投稿・更新・取り消し、状態・対応機能の取得、静的・動的チャンネル、専用アイコンと設定画面を実装した。公開CLIで作成したsimple・validateのAPKから、実際のOS通知とタップによる前面化を確認した。 |
 | 5 | 完了 | Androidの通知操作、未受領イベントの永続化、購読と受領確認を実装した。回転、複数WebView、プロセス終了後の通知起動、APK更新後の保存済みイベント保持を確認した。 |
-| 6〜9 | 未着手 | CEFのOS通知、配布物と全体検証を順に進める。 |
+| 6 | 完了 | CEFの共通通知API、Linuxの非同期OS通知、アプリ単位の永続化とページ単位の購読を実装した。simple・validateの両方で、GNOMEの実通知の更新、通常クリック、追加ボタン、取り消しを確認した。 |
+| 7〜9 | 未着手 | Windows通知、CEFの通知起動と配布登録、配布物と全体検証を順に進める。 |
 
 段階2のInsetsは`unit: 'css-px'`を持ち、システムバー、カットアウト、ジェスチャー領域、IMEを分けて返す。`safeArea`はバーとカットアウトの各辺の最大値で、`contentSafeArea`はWeb側で追加する余白である。`safe-area`では`contentSafeArea`と対応するCSS変数を0にし、ネイティブ側の余白を重ねて適用しない。購読は初期状態と変更後の状態を返し、`close()`とページ破棄で解放する。
 
@@ -544,9 +549,39 @@ ANDROID_SERIAL=<device> MUON_ANDROID_NOTIFICATION_TGZ=<muon-ui.tgz> npm run test
 
 APK更新については、実機の切り分けで、投稿直後1件、プロセス終了後1件、通常のAPK置き換え後0件となることを確認した。合意したOSの制約に従い、配布APKの両モードで、削除された通知から新しい操作イベントを作らず、更新前に保存した未受領イベントを同じeventIdで返すことを検証した。受領確認後にプロセスを終了して再起動すると、未受領一覧は空になった。実際の縦横回転でもイベントの内容と識別子を維持でき、段階5の完了条件を満たした。
 
+### 段階6の実装と検証
+
+CEFのsimple・validateへ、Androidと同じ7つの公開関数を接続した。共通のJavaScript実装を両モードで使い、validateでは許可された関数だけを仮想モジュールから公開する。通知を有効にしていないビルドと、まだ実装していないWindowsの関数は公開しない。共通設定をnative側にも渡し、Androidのチャンネル宣言を必要とせず任意の用途分類を使えるようにした。
+
+Linuxの通知サービスはアプリ単位で所有し、GIOとcardioの非同期処理を使う。投稿、取り消し、イベントの保存を同じ実行列で処理する。保存先はアプリのプロファイル内であり、置き換え用のファイルへ書き込んでから切り替える。破損した保存データは削除せず、エラーとして返す。取り消しにOS側で失敗した場合も、保存した対応関係を残して再試行できる。
+
+購読はbrowser・frame・contextの組で所有し、呼び出し元の識別をbrowserプロセスで確定する。別ページの所有者を引数で偽装できないこと、ページ破棄でそのページの購読だけを解放することを検証した。未受領イベントはアプリ全体で保持し、ページの再読み込み後も同じeventIdを返す。受領確認は全ページへ反映する。
+
+通知サービスが広告する`persistence`と、共通APIが表す「通常のプロセス終了後にも通知が残ること」は同一ではなかった。GNOME 46の公開ソースで投稿元の接続終了に伴う削除を確認し、広告値をそのまま`supported`へ変換する試験をREDにした後、`unknown`と理由を返すよう修正した。プロセス終了後のクリック起動は段階6では`unsupported`である。この区別を公開型にも記載した。[GNOME 46の接続終了処理](https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/46.0/js/ui/notificationDaemon.js)
+
+| 検証 | 結果 |
+| --- | --- |
+| native全件 | 51件成功。モデル、永続化、容量と期限、購読、所有者検証、設定、既存プラグインの回帰を含む。保持機能の修正後も該当する3件が成功。 |
+| UIのCEF・共通関連 | 163件成功。通知設定の生成、許可フィルター、Windowsでの非公開、両モードの共通実装を確認。 |
+| 制御可能なD-Bus通知サービスとPlaywright MCP | simple・validateの2件が成功。サービス不在、投稿失敗、操作非対応、更新前の古い操作、リロード、受領確認、別ウインドウからの取り消し、ページ破棄後の購読を検証。 |
+| GNOME 46の実通知とPlaywright MCP | simpleは32.55秒、validateは32.52秒で成功。実際のタイトル・本文・アプリ名・アイコンを目視でも確認。更新後の追加ボタン、通常クリック、取り消し、未受領イベントの取得と受領確認を検証。 |
+| ビルドと型検証 | LinuxのDebug・Release、通知renderer、テスト用TypeScriptが成功。今回のReleaseビルドでは警告を検出していない。 |
+
+実画面の操作では、AT-SPIの表示状態と座標で対象通知を特定し、通知一覧から対象をクリックした。GNOMEの通知ボタンには今回の環境で利用できるAction操作がなかったため、確認した座標への実クリックを使った。通知の現出と消失はアクセシビリティのイベントで待ち、固定時間の待機で合否を決めない。アプリ固有の通知とテスト用登録だけを操作する。[GNOMEの通知一覧操作](https://help.gnome.org/gnome-help/shell-notifications.html)、[AT-SPIの画面座標取得](https://gnome.pages.gitlab.gnome.org/at-spi2-core/libatspi/method.Component.get_extents.html)
+
+追加した再実行入口は次のとおりである。先にLinuxのテスト用Releaseビルドを作成する。実画面の試験はGNOMEのログインセッションで実行する。
+
+```bash
+npm run build:test --workspace muon-core
+npm exec --workspace muon-core-tester -- vitest run notifications-linux.test.ts
+npm run test:notifications-desktop --workspace muon-core-tester
+```
+
+段階6の完了条件を、両モードの実通知操作、用途分類、状態の不明値、通知サービス不在、操作非対応、更新、別ウインドウからの取り消し、購読解放で確認した。プロセス終了後のクリック起動とKDEを含む配布環境の検証は段階8へ残している。
+
 ### 残る検証とビルド警告
 
-段階9の全体テスト、各OS境界、16 KiB環境、Windows・Linux、配布物の検証は未完了である。バーと配置については、ジェスチャーナビゲーション、マルチウインドウ、API 35・36の境界も残っている。ここまでの実機試験や個別テストを、その代替にはしない。
+段階9の全体テスト、各OS境界、16 KiB環境、Windows通知、CEFの通知起動と配布物の検証は未完了である。バーと配置については、ジェスチャーナビゲーション、マルチウインドウ、API 35・36の境界も残っている。ここまでの実機試験や個別テストを、その代替にはしない。
 
 UIのCJSビルドでは、既存の`__dirname`と`import.meta.url`の分岐に対して`EMPTY_IMPORT_META`警告を確認した。CJSで使われる`__dirname`側の動作はパッケージテストで確認しており、段階9でビルド設定と合わせて警告を解消する。型検証と整形の処理時間に対する`PLUGIN_TIMINGS`の表示も、段階9のビルド確認で扱う。Androidランタイムの今回のビルドでは警告を検出していない。
 

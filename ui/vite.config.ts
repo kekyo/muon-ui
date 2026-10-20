@@ -8,16 +8,21 @@ import { resolve } from "node:path";
 import prettierMax from "prettier-max";
 import screwUp from "screw-up";
 import { defineConfig } from "vitest/config";
+import type { UserConfig } from "vite";
+import { buildMuonNotificationRenderer } from "../core/common/build-notification-renderer.mjs";
 
 import muonNodePackageJson from "../node/package.json" with { type: "json" };
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(async ({ mode }): Promise<UserConfig> => {
   const isCjs = mode === "cjs";
   const isAndroidHost = mode === "android-host";
   const isLinuxDependencies = mode === "linux-dependencies";
 
   return {
     define: {
+      __MUON_NOTIFICATION_RENDERER_SOURCE__: JSON.stringify(
+        await buildMuonNotificationRenderer(),
+      ),
       __MUON_NODE_SUPPORTED_ENGINE_RANGE__: JSON.stringify(
         muonNodePackageJson.engines.node,
       ),

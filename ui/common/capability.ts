@@ -8,6 +8,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { getMuonAndroidBuiltinFunctionPaths } from "../../core/android/function-paths.js";
 
+declare const __MUON_NOTIFICATION_RENDERER_SOURCE__: string;
+
 /**
  * Import-side capability rule for muon plugin virtual modules.
  */
@@ -1320,6 +1322,9 @@ const createModuleSource = (rule: ResolvedRule): string => {
     if (rule.backend === "android") {
       return createGenericFunctionExport(exportName, rule.id, functionPath);
     }
+    if (rule.namespace === "muon.notifications") {
+      return `export const ${exportName} = __muonNotifications[${JSON.stringify(exportName)}];`;
+    }
     if (
       rule.namespace === "muon.environments" &&
       exportName === "getConfigValues"
@@ -1366,6 +1371,7 @@ if (typeof __muonCall !== "function") {
   throw new Error("muon plugin capability bridge is not available.");
 }
 
+${rule.backend === "cef" && rule.namespace === "muon.notifications" ? `${__MUON_NOTIFICATION_RENDERER_SOURCE__}\nconst __muonNotifications = MuonNotificationRenderer.createMuonCefNotificationsApi(async (name, args) => await __muonCall(${JSON.stringify(rule.id)}, 'muon.notifications.' + name, args));\n` : ""}
 ${usesBrowserContextMenuHelpers ? `${createBrowserContextMenuHelpers()}\n\n` : ""}
 ${usesBrowserTrayHelpers ? `${createBrowserTrayHelpers()}\n\n` : ""}
 ${exports.join("\n\n")}
@@ -1389,8 +1395,13 @@ export const createMuonCapabilityModuleResolver = (
   );
   const rules = (options?.imports ?? []).map((rule) => {
     if (backend !== "android") {
-      const unavailable = rule.allow.find((path) =>
-        path.startsWith("muon.android."),
+      const unavailable = rule.allow.find(
+        (path) =>
+          path.startsWith("muon.android.") ||
+          (path.startsWith("muon.notifications.") &&
+            !functionPaths.some((available) =>
+              isGlobMatch(path, available, "."),
+            )),
       );
       if (unavailable !== undefined) {
         throw new Error(`Muon function is unavailable for CEF: ${unavailable}`);

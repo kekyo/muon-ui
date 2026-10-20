@@ -17,6 +17,7 @@
 #include "plugins/muon_cef_plugin_metadata.h"
 #include "plugins/muon_plugin_metadata.h"
 #include "network/muon_network_request_handler.h"
+#include "notifications/muon_notification_rpc.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 #include "browser/show_dev_tools_task.h"
@@ -3817,8 +3818,10 @@ void MuonClient::InvokeRpcPlugin(const MuonRpcCallRequest& request,
     BeginPendingFsDialogCall(call.context.browser_id, fs_dialog_policy);
   }
   CefRefPtr<MuonClient> self(this);
+  auto bound_request = request;
+  BindMuonNotificationWatchOwner(bound_request, plugin_runtime_->GetFunctions());
   plugin_runtime_->Invoke(
-      request,
+      bound_request,
       [self, completion = std::move(completion), call_key,
        modal_browser_id = call.modal_browser_id,
        track_fs_dialog_call = call.track_fs_dialog_call,

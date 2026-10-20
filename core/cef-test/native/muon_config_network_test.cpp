@@ -3181,13 +3181,46 @@ static bool RunPluginPolicyInvalidGlobTest() {
          ExpectInvalidPluginGlob({"muon**readFile"});
 }
 
+static bool RunNotificationConfigValidationTest(
+    const std::filesystem::path& directory) {
+  const auto path = directory / "notifications.json";
+  MuonConfig config;
+  if (!WriteFile(path, "{}") || !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(!config.notifications.enabled, "notifications default to enabled") ||
+      !WriteFile(path, R"({"notifications":{"enabled":true,"defaultCategory":"inbox"}})") ||
+      !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(config.notifications.enabled &&
+                  config.notifications.default_category == "inbox",
+              "notification configuration was not preserved")) {
+    return false;
+  }
+  for (const auto& invalid : std::vector<std::string>{
+           R"({"notifications":true})",
+           R"({"notifications":{"enabled":"true"}})",
+           R"({"notifications":{"enabled":true,"defaultCategory":" "}})",
+           R"({"notifications":{"defaultCategory":"\u3000\u00a0"}})",
+           R"({"notifications":{"enabled":true,"unknown":true}})"}) {
+    if (!WriteFile(path, invalid) ||
+        !LoadConfigExpectFailure(path, "notifications")) {
+      return false;
+    }
+  }
+  const auto category = std::string(127, 'x') + "日";
+  if (!WriteFile(path, "{\"notifications\":{\"defaultCategory\":\"" + category + "\"}}") ||
+      !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(config.notifications.default_category == category,
+              "category length used UTF-8 bytes instead of UTF-16 code units")) return false;
+  return true;
+}
+
 int main() {
   const auto test_directory = CreateTestDirectory();
   if (!Expect(!test_directory.empty(), "failed to create test directory")) {
     return 1;
   }
 
-  const auto passed = RunConfigLoadingTest(test_directory) &&
+  const auto passed = RunNotificationConfigValidationTest(test_directory) &&
+                      RunConfigLoadingTest(test_directory) &&
                       RunConfigJson5LoadingTest(test_directory) &&
                       RunNodeConfigLoadingTest(test_directory) &&
                       RunDebugConfigLoadingTest() &&

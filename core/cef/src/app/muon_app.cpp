@@ -25,6 +25,7 @@
 #include "network/muon_network_policy.h"
 #include "plugins/builtin/muon_builtin_launcher.h"
 #include "plugins/builtin/muon_builtin_environments.h"
+#include "plugins/builtin/muon_builtin_notifications.h"
 #include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_plugin_runtime.h"
 #include "plugins/muon_cef_plugin_metadata.h"
@@ -876,6 +877,7 @@ void MuonApp::OnContextInitialized() {
 
   InitializeMuonBuiltinLauncher(config_.default_version_policy);
   InitializeMuonBuiltinEnvironments(config_.config);
+  InitializeMuonBuiltinNotifications(config_);
   const auto rpc_bridge = CreateMuonCefRpcBridge();
   const auto plugin_runtime =
       CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins),

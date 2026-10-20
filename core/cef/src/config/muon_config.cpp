@@ -11,6 +11,7 @@
 #include "muon_json_helpers.h"
 #include "muon_string_helpers.h"
 #include "muon_filesystem.h"
+#include "notifications/muon_notification_model.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -2918,6 +2919,52 @@ static bool ReadLauncherConfig(yyjson_val* root,
   return true;
 }
 
+static bool ReadNotificationsConfig(yyjson_val* root,
+                                    MuonConfig* config,
+                                    std::string* error_message) {
+  const auto value = yyjson_obj_get(root, "notifications");
+  if (value == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_obj(value)) {
+    *error_message = "muon.json notifications must be an object";
+    return false;
+  }
+  size_t index = 0;
+  size_t count = 0;
+  yyjson_val* key = nullptr;
+  yyjson_val* field = nullptr;
+  yyjson_obj_foreach(value, index, count, key, field) {
+    const auto name = std::string(yyjson_get_str(key), yyjson_get_len(key));
+    if (name == "enabled") {
+      if (!yyjson_is_bool(field)) {
+        *error_message = "muon.json notifications.enabled must be a boolean";
+        return false;
+      }
+      config->notifications.enabled = yyjson_get_bool(field);
+    } else if (name == "defaultCategory") {
+      if (!yyjson_is_str(field)) {
+        *error_message =
+            "muon.json notifications.defaultCategory must be a string";
+        return false;
+      }
+      const auto category =
+          std::string(yyjson_get_str(field), yyjson_get_len(field));
+      try {
+        muon_internal::ValidateMuonNotificationIdentifier(category);
+      } catch (const std::exception&) {
+        *error_message = "muon.json notifications.defaultCategory is invalid";
+        return false;
+      }
+      config->notifications.default_category = category;
+    } else {
+      *error_message = "Unknown muon.json notifications option: " + name;
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool ReadMuonConfigRoot(yyjson_val* root,
                                MuonConfig* config,
                                std::string* error_message) {
@@ -2926,6 +2973,7 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
     return false;
   }
   return ReadLauncherConfig(root, config, error_message) &&
+         ReadNotificationsConfig(root, config, error_message) &&
          ReadApplicationConfig(root, config, error_message) &&
          ReadNodeConfig(root, config, error_message) &&
          ReadAssetConfig(root, config, error_message) &&

@@ -2135,6 +2135,11 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     add_test(NAME notification_portal_unregistered COMMAND dbus-run-session --
       $<TARGET_FILE:muon_notification_portal_test> --unregistered)
     set_tests_properties(notification_portal_unregistered PROPERTIES TIMEOUT 30)
+    add_test(NAME notification_portal_fallback COMMAND dbus-run-session -- bash
+      ${CMAKE_CURRENT_SOURCE_DIR}/../cef-test/native/run_notification_linux_test.sh
+      $<TARGET_FILE:muon_notification_test_server>
+      $<TARGET_FILE:muon_notification_portal_test> --fallback)
+    set_tests_properties(notification_portal_fallback PROPERTIES TIMEOUT 30)
     add_test(NAME notification_portal_route COMMAND dbus-run-session --
       $<TARGET_FILE:muon_notification_portal_test> --route)
     set_tests_properties(notification_portal_route PROPERTIES TIMEOUT 30)

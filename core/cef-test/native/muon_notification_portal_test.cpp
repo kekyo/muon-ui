@@ -212,9 +212,17 @@ static cardio::promise<void> RunTests(const std::filesystem::path& directory, bo
     }
     const auto caps = co_await backend.capabilities();
     if (missing_registry) {
-      Expect(!caps.available && caps.launch == false &&
+      Expect(caps.available == routed && caps.launch == false &&
                  caps.launch_reason == "portal-host-registration-unavailable",
              "Portal without host registration advertised notification launch");
+      if (routed) {
+        const auto post = ParseMuonNotificationPost(
+            R"({"id":"running","title":"Running application","body":"Host registration unavailable"})", "");
+        const auto handle = co_await backend.post(post, std::string(64, 'b'));
+        Expect(handle.backend == "fdo" && handle.id != 0,
+               "Missing host registration prevented a running notification");
+        co_await backend.cancel(handle);
+      }
       backend.stop();
       g_dbus_connection_unregister_object(connection, notification);
       co_return;
@@ -307,7 +315,8 @@ int main(int argc, char** argv) {
   auto passed = false;
   const auto option = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
   auto pending = RunAndQuit(directory, loop, passed,
-      option == "--unregistered", option == "--route", option == "--stop");
+      option == "--unregistered" || option == "--fallback",
+      option == "--route" || option == "--fallback", option == "--stop");
   if (!pending.is_ready()) g_main_loop_run(loop);
   g_main_loop_unref(loop);
   group.shutdown();

@@ -3210,6 +3210,18 @@ static bool RunNotificationConfigValidationTest(
       !LoadConfigExpectSuccess(path, &config) ||
       !Expect(config.notifications.default_category == category,
               "category length used UTF-8 bytes instead of UTF-16 code units")) return false;
+  for (const auto& registration : std::vector<std::string>{
+           "true", "{}", R"({"displayName":42})",
+           R"({"displayName":"App","iconPath":" ","activatorClsid":"id"})"}) {
+    if (!WriteFile(path, "{\"launcher\":{\"notificationRegistration\":" + registration + "}}") ||
+        !LoadConfigExpectFailure(path, "notificationRegistration")) return false;
+  }
+  if (!WriteFile(path, R"({"launcher":{"notificationRegistration":{"displayName":"Notification App","iconPath":"./notification-icon.png","activatorClsid":"{58941eb1-8ca0-4dd4-83ae-e7e97b9c1b94}"}}})") ||
+      !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(config.notifications.windows_display_name == "Notification App" &&
+                  config.notifications.windows_icon_path == directory / "notification-icon.png" &&
+                  config.notifications.windows_activator_clsid == "{58941eb1-8ca0-4dd4-83ae-e7e97b9c1b94}",
+              "Windows notification identity or icon base was not preserved")) return false;
   return true;
 }
 

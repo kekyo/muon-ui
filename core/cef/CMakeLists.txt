@@ -1188,6 +1188,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     src/notifications/muon_notification_store.cpp
     src/notifications/muon_notification_service.cpp
     src/notifications/muon_notification_linux.cpp)
+elseif(WIN32)
+  list(APPEND APP_SOURCES
+    src/notifications/muon_notification_store_windows.cpp
+    src/notifications/muon_notification_service.cpp
+    src/notifications/muon_notification_windows_async.cpp
+    src/notifications/muon_notification_windows.cpp)
+endif()
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(MUON_NOTIFICATION_RENDERER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.build/notification-renderer")
   add_custom_command(
     OUTPUT "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h"
@@ -1201,7 +1209,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     DEPENDS "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h")
 endif()
 add_executable(${APP_NAME} ${APP_SOURCES} ${APP_HEADERS})
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_dependencies(${APP_NAME} muon_notification_renderer)
   target_include_directories(${APP_NAME} PRIVATE "${MUON_NOTIFICATION_RENDERER_DIR}")
 endif()
@@ -1232,6 +1240,8 @@ if(WIN32)
     comctl32
     muon_windows_job_process
     ole32
+    bcrypt
+    runtimeobject
     shell32
     uuid
     )
@@ -1672,6 +1682,47 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES AND MUON_CONFIG_COPY_MODE STREQUAL "always")
       "${MUON_CONFIG_TEMPLATE}"
       "${MUON_RUNTIME_DIR}/muon.json"
     )
+endif()
+if(MUON_BUILD_TESTS AND WIN32)
+  add_executable(muon_notification_windows_observer
+    ../cef-test/native/muon_notification_windows_observer.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_windows_observer)
+  target_compile_features(muon_notification_windows_observer PRIVATE cxx_std_20)
+  target_link_libraries(muon_notification_windows_observer PRIVATE ole32 oleaut32 uuid)
+  if(MINGW)
+    target_link_options(muon_notification_windows_observer PRIVATE -municode)
+  endif()
+  add_executable(muon_notification_windows_driver
+    ../cef-test/native/muon_notification_windows_driver.cpp
+    src/notifications/muon_notification_windows_async.cpp
+    src/notifications/muon_notification_windows.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_windows_driver)
+  target_compile_features(muon_notification_windows_driver PRIVATE cxx_std_20)
+  target_compile_definitions(muon_notification_windows_driver PRIVATE MUON_NOTIFICATION_TEST=1)
+  target_include_directories(muon_notification_windows_driver PRIVATE src "${MUON_COMMON_ROOT}/src")
+  target_link_libraries(muon_notification_windows_driver PRIVATE
+    muon_cardio runtimeobject ole32 uuid propsys shell32 advapi32)
+  add_executable(muon_notification_store_test
+    ../cef-test/native/muon_notification_store_test.cpp
+    src/notifications/muon_notification_model.cpp
+    src/notifications/muon_notification_windows_async.cpp
+    src/notifications/muon_notification_store_windows.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_store_test)
+  target_compile_features(muon_notification_store_test PRIVATE cxx_std_20)
+  target_include_directories(muon_notification_store_test PRIVATE src)
+  target_link_libraries(muon_notification_store_test PRIVATE
+    yyjson muon_cardio muon_windows_path bcrypt)
+  add_executable(muon_notification_service_test
+    ../cef-test/native/muon_notification_service_test.cpp
+    src/notifications/muon_notification_model.cpp
+    src/notifications/muon_notification_windows_async.cpp
+    src/notifications/muon_notification_store_windows.cpp
+    src/notifications/muon_notification_service.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_notification_service_test)
+  target_compile_features(muon_notification_service_test PRIVATE cxx_std_20)
+  target_include_directories(muon_notification_service_test PRIVATE src "${MUON_COMMON_ROOT}/src")
+  target_link_libraries(muon_notification_service_test PRIVATE
+    yyjson muon_cardio muon_windows_path bcrypt)
 endif()
 if(MUON_BUILD_TESTS AND NOT WIN32)
   add_executable(muon_builtin_fs_gio_read_source_test

@@ -240,6 +240,9 @@ MuonNotificationBackend CreateMuonLinuxNotificationBackend(
       impl->signal_subscription = impl->owner_subscription = 0;
     }
   };
+  backend.status = []() -> cardio::promise<MuonNotificationBackendStatus> {
+    co_return MuonNotificationBackendStatus{std::nullopt, "app-status-unavailable"};
+  };
   return backend;
 }
 }  // namespace muon_internal

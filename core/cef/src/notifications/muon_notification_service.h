@@ -24,6 +24,16 @@ struct MuonNotificationBackendCapabilities {
   std::optional<bool> persistence = false;
   /** Diagnostic for missing or unknown backend support. */
   std::string reason;
+  /** Whether the backend can read application-wide OS notification settings. */
+  bool app_status = false;
+};
+
+/** Current application-wide permission, separate from backend availability. */
+struct MuonNotificationBackendStatus {
+  /** True when enabled, false when disabled, or nullopt when unobservable. */
+  std::optional<bool> enabled;
+  /** Reason for a disabled or unknown state; empty when no diagnostic is needed. */
+  std::string reason;
 };
 
 /** Supplies only the revision and action selected by the native notification. */
@@ -43,9 +53,14 @@ struct MuonNotificationBackend {
   std::function<void(MuonNotificationActivation)> set_activation;
   /** Stops platform signal delivery. Does not withdraw posted notifications. */
   std::function<void()> stop;
+  /** Reads application-wide OS settings without prompting the user. */
+  std::function<cardio::promise<MuonNotificationBackendStatus>()> status;
 };
 
-/** Application-owned notification service with renderer-owned watch leases. */
+/**
+ * Application-owned notification service with renderer-owned watch leases.
+ * All operations and destruction run on the dispatcher used for construction.
+ */
 class MuonNotificationService {
  public:
   /** Private implementation; owned by the service and its in-flight operations. */
@@ -54,7 +69,10 @@ class MuonNotificationService {
   MuonNotificationService(std::string path, std::string default_category,
                            MuonNotificationBackend backend,
                            std::function<int64_t()> clock);
-  /** Releases service state after its explicit asynchronous Stop has completed. */
+  /**
+   * Releases the backend and watches if startup failed before explicit Stop.
+   * Normal shutdown must await Stop to finish already accepted operations.
+   */
   ~MuonNotificationService();
   /** Starts receiving backend interactions. Called once after shared ownership exists. */
   void Start();
@@ -62,7 +80,7 @@ class MuonNotificationService {
   cardio::promise<void> Post(std::string json);
   /** Cancels the OS notification, then durably invalidates its unconsumed revision. */
   cardio::promise<void> Cancel(std::string id);
-  /** Returns unknown permission status for Linux, optionally including a category. */
+  /** Returns OS permission status and unknown category status when requested. */
   cardio::promise<std::string> GetStatus(std::string json);
   /** Returns capabilities separately from permission and launch support. */
   cardio::promise<std::string> GetCapabilities();

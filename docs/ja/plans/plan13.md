@@ -458,7 +458,7 @@ Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。�
 
 ## 進捗記録
 
-2026年10月20日時点で、`feature/plan13`の段階1〜6を完了した。AndroidとCEF Linuxで共通通知APIを利用できる。Windows対応、CEFの通知からの起動と配布登録、全体検証は段階7〜9で進める。
+2026年10月20日時点で、`feature/plan13`の段階1〜7を完了した。AndroidとCEFのLinux・Windowsで共通通知APIを利用できる。CEFの通知からの起動と配布登録、全体検証は段階8・9で進める。
 
 | 段階 | 状態 | 実装・検証した範囲 |
 | --- | --- | --- |
@@ -579,9 +579,39 @@ npm run test:notifications-desktop --workspace muon-core-tester
 
 段階6の完了条件を、両モードの実通知操作、用途分類、状態の不明値、通知サービス不在、操作非対応、更新、別ウインドウからの取り消し、購読解放で確認した。プロセス終了後のクリック起動とKDEを含む配布環境の検証は段階8へ残している。
 
+### 段階7の実装と検証
+
+Windowsの通知を、OSが提供するWindows.UI.Notificationsの公開WinRT・COM APIへ接続した。MinGW32/64から呼び出すABI宣言は公式IDLと照合した。Windows App SDKについても実行時依存と配布方法を調べ、追加ランタイムを必要としないOS標準APIを選んだ。MSIXへの変更や通知用の常駐ワーカースレッドは必要としない。[デスクトップC++の通知とCOM登録](https://learn.microsoft.com/en-us/windows/apps/design/shell/tiles-and-notifications/send-local-toast-desktop-cpp-wrl)、[Windows App SDKの配布依存](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/deploy-unpackaged-apps)
+
+通知を有効にしたWindowsビルドでは、アプリ名、PNGアイコン、通知操作のCOM受付先を識別するCLSIDを生成する。CLSIDはアーキテクチャを含むruntime appIdから決まり、再ビルドや配置先変更で変わらない。アプリ名にはWindowsのproductNameを使う。実行時には対象アプリの識別情報を登録し、必要な情報やアイコンがない場合は診断を返す。この段階では終了後の起動を登録せず、launchをunsupported、終了後の通知保持をunknownとする。
+
+アプリ全体の投稿可否にはToastNotifier.Settingを使う。OSが無効化を返したときは、投稿前に拒否する。新しいアプリIDでは、登録順序を変えても初回の状態取得がERROR_NOT_FOUNDとなる場合があった。この場合はunknownとwindows-notification-setting-unavailableを返し、有効とは推定しない。実際の投稿後には設定画面での無効化・有効化を共通APIから取得できた。用途分類別のOS状態はunknownのままである。[ToastNotifier.Setting](https://learn.microsoft.com/en-us/uwp/api/windows.ui.notifications.toastnotifier.setting?view=winrt-26100)
+
+イベントはWindowsでもアプリのプロファイルへ保存する。cardioの非同期ファイルI/OとOSの共有スレッドプールを使い、書き込みとflushを完了してから同じディレクトリ内でファイルを置き換える。日本語を含む保存先、保存失敗時の旧データ保持、破損時のエラー、受領確認後の再読込を実Windowsで検証した。操作の識別にはUUIDを使い、OSが通知を識別するTagとGroupの組へ全ビットを保持する。通常停止に入る前の破棄でもバックエンドと購読を解放し、通常停止では受け付けた操作が完了するまで待つ。
+
+COMの受付登録を解除しても、OS側がすでに取得したコールバックは残る。通知クリックと終了が重なっても、停止後のディスパッチャーへ処理を渡さないよう、受付の停止と処理の投入を排他制御した。バリアでこの順序を再現する試験は、修正前の失敗と修正後の成功を確認し、実Windowsでも両アーキテクチャで成功した。[COM登録解除後の既存参照](https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-corevokeclassobject)
+
+| 検証 | 結果 |
+| --- | --- |
+| Windowsのnative保存・サービス | 32bit・64bitの計4件が成功。停止前の破棄と停止の冪等性を追加した後も、サービスの両アーキテクチャが成功。 |
+| Windowsの実通知ドライバー | 通知本体と追加ボタンを各アーキテクチャで操作し、計4件が成功。登録不足とOSの無効化についても、計4件で診断と投稿拒否を確認。 |
+| CEFとPlaywright MCP | 32bit・64bitそれぞれのsimple・validate、計4件が成功。投稿・更新・取り消し、通常クリックと追加ボタン、OS設定による拒否、権限フィルター、リロード後の未受領イベント、受領確認の冪等性、別ウインドウからの取り消し、破棄後も残る主ウインドウの購読を確認。 |
+| UIのWindows設定と公開関数 | 関連67件が成功。指定したproductNameの反映は追加のRED確認後に成功。通知無効時の非公開とLinux側の設定も確認。 |
+| ビルドと回帰 | Windowsの両アーキテクチャでDebug・Releaseが成功。Linuxの設定・内蔵プラグイン・保存・サービスの4件、停止処理の追加試験、TypeScriptの型検証が成功。nativeビルドの警告は検出していない。 |
+
+実画面はCUIAutomation8で対象アプリと通知を識別し、通知本体やボタンのInvoke操作でイベントを受け取った。通知の現出と消失はUI Automationの変更イベントで待つ。画像にはアプリ名とアイコンを含め、表示内容を目視でも確認した。通知の全体設定を変更する試験は元の値を記録し、終了処理で復元する。テスト用のアプリ登録と通知だけを削除する。[UI AutomationのInvoke操作](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-implementinginvoke)
+
+再実行入口は次のとおりである。Windows実機との接続を必須とし、接続できない場合は成功やskipにしない。両アーキテクチャのnative保存・サービス・登録不足・終了時のコールバック競合の試験も、この入口へ組み込んだ。
+
+```bash
+npm run test:windows-notifications --workspace muon-core-tester
+```
+
+段階7の完了条件を、両アーキテクチャの実通知、アプリ識別、登録不足と無効化、両モードの購読と権限フィルター、未受領イベントで確認した。通知からのプロセス起動、NSISへの起動登録、更新とアンインストールは段階8へ残している。
+
 ### 残る検証とビルド警告
 
-段階9の全体テスト、各OS境界、16 KiB環境、Windows通知、CEFの通知起動と配布物の検証は未完了である。バーと配置については、ジェスチャーナビゲーション、マルチウインドウ、API 35・36の境界も残っている。ここまでの実機試験や個別テストを、その代替にはしない。
+段階9の全体テスト、各OS境界、16 KiB環境、CEFの通知起動と配布物の検証は未完了である。バーと配置については、ジェスチャーナビゲーション、マルチウインドウ、API 35・36の境界も残っている。ここまでの実機試験や個別テストを、その代替にはしない。
 
 UIのCJSビルドでは、既存の`__dirname`と`import.meta.url`の分岐に対して`EMPTY_IMPORT_META`警告を確認した。CJSで使われる`__dirname`側の動作はパッケージテストで確認しており、段階9でビルド設定と合わせて警告を解消する。型検証と整形の処理時間に対する`PLUGIN_TIMINGS`の表示も、段階9のビルド確認で扱う。Androidランタイムの今回のビルドでは警告を検出していない。
 

@@ -6,8 +6,13 @@
 #include "plugins/builtin/muon_builtin_notifications.h"
 #include "config/muon_config.h"
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
+#if defined(_WIN32)
+#include "notifications/muon_notification_windows.h"
+#include "muon_filesystem.h"
+#else
 #include "notifications/muon_notification_linux.h"
+#endif
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "muon_notification_renderer_generated.h"
 #include <chrono>
@@ -109,11 +114,20 @@ static const muon_plugin_metadata metadata = {namespaces, &Stop, &ReleaseOwner};
 #endif
 
 void InitializeMuonBuiltinNotifications(const MuonConfig& config) {
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
   notification_service.reset();
   if (config.notifications.enabled) {
+#if defined(_WIN32)
+    const auto path = muon_internal::FilesystemPathToUtf8(
+        config.browser.profile / "notifications.json");
+    auto backend = muon_internal::CreateMuonWindowsNotificationBackend({
+        config.app_id, config.notifications.windows_display_name,
+        muon_internal::FilesystemPathToUtf8(config.notifications.windows_icon_path),
+        config.notifications.windows_activator_clsid});
+#else
     const auto path = (config.browser.profile / "notifications.json").string();
     auto backend = muon_internal::CreateMuonLinuxNotificationBackend(config.app_id, config.desktop_id);
+#endif
     notification_service = std::make_shared<MuonNotificationService>(path,
         config.notifications.default_category, std::move(backend), [] {
           return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -126,14 +140,14 @@ void InitializeMuonBuiltinNotifications(const MuonConfig& config) {
 #endif
 }
 const muon_plugin_metadata* GetMuonBuiltinNotificationsMetadata() {
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
   return notification_service ? &metadata : nullptr;
 #else
   return nullptr;
 #endif
 }
 void ShutdownMuonBuiltinNotifications() {
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
   notification_service.reset();
 #endif
 }

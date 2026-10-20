@@ -40,7 +40,7 @@ struct MuonNotificationPost {
 struct MuonNotificationHandle {
   /** Backend name; future backends must not interpret another backend's ID. */
   std::string backend;
-  /** D-Bus GUID and unique service owner, identifying one service epoch. */
+  /** Backend ownership key: a Linux service epoch or a Windows revision UUID. */
   std::string owner;
   /** Backend identifier, interpreted only with backend and owner. */
   uint32_t id = 0;

@@ -483,6 +483,7 @@ describe.skipIf(process.platform !== "linux")(
                 driver,
                 artifacts,
                 mode,
+                "linux",
               );
             } finally {
               await evaluate(

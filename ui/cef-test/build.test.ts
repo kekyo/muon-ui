@@ -1625,6 +1625,74 @@ describe("muon build", () => {
     });
   });
 
+  it("generates relocatable Windows notification registration with stable architecture-specific identities", async () => {
+    const root = await createTemporaryDirectory(
+      "muon-build-windows-notifications-",
+    );
+    const packageDirectory = await createFakeMuonPackageDistForTargets(root, [
+      "windows-i686",
+      "windows-amd64",
+      "linux-amd64",
+    ]);
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ name: "notification-sample" }),
+    );
+    await writeFile(
+      join(root, "muon.json"),
+      JSON.stringify({
+        notifications: { enabled: true },
+        windows: { resource: { productName: "Notification Product" } },
+      }),
+    );
+    await mkdir(join(root, "assets"), { recursive: true });
+    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
+    const build = async (outputDirectory: string) =>
+      await buildMuonApp({
+        root,
+        packageDirectory,
+        outputRoot: outputDirectory,
+        targets: ["windows-i686", "windows-amd64", "linux-amd64"],
+        assetSalt: Buffer.from([0xa1, 0xd6]),
+      });
+    const first = await build("first");
+    const second = await build("second");
+    const ids: string[] = [];
+    for (const target of first.targets) {
+      const launcher = target.embeddedConfig.launcher as Record<
+        string,
+        unknown
+      >;
+      const registration = launcher.notificationRegistration as
+        Record<string, string> | undefined;
+      if (target.target === "linux-amd64") {
+        expect(registration).toBeUndefined();
+        continue;
+      }
+      expect(registration).toMatchObject({
+        displayName: "Notification Product",
+        iconPath: "./notification-icon.png",
+      });
+      expect(registration!.activatorClsid).toMatch(
+        /^\{[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}\}$/,
+      );
+      const repeated = second.targets.find(
+        (item) => item.target === target.target,
+      )!;
+      expect(
+        (repeated.embeddedConfig.launcher as Record<string, unknown>)
+          .notificationRegistration,
+      ).toEqual(registration);
+      const outputPath = dirname(target.launcherPath);
+      await expectAppIconAsset(
+        join(outputPath, "assets.zip"),
+        await readFile(join(outputPath, registration!.iconPath!)),
+      );
+      ids.push(registration!.activatorClsid!);
+    }
+    expect(new Set(ids).size).toBe(2);
+  });
+
   it("signs Windows runtime and launcher executables from muon config without embedding signing options", async () => {
     const root = await createTemporaryDirectory("muon-build-windows-signing-");
     const packageDirectory = await createFakeMuonPackageDistForTargets(root, [

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMuonCapabilityModuleResolver } from "../common/capability.js";
 import { installMuonCefNotificationsApi } from "../../core/cef/renderer/notifications.js";
 import { resolveMuonCefNotificationFunctionPaths } from "../cef/notifications.js";
+import type { MuonDesktopTarget } from "../common/targets.js";
 import type {
   MuonNotificationEvent,
   MuonNotificationsApi,
@@ -56,18 +57,49 @@ describe("CEF notification capability modules", () => {
     },
   );
 
-  it("does not publish notification imports on an unimplemented Windows target", () => {
-    const paths = resolveMuonCefNotificationFunctionPaths({ enabled: true }, [
-      "windows-amd64",
-    ]);
-    expect(() =>
-      createMuonCapabilityModuleResolver("/app", {
+  it.each<{ targets: MuonDesktopTarget[] }>([
+    { targets: ["windows-i686"] },
+    { targets: ["windows-amd64"] },
+    { targets: ["linux-amd64", "windows-i686", "windows-amd64"] },
+  ])(
+    "publishes the shared API for desktop targets $targets",
+    async ({ targets }) => {
+      const call = vi.fn(async () =>
+        JSON.stringify({
+          app: { state: "disabled", reason: "disabled-for-user" },
+          category: null,
+        }),
+      );
+      vi.stubGlobal("__muon_plugin_call", call);
+      const resolver = createMuonCapabilityModuleResolver("/app", {
         backend: "cef",
-        functionPaths: paths,
-        imports: [{ sources: ["src/**"], allow: ["muon.notifications.*"] }],
-      }),
-    ).toThrow(/unavailable.*notifications/);
-  });
+        functionPaths: resolveMuonCefNotificationFunctionPaths(
+          { enabled: true },
+          targets,
+        ),
+        imports: [
+          { sources: ["src/**"], allow: ["muon.notifications.getStatus"] },
+        ],
+      });
+      const id = resolver.resolveId(
+        "muon:notifications",
+        "/app/src/main.ts",
+      )!.id;
+      const api = (await import(
+        `data:text/javascript,${encodeURIComponent(resolver.load(id)!)}`
+      )) as MuonNotificationsApi;
+      expect(Object.keys(api)).toEqual(["getStatus"]);
+      await expect(api.getStatus()).resolves.toEqual({
+        app: { state: "disabled", reason: "disabled-for-user" },
+        category: null,
+      });
+      expect(call).toHaveBeenCalledWith(
+        expect.any(String),
+        "muon.notifications.getStatus",
+        ["{}"],
+      );
+    },
+  );
 
   it("installs allowed operations over non-enumerable native functions", async () => {
     const call = vi.fn(async () => undefined);

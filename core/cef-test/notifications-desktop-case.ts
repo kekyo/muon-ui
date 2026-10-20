@@ -19,11 +19,12 @@ interface NotificationDesktopDriver {
 }
 
 /**
- * Exercises the public notification API against the real GNOME notification UI.
+ * Exercises the public notification API against the real OS notification UI.
  * @param evaluate - Playwright MCP evaluator for the selected CEF page.
  * @param driver - Native accessibility actions, restricted to this test's titles.
  * @param directory - Directory for screenshots and observed events.
  * @param mode - Public API exposure mode used by the driver page.
+ * @param platform - OS whose application status reporting is being verified.
  * @returns Completion after display, replacement, activation and cancellation.
  */
 export const runNotificationDesktopCase = async (
@@ -31,6 +32,7 @@ export const runNotificationDesktopCase = async (
   driver: NotificationDesktopDriver,
   directory: string,
   mode: "simple" | "validate",
+  platform: "linux" | "windows",
 ): Promise<void> => {
   const title = `Muon notification ${mode} ${process.pid}`;
   const capabilities = await evaluate(
@@ -46,7 +48,7 @@ export const runNotificationDesktopCase = async (
     "return await notificationApi.getStatus('desktop-purpose');",
   );
   expect(status).toMatchObject({
-    app: { state: "unknown" },
+    app: { state: platform === "windows" ? "enabled" : "unknown" },
     category: { id: "desktop-purpose", state: "unknown" },
   });
   await evaluate("await beginWatch(); return true;");

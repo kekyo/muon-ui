@@ -551,6 +551,14 @@ const buildMuonTarget = async (input: {
     descriptor.os === "windows"
       ? input.windowsResource.iconPath
       : input.linuxDesktop.iconPath;
+  const notificationRegistration =
+    descriptor.os === "windows" &&
+    resolveMuonNotificationConfig(input.sourceConfig.notifications).enabled
+      ? createWindowsNotificationRegistration(
+          runtimeAppId,
+          input.windowsResource.productName,
+        )
+      : undefined;
 
   await verifyTargetInputs({
     sourceRuntimePath,
@@ -587,6 +595,9 @@ const buildMuonTarget = async (input: {
     await stageMuonNodeProject(input.nodeProject, outputPath);
   }
   await copyDistributionFiles(input.distributionFiles, outputPath);
+  if (notificationRegistration !== undefined) {
+    await copyFile(appIconPath, join(outputPath, "notification-icon.png"));
+  }
   if (input.nativeArtifacts.size > 0)
     await stageMuonNativePlugins(
       input.nativeArtifacts,
@@ -622,6 +633,7 @@ const buildMuonTarget = async (input: {
     appIconAssetUrl,
     input.browserStartPage,
     input.browserProfilePathOverride,
+    notificationRegistration,
   );
   const launcherEmbeddedConfig = createLauncherEmbeddedConfig(
     embeddedConfig,
@@ -990,6 +1002,24 @@ const createZipArchive = (entries: readonly ZipEntry[]): Buffer => {
   return zip.toBuffer();
 };
 
+// The same architecture-specific application ID keeps its activator across
+// rebuilds, upgrades and installation path changes. The domain prefix prevents
+// reuse of this deterministic GUID for unrelated application identifiers.
+const createWindowsNotificationRegistration = (
+  appId: string,
+  displayName: string,
+): JsonObject => {
+  const id = createHash("sha256")
+    .update(`muon.notification.activator\0${appId}`)
+    .digest("hex")
+    .slice(0, 32);
+  return {
+    displayName,
+    iconPath: "./notification-icon.png",
+    activatorClsid: `{${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}}`,
+  };
+};
+
 const createEmbeddedConfig = (
   sourceConfig: JsonObject,
   asset: MuonBuildAssetResult,
@@ -998,6 +1028,7 @@ const createEmbeddedConfig = (
   initialTitleBarIcon: string,
   browserStartPage: string | undefined,
   browserProfilePathOverride: string | undefined,
+  notificationRegistration: JsonObject | undefined,
 ): JsonObject => {
   const sourceAsset = sourceConfig.asset;
   if (sourceAsset !== undefined && !isJsonObject(sourceAsset)) {
@@ -1044,6 +1075,9 @@ const createEmbeddedConfig = (
       ...(sourceLauncher ?? {}),
       appId,
       desktopId,
+      ...(notificationRegistration === undefined
+        ? {}
+        : { notificationRegistration }),
     },
   };
 };

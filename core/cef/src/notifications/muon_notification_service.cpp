@@ -86,6 +86,14 @@ static void Diagnose(const char* operation, const std::exception& error) {
   std::fprintf(stderr, "muon notifications %s failed: %s\n", operation, error.what());
 }
 
+static void BeginStop(NotificationImpl& impl) {
+  if (impl.stopping) return;
+  impl.stopping = true;
+  for (auto& [token, lease] : impl.leases) CloseLease(impl, lease);
+  impl.leases.clear();
+  impl.backend.stop();
+}
+
 static cardio::promise<void> Activate(std::shared_ptr<NotificationImpl> impl,
                                        std::string token,
                                        std::optional<std::string> action,
@@ -118,7 +126,13 @@ MuonNotificationService::MuonNotificationService(
   impl_->dispatcher = &cardio::get_current_dispatcher();
 }
 
-MuonNotificationService::~MuonNotificationService() = default;
+MuonNotificationService::~MuonNotificationService() {
+  // Startup failure can bypass the plugin's asynchronous Stop hook. Release
+  // apartment-bound backend resources here on the owning dispatcher, even if
+  // an OS callback still retains the backend state on another thread.
+  try { BeginStop(*impl_); }
+  catch (const std::exception& error) { Diagnose("destruction", error); }
+}
 
 void MuonNotificationService::Start() {
   auto weak = std::weak_ptr<Impl>(impl_);
@@ -146,6 +160,9 @@ cardio::promise<void> MuonNotificationService::Post(std::string json) {
     throw std::runtime_error("Notification service is unavailable: " + capabilities.reason);
   if (!post.actions.empty() && !capabilities.actions)
     throw std::runtime_error("Notification actions are unsupported by the service");
+  const auto status = co_await impl->backend.status();
+  if (status.enabled == false)
+    throw std::runtime_error("Notifications are disabled: " + status.reason);
   const auto token = co_await CreateMuonNotificationToken();
   const auto before = impl->state;
   auto candidate = before;
@@ -213,7 +230,8 @@ static std::string RequiredString(yyjson_val* value) {
 }
 
 cardio::promise<std::string> MuonNotificationService::GetStatus(std::string json) {
-  RequireRunning(*impl_);
+  auto impl = impl_;
+  RequireRunning(*impl);
   const auto document = ReadOptions(json, {"category"});
   const auto category = yyjson_obj_get(yyjson_doc_get_root(document.get()), "category");
   auto category_json = std::string("null");
@@ -223,8 +241,12 @@ cardio::promise<std::string> MuonNotificationService::GetStatus(std::string json
     category_json = "{\"id\":" + QuoteMuonNotificationString(id) +
                     ",\"state\":\"unknown\",\"reason\":\"category-status-unavailable\"}";
   }
-  co_return "{\"app\":{\"state\":\"unknown\",\"reason\":\"app-status-unavailable\"},\"category\":" +
-            category_json + "}";
+  auto lock = std::move(co_await impl->serial.lock());
+  const auto status = co_await impl->backend.status();
+  const auto state = !status.enabled.has_value() ? "unknown" : *status.enabled ? "enabled" : "disabled";
+  const auto reason = status.reason.empty() ? "null" : QuoteMuonNotificationString(status.reason);
+  co_return "{\"app\":{\"state\":" + QuoteMuonNotificationString(state) +
+            ",\"reason\":" + reason + "},\"category\":" + category_json + "}";
 }
 
 static std::string Capability(std::optional<bool> supported, const std::string& reason) {
@@ -246,7 +268,7 @@ cardio::promise<std::string> MuonNotificationService::GetCapabilities() {
                 caps.available && caps.persistence.has_value()
                     ? "server-persistence-unavailable" : caps.reason) +
             ",\"actions\":" + Capability(caps.available && caps.actions, action_reason) +
-            ",\"appStatus\":" + Capability(false, "app-status-unavailable") +
+            ",\"appStatus\":" + Capability(caps.app_status, "app-status-unavailable") +
             ",\"categoryStatus\":" + Capability(false, "category-status-unavailable") + "}";
 }
 
@@ -348,10 +370,7 @@ void MuonNotificationService::ReleaseOwner(const std::string& owner) {
 
 cardio::promise<void> MuonNotificationService::Stop() {
   auto impl = impl_;
-  impl->stopping = true;
-  impl->backend.stop();
-  for (auto& [token, lease] : impl->leases) CloseLease(*impl, lease);
-  impl->leases.clear();
+  BeginStop(*impl);
   auto lock = std::move(co_await impl->serial.lock());
 }
 

@@ -6,7 +6,11 @@
 #include "notifications/muon_notification_service.h"
 #include "notifications/muon_notification_store.h"
 #include "yyjson.h"
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <gio/gio.h>
+#endif
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -32,10 +36,13 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
   auto canceled = std::vector<uint32_t>{};
   auto fail_cancel = false;
   auto fail_post = false;
+  auto stop_count = 0;
+  auto status = MuonNotificationBackendStatus{true, ""};
   auto backend = MuonNotificationBackend{};
   backend.capabilities = []() -> cardio::promise<MuonNotificationBackendCapabilities> {
-    co_return MuonNotificationBackendCapabilities{true, true, true, ""};
+    co_return MuonNotificationBackendCapabilities{true, true, true, "", true};
   };
+  backend.status = [&]() -> cardio::promise<MuonNotificationBackendStatus> { co_return status; };
   backend.post = [&](MuonNotificationPost, std::string token) -> cardio::promise<MuonNotificationHandle> {
     if (fail_post) throw std::runtime_error("OS submission failed");
     posted.push_back(std::move(token));
@@ -46,10 +53,47 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
     canceled.push_back(handle.id); co_return;
   };
   backend.set_activation = [&](MuonNotificationActivation callback) { activation = std::move(callback); };
-  backend.stop = [&] { activation = {}; };
+  backend.stop = [&] { activation = {}; ++stop_count; };
   const auto path = (directory / "events.json").string();
+  {
+    auto abandoned = std::make_shared<MuonNotificationService>(path, "general", backend, [] { return 1; });
+    abandoned->Start();
+    const auto lease = Field(co_await abandoned->WatchEvents(R"({"operation":"acquire"})", "abandoned"), "token");
+    auto held = abandoned->WatchEvents("{\"operation\":\"next\",\"token\":\"" + lease + "\",\"afterCursor\":0}", "abandoned");
+    abandoned.reset();
+    Expect(stop_count == 1 && !activation,
+           "destruction without Stop retained the backend");
+    Expect((co_await held).find("\"events\":null") != std::string::npos,
+           "destruction did not terminate a held watch");
+  }
+  {
+    auto stopped = std::make_shared<MuonNotificationService>(path, "general", backend, [] { return 1; });
+    stopped->Start();
+    co_await stopped->Stop();
+    co_await stopped->Stop();
+    stopped.reset();
+    Expect(stop_count == 2, "repeated Stop or destruction stopped the backend twice");
+  }
   auto service = std::make_shared<MuonNotificationService>(path, "general", backend, [] { return 10; });
   service->Start();
+  Expect((co_await service->GetStatus("{}")).find("\"app\":{\"state\":\"enabled\"") != std::string::npos,
+         "observable enabled OS status was not exposed");
+  Expect((co_await service->GetCapabilities()).find("\"appStatus\":{\"state\":\"supported\"") != std::string::npos,
+         "OS status capability was not exposed");
+  status = {false, "disabled-for-application"};
+  const auto disabled = co_await service->GetStatus(R"({"category":"arbitrary"})");
+  Expect(disabled.find("\"app\":{\"state\":\"disabled\",\"reason\":\"disabled-for-application\"}") != std::string::npos &&
+             disabled.find("\"category\":{\"id\":\"arbitrary\",\"state\":\"unknown\"") != std::string::npos,
+         "OS setting was confused with category status");
+  auto disabled_rejected = false;
+  try { co_await service->Post(R"({"id":"disabled","title":"Blocked","body":""})"); }
+  catch (const std::exception& error) {
+    disabled_rejected = std::string(error.what()).find("disabled-for-application") != std::string::npos;
+  }
+  Expect(disabled_rejected && posted.empty(), "known disabled OS setting did not reject before posting");
+  status = {std::nullopt, "app-status-unavailable"};
+  Expect((co_await service->GetStatus("{}")).find("\"app\":{\"state\":\"unknown\"") != std::string::npos,
+         "unknown OS setting was guessed");
   co_await service->Post(R"({"id":"id","title":"First","body":"","data":1})");
   co_await service->Post(R"({"id":"id","title":"Second","body":"","data":2})");
   Expect(posted.size() == 2 && canceled == std::vector<uint32_t>{1}, "update did not retire only the old OS ID");
@@ -145,6 +189,33 @@ static cardio::promise<void> RunTests(std::filesystem::path directory) {
   co_await service->Stop();
 }
 
+#if defined(_WIN32)
+static cardio::promise<void> RunAndReport(std::filesystem::path directory, bool& passed) {
+  try { co_await RunTests(std::move(directory)); passed = true; }
+  catch (const std::exception& error) { std::cerr << error.what() << '\n'; }
+  PostQuitMessage(0);
+}
+
+int main() {
+  const auto directory = std::filesystem::temp_directory_path() /
+      ("muon-notification-service-" + std::to_string(GetCurrentProcessId()));
+  auto group = cardio::dispatcher_group();
+  auto dispatcher = cardio::dispatcher_host_win32_auto(group);
+  cardio::set_current_dispatcher(&dispatcher);
+  auto passed = false;
+  auto pending = RunAndReport(directory, passed);
+  MSG message{};
+  while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+    TranslateMessage(&message);
+    DispatchMessageW(&message);
+  }
+  group.shutdown();
+  cardio::set_current_dispatcher(nullptr);
+  std::filesystem::remove_all(directory);
+  if (passed) std::cout << "Windows notification service passed\n";
+  return passed ? 0 : 1;
+}
+#else
 static cardio::promise<void> RunAndQuit(std::filesystem::path directory,
                                        GMainLoop* loop, bool& passed) {
   try { co_await RunTests(std::move(directory)); passed = true; }
@@ -170,3 +241,4 @@ int main() {
   std::filesystem::remove_all(directory);
   return passed ? 0 : 1;
 }
+#endif

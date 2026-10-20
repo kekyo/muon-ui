@@ -553,6 +553,12 @@ struct MuonNotificationsConfig {
   bool enabled = false;
   /** Default application category used only when posting notifications. */
   std::string default_category;
+  /** Generated Windows application name used for OS notification registration. */
+  std::string windows_display_name;
+  /** Generated Windows notification icon, resolved relative to its config. */
+  std::filesystem::path windows_icon_path;
+  /** Stable, architecture-specific COM notification activator class ID. */
+  std::string windows_activator_clsid;
 };
 
 /**

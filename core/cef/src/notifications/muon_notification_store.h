@@ -26,8 +26,10 @@ cardio::promise<MuonNotificationSnapshot> LoadMuonNotificationSnapshot(
  */
 cardio::promise<void> SaveMuonNotificationSnapshot(
     std::string path, MuonNotificationSnapshot state);
-/** Generates a 256-bit revision token using the operating system random device.
- * @return A hexadecimal token, or an I/O error.
+/** Generates an opaque revision token using the operating system random source.
+ * @return A random token, or an OS error.
+ * @remarks Linux uses 256-bit hexadecimal tokens; Windows uses UUID v4 tokens
+ * so its complete identifier fits the OS notification Tag and Group fields.
  */
 cardio::promise<std::string> CreateMuonNotificationToken();
 

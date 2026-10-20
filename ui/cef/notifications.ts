@@ -10,7 +10,7 @@ import { resolveMuonNotificationConfig } from "../common/notification-config.js"
  * Selects notification imports implemented by every selected desktop target.
  * @param value - Shared application notification configuration.
  * @param targets - Desktop targets that will use the generated web bundle.
- * @returns Enabled native notification paths; Windows awaits its native backend.
+ * @returns Enabled native notification paths for Linux and Windows.
  */
 export const resolveMuonCefNotificationFunctionPaths = (
   value: unknown,
@@ -20,7 +20,10 @@ export const resolveMuonCefNotificationFunctionPaths = (
   if (
     !config.enabled ||
     targets.length === 0 ||
-    targets.some((target) => !target.startsWith("linux-"))
+    targets.some(
+      (target) =>
+        !target.startsWith("linux-") && !target.startsWith("windows-"),
+    )
   )
     return [];
   return [

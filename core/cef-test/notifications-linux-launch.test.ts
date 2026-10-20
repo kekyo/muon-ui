@@ -34,11 +34,24 @@ const execute = promisify(execFile);
 const enabled =
   process.platform === "linux" &&
   process.env.MUON_TEST_NOTIFICATION_DESKTOP === "1";
+// deb cases install and remove a uniquely named package with passwordless sudo.
+// Opt in only inside a disposable desktop test environment.
+const packageFormats = (
+  process.env.MUON_TEST_NOTIFICATION_PACKAGE_FORMATS ?? "tar.gz"
+).split(",");
+for (const format of packageFormats) {
+  if (!["tar.gz", "appimage", "deb"].includes(format))
+    throw new Error(`Unsupported notification test package format: ${format}`);
+}
+const packageCases = packageFormats.flatMap((format) =>
+  (["simple", "validate"] as const).map((mode) => ({ mode, format })),
+);
 
 describe.skipIf(!enabled)(
   "Packaged CEF notification activation on Linux",
   () => {
     beforeAll(async () => {
+      if (!packageFormats.includes("tar.gz")) return;
       const generated = resolve(
         "../cef/.build/test/linux-amd64/release/generated",
       );
@@ -58,9 +71,9 @@ describe.skipIf(!enabled)(
         maxBuffer: 16 * 1024 * 1024,
       });
     });
-    it.each(["simple", "validate"] as const)(
-      "launches the installed %s application and preserves pending events through maintenance",
-      async (mode) => {
+    it.each(packageCases)(
+      "launches the installed $format $mode application and preserves pending events",
+      async ({ mode, format }) => {
         const project = await mkdtemp(
           join(tmpdir(), "muon-notification-linux-pack-"),
         );
@@ -69,16 +82,20 @@ describe.skipIf(!enabled)(
             ? ".run/notifications-linux-launch-kde"
             : ".run/notifications-linux-launch",
           mode,
+          format,
         );
         await mkdir(artifacts, { recursive: true });
-        const appId = `dev.muon.notificationtest.pack.${mode}.run${process.pid}`;
-        const title = `Muon packaged notifications ${mode} ${process.pid}`;
-        const applicationName = `Muon Notifications ${mode} ${process.pid}`;
+        const appId = `dev.muon.notificationtest.pack.${format.replaceAll(".", "")}.${mode}.run${process.pid}`;
+        const title = `Muon packaged notifications ${format} ${mode} ${process.pid}`;
+        const applicationName = `Muon Notifications ${format} ${mode} ${process.pid}`;
+        const packageName = `muon-notification-pack-${format.replaceAll(".", "")}-${mode}-${process.pid}`;
         let install = join(project, "installed");
         const profile = join(install, "profile");
         const readinessPath = join(project, "page-ready");
         const data =
-          process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share");
+          format === "deb"
+            ? "/usr/share"
+            : (process.env.XDG_DATA_HOME ?? join(homedir(), ".local/share"));
         const desktopPath = join(data, "applications", `${appId}.desktop`);
         const servicePath = join(data, "dbus-1/services", `${appId}.service`);
         const iconPath = join(
@@ -91,6 +108,7 @@ describe.skipIf(!enabled)(
         let diagnostics = "";
         let launcher = "";
         let currentPid: number | undefined;
+        let debInstalled = false;
         let client: Client | undefined;
         let closeMcp: (() => Promise<void>) | undefined;
         const driver =
@@ -277,7 +295,14 @@ describe.skipIf(!enabled)(
         try {
           const packageDirectory = join(project, "package-dist");
           for (const [kind, path] of [
-            ["runtime", resolve("../cef/.run/test-linux-amd64-release")],
+            [
+              "runtime",
+              resolve(
+                format === "tar.gz"
+                  ? "../cef/.run/test-linux-amd64-release"
+                  : "../cef/dist-linux-amd64",
+              ),
+            ],
             ["native", resolve("../../builder/dist-linux-amd64")],
           ]) {
             await mkdir(join(packageDirectory, kind!), { recursive: true });
@@ -286,7 +311,7 @@ describe.skipIf(!enabled)(
           await writeFile(
             join(project, "package.json"),
             JSON.stringify({
-              name: `muon-notification-pack-${mode}`,
+              name: packageName,
               version: "1.0.0",
               type: "module",
               author: "muon Tester",
@@ -374,7 +399,7 @@ build:{targets:['linux-amd64'],packageDirectory:${JSON.stringify(packageDirector
                 "--target",
                 "linux-amd64",
                 "--type",
-                "tar.gz",
+                format,
                 "--package-directory",
                 packageDirectory,
                 "--app-id",
@@ -397,15 +422,30 @@ build:{targets:['linux-amd64'],packageDirectory:${JSON.stringify(packageDirector
           const packed = await pack("1.0.0");
           const built = packed.targets[0]!;
           if (built.target === "android") throw new Error("Unexpected target");
-          await mkdir(install);
-          await execute("tar", [
-            "-xzf",
-            packed.artifacts[0]!.path,
-            "--strip-components=2",
-            "-C",
-            install,
-          ]);
-          launcher = join(install, basename(built.launcherPath));
+          if (format === "appimage") {
+            launcher = packed.artifacts[0]!.path;
+          } else if (format === "deb") {
+            // Mark before dpkg runs so cleanup also removes a partially installed package.
+            debInstalled = true;
+            await execute("sudo", [
+              "-n",
+              "dpkg",
+              "--install",
+              packed.artifacts[0]!.path,
+            ]);
+            install = join("/usr/lib", packageName, "dist-muon/linux-amd64");
+            launcher = join(install, basename(built.launcherPath));
+          } else {
+            await mkdir(install);
+            await execute("tar", [
+              "-xzf",
+              packed.artifacts[0]!.path,
+              "--strip-components=2",
+              "-C",
+              install,
+            ]);
+            launcher = join(install, basename(built.launcherPath));
+          }
           const initialPid = await start();
           // Keep this distinct from the live window title: the shell's
           // accessibility cache also contains window labels before its
@@ -499,6 +539,52 @@ build:{targets:['linux-amd64'],packageDirectory:${JSON.stringify(packageDirector
           expect(
             await evaluate("return await notificationApi.getPendingEvents();"),
           ).toEqual([]);
+          if (format !== "tar.gz") {
+            // Portable update/move behavior is covered below. These formats
+            // additionally prove their distinct installed activation paths.
+            await minimize();
+            const removalTitle = `${appId} removal`;
+            await evaluate(
+              `await notificationApi.post({id:'removal',title:${JSON.stringify(removalTitle)},body:'Remove this installed notification'}); return true;`,
+            );
+            await driver.waitForNotification(
+              removalTitle,
+              join(artifacts, "removal-before.png"),
+            );
+            await stop();
+            await execute(launcher, ["--muon-notification-clear-history"], {
+              timeout: 30000,
+            });
+            await driver.waitForRemoval(removalTitle);
+            if (format === "deb") {
+              await execute("sudo", ["-n", "dpkg", "--remove", packageName]);
+              debInstalled = false;
+            } else {
+              await execute(launcher, ["--muon-notification-unregister"], {
+                timeout: 30000,
+              });
+            }
+            await expect(access(servicePath)).rejects.toThrow();
+            await expect(access(desktopPath)).rejects.toThrow();
+            await expect(access(iconPath)).rejects.toThrow();
+            await writeFile(
+              join(artifacts, "result.json"),
+              JSON.stringify(
+                {
+                  format,
+                  initialPid,
+                  coldPids,
+                  running,
+                  received,
+                  clearedHistory: true,
+                  unregistered: true,
+                },
+                null,
+                2,
+              ),
+            );
+            return;
+          }
           await minimize();
           const pendingTitle = `${appId} pending`;
           await evaluate(
@@ -749,7 +835,7 @@ build:{targets:['linux-amd64'],packageDirectory:${JSON.stringify(packageDirector
               const executable = (
                 await readFile(`/proc/${currentPid}/cmdline`, "utf8")
               ).split("\0")[0];
-              if (executable !== join(install, "muon-core"))
+              if (currentPid !== (await getPid()))
                 throw new Error(`Unexpected test process: ${executable}`);
               const pidFile = join(project, "cleanup.pid");
               await writeFile(pidFile, String(currentPid));
@@ -772,7 +858,9 @@ build:{targets:['linux-amd64'],packageDirectory:${JSON.stringify(packageDirector
               await closed;
             }
           }
-          if (launcher) {
+          if (debInstalled) {
+            await execute("sudo", ["-n", "dpkg", "--remove", packageName]);
+          } else if (launcher && format !== "deb") {
             try {
               await execute(launcher, ["--muon-notification-unregister"], {
                 timeout: 30000,
@@ -781,16 +869,27 @@ build:{targets:['linux-amd64'],packageDirectory:${JSON.stringify(packageDirector
               /* The explicit successful unregister already removed ownership. */
             }
           }
-          for (const path of [desktopPath, servicePath, iconPath])
-            await rm(path, { force: true });
-          await execute("gtk-update-icon-cache", [
-            "--force",
-            "--ignore-theme-index",
-            join(data, "icons/hicolor"),
-          ]);
+          if (format !== "deb") {
+            for (const path of [desktopPath, servicePath, iconPath])
+              await rm(path, { force: true });
+            await execute("gtk-update-icon-cache", [
+              "--force",
+              "--ignore-theme-index",
+              join(data, "icons/hicolor"),
+            ]);
+          }
           await driver.close();
           await writeFile(join(artifacts, "launcher.log"), diagnostics);
           await rm(project, { recursive: true, force: true });
+          if (format !== "tar.gz") {
+            await rm(
+              join(
+                process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"),
+                appId,
+              ),
+              { recursive: true, force: true },
+            );
+          }
         }
       },
       300000,

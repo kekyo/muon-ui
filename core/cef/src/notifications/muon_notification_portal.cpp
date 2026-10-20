@@ -11,7 +11,6 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
-#include <unistd.h>
 
 namespace muon_internal {
 static constexpr char kPortal[] = "org.freedesktop.portal.Desktop";
@@ -39,11 +38,9 @@ struct PortalBackend {
   cardio::primitives::mutex serial;
   MuonNotificationActivation activation;
   std::function<void(std::string)> application_activation;
-  std::shared_ptr<cardio::promise_source<std::pair<std::string, std::string>>> scope_completion;
   guint object_registration = 0;
   guint owner_subscription = 0;
   bool owns_name = false;
-  bool scoped = false;
   bool stopped = false;
   std::string registered_owner;
   ~PortalBackend() {
@@ -294,97 +291,6 @@ static cardio::promise<void> Connect(std::shared_ptr<PortalBackend> impl) {
     impl->owns_name = true;
   }
 }
-struct ScopeJob {
-  std::string unit;
-  std::shared_ptr<cardio::promise_source<std::pair<std::string, std::string>>> completion;
-};
-static void JobRemoved(GDBusConnection*, const gchar*, const gchar*, const gchar*,
-    const gchar*, GVariant* parameters, gpointer data) {
-  auto& job = *static_cast<ScopeJob*>(data);
-  if (!g_variant_is_of_type(parameters, G_VARIANT_TYPE("(uoss)"))) return;
-  guint32 id = 0;
-  const gchar* path = nullptr;
-  const gchar* unit = nullptr;
-  const gchar* result = nullptr;
-  g_variant_get(parameters, "(u&o&s&s)", &id, &path, &unit, &result);
-  if (job.unit == unit) job.completion->try_resolve({path, result});
-}
-static void ScopeManagerChanged(GDBusConnection*, const gchar*, const gchar*, const gchar*,
-    const gchar*, GVariant*, gpointer data) {
-  auto& job = *static_cast<ScopeJob*>(data);
-  job.completion->try_resolve({"", "manager-changed"});
-}
-static cardio::promise<void> EnterApplicationScope(std::shared_ptr<PortalBackend> impl) {
-  if (impl->scoped) co_return;
-  auto escaped = std::string{};
-  for (const auto ch : impl->options.desktop_id) {
-    // D-Bus names permit '-' but it separates fields in a systemd app scope.
-    if (ch == '-') escaped += "\\x2d";
-    else escaped += ch;
-  }
-  auto random = GlibString(g_uuid_string_random(), g_free);
-  auto suffix = std::string{};
-  for (const auto ch : std::string_view(random.get()))
-    if (ch != '-') suffix += ch;
-  auto job = ScopeJob{};
-  job.unit = "app-" + escaped + "-" + suffix + ".scope";
-  auto* connection = impl->connection.get();
-  // Bind to one manager instance before submitting. A vanished manager or
-  // session must settle the wait even when JobRemoved can no longer arrive.
-  auto owner_reply = Variant(co_await Call(connection, "org.freedesktop.DBus",
-      "/org/freedesktop/DBus", "org.freedesktop.DBus", "GetNameOwner",
-      g_variant_new("(s)", "org.freedesktop.systemd1"), G_VARIANT_TYPE("(s)")), g_variant_unref);
-  const gchar* owner = nullptr;
-  g_variant_get(owner_reply.get(), "(&s)", &owner);
-  RequireRunning(*impl);
-  job.completion = std::make_shared<cardio::promise_source<std::pair<std::string, std::string>>>();
-  impl->scope_completion = job.completion;
-  auto completed = job.completion->get_promise();
-  const auto subscription = g_dbus_connection_signal_subscribe(connection,
-      owner, "org.freedesktop.systemd1.Manager", "JobRemoved",
-      "/org/freedesktop/systemd1", nullptr, G_DBUS_SIGNAL_FLAGS_NONE, JobRemoved, &job, nullptr);
-  const auto owner_subscription = g_dbus_connection_signal_subscribe(connection,
-      "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
-      "/org/freedesktop/DBus", "org.freedesktop.systemd1", G_DBUS_SIGNAL_FLAGS_NONE,
-      ScopeManagerChanged, &job, nullptr);
-  const auto closed = g_signal_connect(connection, "closed",
-      G_CALLBACK(+[](GDBusConnection*, gboolean, GError*, gpointer data) {
-        static_cast<ScopeJob*>(data)->completion->try_resolve({"", "connection-closed"});
-      }), &job);
-  try {
-    auto properties = GVariantBuilder{};
-    g_variant_builder_init(&properties, G_VARIANT_TYPE("a(sv)"));
-    const auto pid = static_cast<guint32>(getpid());
-    g_variant_builder_add(&properties, "(sv)", "PIDs",
-        g_variant_new_fixed_array(G_VARIANT_TYPE_UINT32, &pid, 1, sizeof(pid)));
-    g_variant_builder_add(&properties, "(sv)", "Slice", g_variant_new_string("app.slice"));
-    auto reply = Variant(co_await Call(connection, owner,
-        "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "StartTransientUnit",
-        g_variant_new("(ss@a(sv)@a(sa(sv)))", job.unit.c_str(), "fail",
-            g_variant_builder_end(&properties),
-            g_variant_new_array(G_VARIANT_TYPE("(sa(sv))"), nullptr, 0)),
-        G_VARIANT_TYPE("(o)")), g_variant_unref);
-    const auto result = co_await completed;
-    const gchar* path = nullptr;
-    g_variant_get(reply.get(), "(&o)", &path);
-    if (result.first != path || result.second != "done")
-      throw std::runtime_error("Notification application scope failed");
-    RequireRunning(*impl);
-    impl->scoped = true;
-  } catch (...) {
-    g_dbus_connection_signal_unsubscribe(connection, subscription);
-    g_dbus_connection_signal_unsubscribe(connection, owner_subscription);
-    g_signal_handler_disconnect(connection, closed);
-    // Do not leave an unobserved pending source when the method itself failed.
-    job.completion->try_resolve({"", "failed"});
-    impl->scope_completion.reset();
-    throw;
-  }
-  g_dbus_connection_signal_unsubscribe(connection, subscription);
-  g_dbus_connection_signal_unsubscribe(connection, owner_subscription);
-  g_signal_handler_disconnect(connection, closed);
-  impl->scope_completion.reset();
-}
 static cardio::promise<void> Prepare(std::shared_ptr<PortalBackend> impl) {
   RequireRunning(*impl);
   co_await VerifyRegistration(impl->options);
@@ -400,7 +306,6 @@ static cardio::promise<void> Prepare(std::shared_ptr<PortalBackend> impl) {
   const gchar* owner = nullptr;
   g_variant_get(reply.get(), "(&s)", &owner);
   if (impl->registered_owner != owner) {
-    auto legacy = false;
     try {
       auto registered = Variant(co_await Call(impl->connection.get(), owner, kPortalPath,
           "org.freedesktop.host.portal.Registry", "Register",
@@ -411,9 +316,8 @@ static cardio::promise<void> Prepare(std::shared_ptr<PortalBackend> impl) {
       if (error.domain() != G_DBUS_ERROR ||
           (error.code() != G_DBUS_ERROR_UNKNOWN_METHOD &&
            error.code() != G_DBUS_ERROR_UNKNOWN_INTERFACE)) throw;
-      legacy = true;
+      throw std::runtime_error("portal-host-registration-unavailable");
     }
-    if (legacy) co_await EnterApplicationScope(impl);
     impl->registered_owner = owner;
   }
   RequireRunning(*impl);
@@ -515,7 +419,6 @@ MuonNotificationBackend CreateMuonPortalNotificationBackend(
     impl->stopped = true;
     impl->activation = {};
     impl->application_activation = {};
-    if (impl->scope_completion) impl->scope_completion->try_resolve({"", "stopped"});
     if (impl->connection) {
       if (impl->object_registration)
         g_dbus_connection_unregister_object(impl->connection.get(), impl->object_registration);

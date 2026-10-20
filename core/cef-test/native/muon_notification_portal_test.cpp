@@ -45,10 +45,20 @@ struct PortalFixture {
   GVariant* notification = nullptr;
   bool legacy = false;
   bool scoped = false;
+  unsigned scope_requests = 0;
   bool hold_scope = false;
+  bool hold_registration = false;
+  GDBusMethodInvocation* pending_registration = nullptr;
   cardio::promise_source<void> scope_started;
   cardio::promise_source<void> registered;
-  ~PortalFixture() { if (notification) g_variant_unref(notification); }
+  ~PortalFixture() {
+    if (notification) g_variant_unref(notification);
+    if (pending_registration) {
+      g_dbus_method_invocation_return_dbus_error(pending_registration,
+          "org.freedesktop.portal.Error.Failed", "Registration interrupted");
+      g_object_unref(pending_registration);
+    }
+  }
 };
 
 static void Expect(bool condition, const char* message) {
@@ -61,6 +71,7 @@ static void Invoked(GDBusConnection* connection, const gchar* sender, const gcha
   auto value = Variant(g_variant_get_child_value(args, 0), g_variant_unref);
   const auto text = std::string(g_variant_get_string(value.get(), nullptr));
   if (std::string_view(method) == "StartTransientUnit") {
+    ++fixture.scope_requests;
     auto properties = Variant(g_variant_get_child_value(args, 2), g_variant_unref);
     auto property = Variant(g_variant_get_child_value(properties.get(), 0), g_variant_unref);
     auto wrapped = Variant(g_variant_get_child_value(property.get(), 1), g_variant_unref);
@@ -89,6 +100,12 @@ static void Invoked(GDBusConnection* connection, const gchar* sender, const gcha
         g_variant_new("(o)", "/org/freedesktop/systemd1/job/1"));
     return;
   } else if (std::string_view(method) == "Register") {
+    if (fixture.hold_registration) {
+      fixture.pending_registration =
+          G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
+      fixture.registered.try_resolve();
+      return;
+    }
     if (fixture.registrations.contains(sender)) {
       g_dbus_method_invocation_return_dbus_error(invocation,
           "org.freedesktop.portal.Error.Failed", "Peer already registered");
@@ -203,8 +220,9 @@ static cardio::promise<void> RunTests(const std::filesystem::path& directory, bo
   auto bus = std::unique_ptr<GDBusConnection, decltype(&g_object_unref)>(connection, g_object_unref);
   auto fixture = PortalFixture{};
   fixture.legacy = legacy;
-  fixture.hold_scope = stop_pending;
+  fixture.hold_registration = stop_pending;
   auto scope_started = fixture.scope_started.get_promise();
+  auto registration_started = fixture.registered.get_promise();
   auto* info = g_dbus_node_info_new_for_xml(kXml, nullptr);
   const auto table = GDBusInterfaceVTable{Invoked, Property, nullptr, {nullptr}};
   const auto registry = legacy ? 0 : g_dbus_connection_register_object(connection, kPortalPath,
@@ -233,17 +251,29 @@ static cardio::promise<void> RunTests(const std::filesystem::path& directory, bo
     });
     if (stop_pending) {
       auto pending = backend.capabilities();
-      co_await scope_started;
+      co_await registration_started;
       auto ping = Variant(co_await Call(connection, kDesktop, "/dev/muon/PortalTest",
           "org.freedesktop.DBus.Peer", "Ping", nullptr, G_VARIANT_TYPE_UNIT), g_variant_unref);
       backend.stop();
       const auto stopped = co_await pending;
       Expect(!stopped.available, "Stopped Portal still advertised support");
+      g_dbus_connection_unregister_object(connection, registry);
       g_dbus_connection_unregister_object(connection, notification);
       g_dbus_connection_unregister_object(connection, systemd);
       co_return;
     }
     const auto caps = co_await backend.capabilities();
+    if (legacy) {
+      Expect(fixture.scope_requests == 0,
+             "Portal without host registration changed the process scope");
+      Expect(!caps.available && caps.launch == false &&
+                 caps.launch_reason == "portal-host-registration-unavailable",
+             "Portal without host registration advertised notification launch");
+      backend.stop();
+      g_dbus_connection_unregister_object(connection, notification);
+      g_dbus_connection_unregister_object(connection, systemd);
+      co_return;
+    }
     Expect(caps.available && caps.actions && caps.persistence == true && caps.launch == true,
            "verified Portal registration did not support process activation");
     auto menu_context = std::string{};
@@ -336,7 +366,7 @@ int main(int argc, char** argv) {
   auto passed = false;
   const auto option = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
   auto pending = RunAndQuit(directory, loop, passed,
-      option == "--legacy" || option == "--stop", option == "--route", option == "--stop");
+      option == "--legacy", option == "--route", option == "--stop");
   if (!pending.is_ready()) g_main_loop_run(loop);
   g_main_loop_unref(loop);
   group.shutdown();

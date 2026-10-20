@@ -561,7 +561,36 @@ build:{targets:['linux-amd64'],packageDirectory:${JSON.stringify(packageDirector
           await stop();
           await writeFile(
             join(project, "muon.json"),
-            JSON.stringify({ ...config, notifications: { enabled: false } }),
+            JSON.stringify({
+              ...config,
+              notifications: { enabled: false },
+              plugin: {
+                mode,
+                plugins: [
+                  {
+                    name: "internal",
+                    ...(mode === "simple"
+                      ? {
+                          allow: [
+                            "muon.fs.writeTextFile",
+                            "muon.environments.getProcessId",
+                          ],
+                        }
+                      : {
+                          imports: [
+                            {
+                              sources: ["main.ts"],
+                              allow: [
+                                "muon.fs.writeTextFile",
+                                "muon.environments.getProcessId",
+                              ],
+                            },
+                          ],
+                        }),
+                  },
+                ],
+              },
+            }),
           );
           await writeFile(
             join(project, "main.ts"),

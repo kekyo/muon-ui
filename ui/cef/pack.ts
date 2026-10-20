@@ -221,7 +221,12 @@ const normalizePackTargetSelector = (
   throw new Error(`Unsupported muon pack target selector: ${selector}`);
 };
 
-const normalizePackTargetSelectors = (
+/**
+ * Expands desktop pack selectors before loading target-dependent Vite plugins.
+ * @param selectors Complete targets, OS names or architecture names.
+ * @returns Unique concrete desktop build targets.
+ */
+export const normalizePackTargetSelectors = (
   selectors: readonly string[],
 ): MuonBuildTarget[] => {
   const targets = selectors

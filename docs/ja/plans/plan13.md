@@ -287,6 +287,12 @@ Windowsのアプリ通知へ接続し、アプリ名とアイコン、同一ID�
 
 プロセス終了後のクリック起動は段階6では非対応とする。段階8ではPortal Notificationと`org.freedesktop.Application.ActivateAction`を使うD-Bus起動を検証し、対応する配布環境へ接続する。既存の通常の`Exec`に加え、D-Busサービス登録とアプリ識別が必要となる。AppImageなど起動位置が変わり得る配布物では、更新時の登録先も検証する。登録不足や非対応の環境を、起動対応済みとは扱わない。[Portal Notification](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Notification.html)、[D-Busアプリケーションの操作](https://specifications.freedesktop.org/desktop-entry-spec/latest/dbus.html)、[既存のLinux desktop連携](../../../ui/cef/linux-desktop.ts)
 
+段階8では、通知起動を有効にした配布物に、D-Busのアプリ名として使えるdesktop IDと、その名前から定まる受信先を持たせる。`.desktop`とD-Busの`.service`は同じ配布ランチャーを指す。更新時にはこの登録を新しい起動位置へ更新し、古い配置の削除では新しい配置の登録を消さない。ランタイムは、実際の登録と自アプリの起動パスが一致することを確認してから、クリック起動を対応済みと返す。
+
+Portalがホストアプリの登録APIを備える場合は、そのAPIでアプリ識別子を登録する。登録APIがない環境では、systemdが定めるアプリ用scopeへ自プロセスを所属させる方法を使う。scopeは、同じアプリに属するプロセスをsystemdが識別する単位である。この処理と通知の送受信には非同期D-Bus APIを使う。必要な識別・起動登録が成立しない場合は、実行中の通知機能を維持し、クリック起動の非対応理由を返す。[Portalのホストアプリ登録](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html)、[systemdのデスクトップアプリ識別](https://systemd.io/DESKTOP_ENVIRONMENTS/)、[StartTransientUnit](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html)
+
+通知操作を受けるD-Busオブジェクトは、アプリ名の所有を開始する前に登録する。起動直後の操作も共通の永続化処理へ渡し、受信したトークンに対応する保存済み投稿だけをイベントに変換する。OSの起動用識別子はウインドウ表示に使用し、アプリが保存した`data`と混同しない。[GIOのアプリ名所有とオブジェクト登録の順序](https://docs.gtk.org/gio/func.bus_own_name.html)、[D-Bus起動のplatform_data](https://specifications.freedesktop.org/desktop-entry/latest/dbus.html)
+
 通知サービスの有無、GNOME・KDEの環境差、サービス再起動後の状態を検証する。OSによる通知の保持と、受け取った操作イベントの永続化は区別する。
 
 ### 通知クリックによる起動
@@ -382,6 +388,8 @@ MinGW32/64で利用できるOS通知APIと配布依存を、ビルド・実行�
 ### 段階8 CEFの通知起動と配布登録
 
 Windowsの通知起動登録とNSIS、LinuxのD-Bus起動とdesktop連携を完成させる。新規起動と既存プロセスへの配送を共通イベントへ接続し、対象画面を開くドライバーを用意する。アプリ更新で既存通知の起動情報を引き継ぎ、アンインストールでは自アプリの登録を解除する。
+
+更新で`notifications.enabled`を`false`にする場合は、旧版を上書きする前に、そのアプリが所有する通知履歴と起動登録を解除する。保存済みの未受領イベントとprofileは保持する。登録の所有者はappIdと起動パスで確認し、別の配置が現在所有する登録を削除しない。通知機能を有効にしたまま更新する場合は、既存通知の起動と保存済みイベントを引き継ぐ。
 
 完了条件はWindowsのNSIS導入環境とLinuxのD-Bus起動に対応する導入環境で、プロセスを終了した後の通知クリックから配布アプリが起動し、正しいデータを受け取ることとする。実行中のクリックで二重起動せず、ページ初期化前のイベント、受領前の終了、再配送、複数ウインドウを検証する。更新後の古い通知、起動パスの変更、アンインストール後の残存通知、通知サービスの再起動も確認する。
 

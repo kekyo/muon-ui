@@ -10,20 +10,20 @@ This release supports debug APKs and signed release APKs. FCM, QuickJS, the Node
 | --- | --- |
 | Build host | Linux x64 |
 | Node.js/npm | Tested with Node.js 24. Meet the runtime requirements of your dependencies, including Vite |
-| JDK | 17–25; execution tested with 25.0.3 |
+| JDK | 17–25; execution tested with 21.0.12.1 and 25.0.3 |
 | Android SDK | Platform `platforms/android-37.0`, Build Tools `build-tools/36.0.0` |
 | Gradle/AGP | The included Wrapper uses Gradle 9.4.1 and AGP 9.2.1 |
 | Application ABIs | `arm64-v8a` and `x86_64`; both included by default |
-| Devices | Tested on API 37: Pixel 6 and an x86_64 emulator with 16 KiB pages |
+| Devices | Pixel 6 on API 37; x86_64 emulators on API 33, 35, 36, and 37. API 37 testing also covers 16 KiB pages |
 
 Ordinary application builds need neither NDK/CMake nor a Muon source checkout. The npm package includes prebuilt Java and native components in an AAR. Initial Gradle and AndroidX downloads need a network connection. Android Studio and a connected device are optional for building.
 
-The APK declares minimum installation API 24. The WebView features below are required in addition to the OS version. WebView must provide `WEB_MESSAGE_LISTENER`, `WEB_MESSAGE_ARRAY_BUFFER`, and `DOCUMENT_START_SCRIPT`. Missing features produce an on-screen startup diagnostic. Tested WebView versions are 153.0.8010.36 on Pixel 6 and 149.0.7827.5 on the emulator. arm64 alignment has been inspected for 16 KiB compatibility; runtime testing covers Pixel 6 with 4 KiB pages and x86_64 with 16 KiB pages. See [WebView feature detection](https://developer.android.com/reference/androidx/webkit/WebViewFeature) and [16 KiB page support](https://developer.android.com/guide/practices/page-sizes).
+The APK declares minimum installation API 24. The WebView features below are required in addition to the OS version. WebView must provide `WEB_MESSAGE_LISTENER`, `WEB_MESSAGE_ARRAY_BUFFER`, and `DOCUMENT_START_SCRIPT`. Missing features produce an on-screen startup diagnostic. Tested WebView versions are 153.0.8010.36 on Pixel 6 and 149.0.7827.5 on the emulator. arm64 alignment has been inspected for 16 KiB compatibility. Runtime testing covers arm64 on Pixel 6 with 4 KiB pages and x86_64 emulators with both 4 KiB and 16 KiB pages. See [WebView feature detection](https://developer.android.com/reference/androidx/webkit/WebViewFeature) and [16 KiB page support](https://developer.android.com/guide/practices/page-sizes).
 
 Install a JDK and [Android CLI](https://developer.android.com/tools/agents/android-cli), review the SDK licenses, and install the required packages:
 
 ```bash
-export JAVA_HOME=/path/to/jdk-25
+export JAVA_HOME=/path/to/jdk-21
 export ANDROID_HOME="$HOME/Android/Sdk"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 android --sdk="$ANDROID_HOME" sdk install platforms/android-37.0 build-tools/36.0.0 platform-tools

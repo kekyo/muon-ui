@@ -10,20 +10,20 @@ muon-uiのnpmパッケージから、Webアセットを内蔵したAndroid APK�
 | --- | --- |
 | ビルドPC | Linux x64 |
 | Node.js/npm | Node.js 24で検証済み。Viteを含む依存パッケージの実行条件を満たすこと |
-| JDK | 17～25。実行検証は25.0.3 |
+| JDK | 17～25。実行検証は21.0.12.1と25.0.3 |
 | Android SDK | Platform `platforms/android-37.0`、Build Tools `build-tools/36.0.0` |
 | Gradle/AGP | 同梱WrapperでGradle 9.4.1、AGP 9.2.1を使用 |
 | アプリのABI | `arm64-v8a`と`x86_64`。既定で両方を収録 |
-| 端末 | API 37で検証済み。実機はPixel 6、エミュレーターはx86_64・16 KiBページ |
+| 端末 | 実機はPixel 6・API 37。x86_64エミュレーターはAPI 33・35・36・37で検証済み。API 37では16 KiBページも検証 |
 
 通常のアプリビルドにはNDK、CMake、Muonのソース取得は不要です。MuonのJava・ネイティブ部品は事前ビルドしたAARとしてnpm内に収録しています。GradleとAndroidXなどの初回取得にはネットワーク接続が必要です。Android Studioと接続端末はビルドの必須条件ではありません。
 
-APKの最低インストールAPIは24です。OSのバージョンに加えて、下記のWebView機能が必要です。WebViewは`WEB_MESSAGE_LISTENER`、`WEB_MESSAGE_ARRAY_BUFFER`、`DOCUMENT_START_SCRIPT`を必要とし、不足時は起動画面に理由を表示します。検証したWebViewはPixel 6が153.0.8010.36、エミュレーターが149.0.7827.5です。arm64の16 KiB配置は静的検査済みですが、実行検証はPixel 6の4 KiBとx86_64エミュレーターの16 KiBで行っています。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiBページへの対応](https://developer.android.com/guide/practices/page-sizes)
+APKの最低インストールAPIは24です。OSのバージョンに加えて、下記のWebView機能が必要です。WebViewは`WEB_MESSAGE_LISTENER`、`WEB_MESSAGE_ARRAY_BUFFER`、`DOCUMENT_START_SCRIPT`を必要とし、不足時は起動画面に理由を表示します。検証したWebViewはPixel 6が153.0.8010.36、エミュレーターが149.0.7827.5です。arm64の16 KiB配置は静的検査済みです。実行検証は、arm64ではPixel 6の4 KiB、x86_64エミュレーターでは4 KiBと16 KiBで行っています。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiBページへの対応](https://developer.android.com/guide/practices/page-sizes)
 
 JDKと[Android CLI](https://developer.android.com/tools/agents/android-cli)を用意し、SDKのライセンスを確認したうえで、必要なSDKパッケージをインストールします。
 
 ```bash
-export JAVA_HOME=/path/to/jdk-25
+export JAVA_HOME=/path/to/jdk-21
 export ANDROID_HOME="$HOME/Android/Sdk"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 android --sdk="$ANDROID_HOME" sdk install platforms/android-37.0 build-tools/36.0.0 platform-tools

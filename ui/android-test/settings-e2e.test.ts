@@ -135,7 +135,9 @@ it.skipIf(process.env.MUON_ANDROID_SETTINGS_E2E !== "1")(
       );
       expect(xml).toContain("com.android.settings");
       const switches = [
-        ...xml.matchAll(/<node\b[^>]*class="android.widget.Switch"[^>]*>/gu),
+        ...xml.matchAll(
+          /<node\b(?=[^>]*resource-id="android:id\/switch_widget")[^>]*class="android.widget.Switch"[^>]*>/gu,
+        ),
       ];
       expect(switches).toHaveLength(1);
       const node = switches[0]![0];
@@ -160,7 +162,7 @@ it.skipIf(process.env.MUON_ANDROID_SETTINGS_E2E !== "1")(
         "/sdcard/muon-notification-settings-disabled.xml",
       );
       expect(disabledXml).toMatch(
-        /class="android.widget.Switch"[^>]*checked="false"/u,
+        /<node\b(?=[^>]*resource-id="android:id\/switch_widget")[^>]*class="android.widget.Switch"[^>]*checked="false"/u,
       );
       await writeFile(resolve(output, "disabled.xml"), disabledXml);
       // Android may terminate the app when notification permission is revoked.
@@ -218,7 +220,9 @@ it.skipIf(process.env.MUON_ANDROID_SETTINGS_E2E !== "1")(
         "/sdcard/muon-notification-settings-return.xml",
       );
       const returnSwitch =
-        /<node\b[^>]*class="android.widget.Switch"[^>]*>/u.exec(returnXml)![0];
+        /<node\b(?=[^>]*resource-id="android:id\/switch_widget")[^>]*class="android.widget.Switch"[^>]*>/u.exec(
+          returnXml,
+        )![0];
       expect(returnSwitch).toContain('checked="false"');
       const returnBounds = /bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/u.exec(
         returnSwitch,

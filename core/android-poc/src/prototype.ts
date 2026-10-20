@@ -44,12 +44,33 @@ if (bridge === undefined || javaScriptRuntimeBridge === undefined) {
   const javaScriptRuntimeClient = createMuonAndroidJavaScriptRuntimeClient(
     createMuonAndroidJavaScriptRuntimeTransport(javaScriptRuntimeBridge)
   );
+  const simpleApi = createMuonAndroidSimpleApi(client, {
+    'muon.browser': 'browser-capability',
+    'muon.environments': 'environment-capability',
+    'muon.fs': 'fs-capability',
+    'muon.android.systemBars': 'system-bars-capability',
+    'muon.android.settings': 'settings-capability',
+    'muon.android.notifications': 'android-notifications-capability',
+    'muon.notifications': 'notifications-capability',
+  });
   const androidApi = {
-    ...createMuonAndroidSimpleApi(client, {
-      'muon.browser': 'browser-capability',
-      'muon.environments': 'environment-capability',
-      'muon.fs': 'fs-capability',
-    }),
+    browser: simpleApi.browser,
+    environments: simpleApi.environments,
+    fs: simpleApi.fs,
+    ...(rendererMetadata.builtinFunctions.some((path) =>
+      path.startsWith('muon.notifications.')
+    )
+      ? { notifications: simpleApi.notifications }
+      : {}),
+    android: {
+      systemBars: simpleApi.android.systemBars,
+      settings: simpleApi.android.settings,
+      ...(rendererMetadata.builtinFunctions.some((path) =>
+        path.startsWith('muon.android.notifications.')
+      )
+        ? { notifications: simpleApi.android.notifications }
+        : {}),
+    },
     node: javaScriptRuntimeClient,
   };
   const uninstallNativePluginApi = installMuonAndroidNativePluginApi(

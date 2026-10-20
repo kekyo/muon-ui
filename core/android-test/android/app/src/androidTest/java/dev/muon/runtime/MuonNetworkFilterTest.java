@@ -14,6 +14,7 @@ import static org.junit.Assert.assertTrue;
 import android.app.UiAutomation;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -49,8 +50,10 @@ public final class MuonNetworkFilterTest {
     public void allowsExternalMainFrameThroughTheNormalWebViewNetwork() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
-        automation.grantRuntimePermission(
-                context.getPackageName(), "android.permission.ACCESS_LOCAL_NETWORK");
+        if (Build.VERSION.SDK_INT >= 37) {
+            automation.grantRuntimePermission(
+                    context.getPackageName(), "android.permission.ACCESS_LOCAL_NETWORK");
+        }
 
         try (NetworkTestServer server = new NetworkTestServer();
              ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
@@ -95,8 +98,10 @@ public final class MuonNetworkFilterTest {
             throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
-        automation.grantRuntimePermission(
-                context.getPackageName(), "android.permission.ACCESS_LOCAL_NETWORK");
+        if (Build.VERSION.SDK_INT >= 37) {
+            automation.grantRuntimePermission(
+                    context.getPackageName(), "android.permission.ACCESS_LOCAL_NETWORK");
+        }
 
         try (NetworkTestServer server = new NetworkTestServer()) {
             String pageUrl = server.url("/probe");
@@ -114,7 +119,7 @@ public final class MuonNetworkFilterTest {
                 activity.clearRequestObservationsForTest();
 
                 String origin = server.loopbackOrigin();
-                String script = """
+                String script = String.format("""
                         void (async () => {
                           const loadFrame = (url) => new Promise((resolve) => {
                             const frame = document.createElement('iframe');
@@ -163,7 +168,7 @@ public final class MuonNetworkFilterTest {
                           });
                           muonNetworkProbe.postMessage(JSON.stringify({ blob }));
                         })();
-                        """.formatted(
+                        """,
                         JSONObject.quote(origin),
                         JSONObject.quote(server.loopbackWebSocketOrigin()));
                 scenario.onActivity(current -> current.getWebViewForTest()

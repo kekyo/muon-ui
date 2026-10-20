@@ -1017,7 +1017,7 @@ public final class MuonActivityTest {
             assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
             String name = "relative-data-" + System.nanoTime() + ".txt";
             activity.clearTestMessages();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const path = %s;
                       try {
@@ -1029,7 +1029,7 @@ public final class MuonActivityTest {
                         muonAndroidTest.postMessage(JSON.stringify({ error: String(error) }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(name));
+                    """, JSONObject.quote(name));
             scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(script, null));
             String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
             assertNotNull(message);
@@ -1054,7 +1054,7 @@ public final class MuonActivityTest {
             activity.clearTestMessages();
             String basePath = activity.getFilesDir().getAbsolutePath()
                     + "/fs-api-" + System.nanoTime();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const base = %s;
                       const nested = `${base}/nested`;
@@ -1134,7 +1134,7 @@ public final class MuonActivityTest {
                         }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(basePath));
+                    """, JSONObject.quote(basePath));
 
             scenario.onActivity(current -> current.getWebViewForTest()
                     .evaluateJavascript(script, null));
@@ -1173,7 +1173,7 @@ public final class MuonActivityTest {
             activity.clearTestMessages();
             String basePath = activity.getFilesDir().getAbsolutePath()
                     + "/fs-boundary-" + System.nanoTime();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const base = %s;
                       const capture = async (operation) => {
@@ -1234,7 +1234,7 @@ public final class MuonActivityTest {
                         }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(basePath));
+                    """, JSONObject.quote(basePath));
 
             scenario.onActivity(current -> current.getWebViewForTest()
                     .evaluateJavascript(script, null));
@@ -1269,7 +1269,7 @@ public final class MuonActivityTest {
             activity.clearTestMessages();
             String basePath = activity.getFilesDir().getAbsolutePath()
                     + "/fs-watch-" + System.nanoTime();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const base = %s;
                       try {
@@ -1299,7 +1299,7 @@ public final class MuonActivityTest {
                         }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(basePath));
+                    """, JSONObject.quote(basePath));
 
             scenario.onActivity(current -> current.getWebViewForTest()
                     .evaluateJavascript(script, null));

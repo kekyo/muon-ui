@@ -350,6 +350,7 @@ try{await startWatching();output.textContent='Ready';}catch(error){output.textCo
     const tapNotification = async (
       title: string,
       label: string,
+      notificationTitle: string | undefined,
     ): Promise<void> => {
       await adb("shell", "cmd", "statusbar", "expand-notifications");
       const observation = await adb(
@@ -367,6 +368,13 @@ try{await startWatching();output.textContent='Ready';}catch(error){output.textCo
         "-e",
         "click",
         "true",
+        ...(notificationTitle === undefined
+          ? []
+          : [
+              "-e",
+              "notificationTitleBase64",
+              Buffer.from(notificationTitle).toString("base64"),
+            ]),
         "dev.muon.e2e.observer.test/androidx.test.runner.AndroidJUnitRunner",
       );
       await writeFile(join(output, `${label}-observer.log`), observation);
@@ -597,7 +605,7 @@ try{await startWatching();output.textContent='Ready';}catch(error){output.textCo
       await evaluate(
         "async()=>{await globalThis.notificationDriver.notifications.post({id:'paused',title:'Muon paused subscription',body:'Still retained',data:{paused:true}});return true;}",
       );
-      await tapNotification("Muon paused subscription", "paused");
+      await tapNotification("Muon paused subscription", "paused", undefined);
       await expect
         .poll(async () =>
           (await records()).some((record) => record.includes("tag=paused ")),
@@ -620,7 +628,7 @@ try{await startWatching();output.textContent='Ready';}catch(error){output.textCo
       await evaluate(
         "async()=>{await globalThis.notificationDriver.notifications.post({id:'action',title:'Muon named action',body:'Open from a named action',data:{order:44},actions:[{id:'default',title:'Muon view order'}]});return true;}",
       );
-      await tapNotification("Muon view order", "action");
+      await tapNotification("Muon view order", "action", "Muon named action");
       await waitForEvent("action");
       expect(await pendingEvents()).toEqual([
         expect.objectContaining({
@@ -650,7 +658,7 @@ try{await startWatching();output.textContent='Ready';}catch(error){output.textCo
       expect(
         (await records()).filter((record) => record.includes("tag=cold ")),
       ).toHaveLength(1);
-      await tapNotification("Muon cold updated", "cold");
+      await tapNotification("Muon cold updated", "cold", undefined);
       await reconnect();
       await waitForEvent("cold");
       const cold = await pendingEvents();

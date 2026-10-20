@@ -38,7 +38,7 @@ public final class NotificationDisplayTest {
             while (!pending.isEmpty()) {
                 AccessibilityNodeInfo node = pending.removeFirst();
                 CharSequence text = node.getText();
-                if (text != null && text.toString().contains(title)) {
+                if (text != null && text.toString().equals(title)) {
                     detail.append("; matched title visible=").append(node.isVisibleToUser());
                     if (node.isVisibleToUser()) return node;
                 }
@@ -57,6 +57,9 @@ public final class NotificationDisplayTest {
         String encoded = arguments.getString("expectedBase64");
         assertNotNull("Specify the notification title in expectedBase64", encoded);
         String title = new String(Base64.decode(encoded, Base64.DEFAULT), StandardCharsets.UTF_8);
+        String containerEncoded = arguments.getString("notificationTitleBase64");
+        String containerTitle = containerEncoded == null ? null
+                : new String(Base64.decode(containerEncoded, Base64.DEFAULT), StandardCharsets.UTF_8);
         UiAutomation automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
         var info = automation.getServiceInfo();
         info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -70,12 +73,28 @@ public final class NotificationDisplayTest {
         try {
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
             AccessibilityNodeInfo found = null;
+            boolean expanded = false;
             long remaining;
             while ((remaining = deadline - System.nanoTime()) > 0
                     && changed.tryAcquire(remaining, TimeUnit.NANOSECONDS)) {
                 changed.drainPermits();
                 found = findTitle(automation, title, diagnostic);
                 if (found != null) break;
+                if (!expanded && containerTitle != null) {
+                    // Only expand the row containing this test's exact title.
+                    // Other notifications can make this row initially collapsed.
+                    AccessibilityNodeInfo container = findTitle(automation, containerTitle, diagnostic);
+                    while (container != null) {
+                        if (container.getActionList().contains(
+                                AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND)) {
+                            assertTrue("The test notification must expand",
+                                    container.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_EXPAND.getId()));
+                            expanded = true;
+                            break;
+                        }
+                        container = container.getParent();
+                    }
+                }
             }
             assertNotNull("The OS notification title must be visible: " + title + ". " + diagnostic.get(), found);
             if ("true".equals(arguments.getString("click"))) {

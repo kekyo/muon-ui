@@ -272,7 +272,9 @@ const requestBrowserClose = async (
     expect(closeResult).toBe("requested");
     return driver;
   } catch (error) {
-    if (!isWindowsRemoteE2e() || !isCdpWebSocketFailure(error)) {
+    // Any platform may close the target before its CDP evaluation responds.
+    // Callers still verify process exit or the remaining browser targets.
+    if (!isCdpWebSocketFailure(error)) {
       throw error;
     }
     driver.close();
@@ -5844,6 +5846,56 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
         })()`),
       ).resolves.toBe("muon test");
     });
+  });
+
+  it.each(["CDP WebSocket closed", "CDP WebSocket failed"])(
+    "accepts CDP teardown while requesting browser close: %s",
+    async (message) => {
+      let closed = false;
+      const unexpectedCall = (): never => {
+        throw new Error("Unexpected CDP operation");
+      };
+      const driver: CdpDriver = {
+        send: unexpectedCall,
+        on: unexpectedCall,
+        waitForEvent: unexpectedCall,
+        navigate: unexpectedCall,
+        screenshot: unexpectedCall,
+        evaluate: async () => {
+          throw new Error(message);
+        },
+        close: () => {
+          closed = true;
+        },
+      };
+
+      await expect(requestBrowserClose(driver)).resolves.toBeUndefined();
+      expect(closed).toBe(true);
+    },
+  );
+
+  it("preserves evaluation errors while requesting browser close", async () => {
+    const error = new Error("Runtime evaluation failed");
+    let closed = false;
+    const unexpectedCall = (): never => {
+      throw new Error("Unexpected CDP operation");
+    };
+    const driver: CdpDriver = {
+      send: unexpectedCall,
+      on: unexpectedCall,
+      waitForEvent: unexpectedCall,
+      navigate: unexpectedCall,
+      screenshot: unexpectedCall,
+      evaluate: async () => {
+        throw error;
+      },
+      close: () => {
+        closed = true;
+      },
+    };
+
+    await expect(requestBrowserClose(driver)).rejects.toBe(error);
+    expect(closed).toBe(false);
   });
 
   it("closes the main browser through the built-in browser API", async () => {

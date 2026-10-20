@@ -1806,4 +1806,36 @@ void explicitOpenPlugin;
       runJavaScriptConsumer(`require("muon-ui");\n`, "cjs"),
     ).resolves.toBeUndefined();
   });
+
+  it.each(["cjs", "android-host"])(
+    "builds loadable %s Node.js modules without losing import metadata",
+    async (mode) => {
+      await mkdir(resolve(".build"), { recursive: true });
+      const output = await mkdtemp(resolve(".build/node-package-"));
+      cleanupDirectories.push(output);
+      const built = await execFileAsync(
+        process.execPath,
+        [
+          resolve("../node_modules/vite/bin/vite.js"),
+          "build",
+          "--mode",
+          mode,
+          "--outDir",
+          output,
+        ],
+        { maxBuffer: 16 * 1024 * 1024 },
+      );
+      expect(`${built.stdout}\n${built.stderr}`).not.toContain(
+        "EMPTY_IMPORT_META",
+      );
+      const loaded = await execFileAsync(process.execPath, [
+        "-e",
+        mode === "cjs"
+          ? "process.stdout.write(typeof require(process.argv[1]));"
+          : "process.stdout.write(typeof require(process.argv[1]).buildAndroidApplication);",
+        join(output, mode === "cjs" ? "vite.cjs" : "index.cjs"),
+      ]);
+      expect(loaded.stdout).toBe("function");
+    },
+  );
 });

@@ -68,6 +68,7 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
       sourcemap: true,
       target: "node20",
       rolldownOptions: {
+        platform: "node",
         external: [
           /^node:/,
           "adm-zip",

@@ -12,6 +12,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.os.Build;
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.view.Choreographer;
@@ -23,6 +24,8 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SdkSuppress;
+import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -316,6 +319,73 @@ public final class MuonInsetsTest {
             JSONObject snapshot = new JSONObject(call(scenario, rotated, "getInsets", new JSONArray()).getString("value"));
             assertEquals("edge-to-edge", snapshot.getString("contentLayout"));
             assertWebContentClearsSystemBars(scenario, rotated);
+        }
+    }
+
+    @Test
+    @SdkSuppress(minSdkVersion = 32)
+    public void preservesRequestedBarsAndSafeAreaAcrossSplitScreen() throws Exception {
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> reference = new AtomicReference<>();
+            scenario.onActivity(reference::set);
+            MuonActivity original = reference.get();
+            assertTrue(original.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            assertFalse(original.isInMultiWindowMode());
+            assertTrue(call(scenario, original, "configure", new JSONArray().put(
+                    "{\"contentLayout\":\"edge-to-edge\",\"statusBar\":{\"visible\":false}}"))
+                    .getBoolean("ok"));
+            JSONObject requested = new JSONObject(call(scenario, original, "getState", new JSONArray())
+                    .getString("value")).getJSONObject("requested");
+            var companionMonitor = instrumentation.addMonitor(MuonWindowActivity.class.getName(), null, false);
+            MuonWindowActivity companion = null;
+            try {
+                // Since API 32, LAUNCH_ADJACENT can enter split screen from a
+                // full-screen task. Observe the resulting Activity mode rather
+                // than assuming the OS accepted the request.
+                scenario.onActivity(activity -> activity.startActivity(
+                        new Intent(activity, MuonWindowActivity.class).addFlags(
+                                Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                                        | Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)));
+                companion = (MuonWindowActivity) instrumentation.waitForMonitorWithTimeout(companionMonitor, 30000);
+                assertNotNull("The companion task must launch", companion);
+                // The old Activity can resume briefly before the split-screen
+                // configuration recreates it. Wait for destruction, not that resume.
+                assertTrue("Entering split screen must recreate the test Activity",
+                        original.awaitDestroyedForTest(30, TimeUnit.SECONDS));
+                scenario.onActivity(reference::set);
+                MuonActivity resized = reference.get();
+                assertTrue(original != resized);
+                assertTrue(resized.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+                assertTrue("The OS must enter split-screen multi-window mode", resized.isInMultiWindowMode());
+                JSONObject state = new JSONObject(call(scenario, resized, "getState", new JSONArray()).getString("value"));
+                assertEquals(requested.toString(), state.getJSONObject("requested").toString());
+                assertWebContentClearsSystemBars(scenario, resized);
+                assertTrue(call(scenario, resized, "configure",
+                        new JSONArray().put("{\"contentLayout\":\"safe-area\"}")).getBoolean("ok"));
+                assertWebContentClearsSystemBars(scenario, resized);
+                MuonWindowActivity closing = companion;
+                instrumentation.runOnMainSync(closing::finishAndRemoveTask);
+                companion = null;
+                assertTrue("Leaving split screen must restore the full window",
+                        resized.awaitDestroyedForTest(30, TimeUnit.SECONDS));
+                scenario.onActivity(reference::set);
+                MuonActivity restored = reference.get();
+                assertTrue(resized != restored);
+                assertTrue(restored.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+                assertFalse(restored.isInMultiWindowMode());
+                assertWebContentClearsSystemBars(scenario, restored);
+                JSONObject restoredState = new JSONObject(call(scenario, restored, "getState", new JSONArray())
+                        .getString("value")).getJSONObject("requested");
+                assertEquals("safe-area", restoredState.getString("contentLayout"));
+                assertFalse(restoredState.getJSONObject("statusBar").getBoolean("visible"));
+            } finally {
+                instrumentation.removeMonitor(companionMonitor);
+                if (companion != null) {
+                    MuonWindowActivity closing = companion;
+                    instrumentation.runOnMainSync(closing::finishAndRemoveTask);
+                }
+            }
         }
     }
 

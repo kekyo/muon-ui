@@ -64,7 +64,7 @@ public final class MuonNotificationServiceTest {
             for (int index = 0; index < operations.length; index++) {
                 String[] operation = operations[index];
                 Result result = new Result();
-                scenario.onActivity(activity -> reference.get().invoke("muon.notifications." + operation[0],
+                scenario.onActivity(activity -> reference.get().invoke(0, "muon.notifications." + operation[0],
                         new JSONArray().put(operation[1]), new byte[0][], result));
                 assertEquals("void", result.await());
                 var active = manager.get().getActiveNotifications();
@@ -72,6 +72,8 @@ public final class MuonNotificationServiceTest {
                 for (var notification : active) {
                     assertNotNull(notification.getNotification().getSmallIcon());
                     assertNotNull(notification.getNotification().contentIntent);
+                    // Notification removal must follow the durable operation commit.
+                    assertEquals(0, notification.getNotification().flags & Notification.FLAG_AUTO_CANCEL);
                     if (notification.getTag().equals("legacy-a")) {
                         assertEquals(index == 2 ? "Updated" : "First",
                                 notification.getNotification().extras.getString(Notification.EXTRA_TITLE));
@@ -83,12 +85,12 @@ public final class MuonNotificationServiceTest {
             }
             for (String path : new String[] { "getChannel", "ensureChannel" }) {
                 Result result = new Result();
-                scenario.onActivity(activity -> reference.get().invoke("muon.android.notifications." + path,
+                scenario.onActivity(activity -> reference.get().invoke(0, "muon.android.notifications." + path,
                         new JSONArray().put("general"), new byte[0][], result));
                 assertTrue(result.await().contains("require Android API 26"));
             }
             Result status = new Result();
-            scenario.onActivity(activity -> reference.get().invoke("muon.notifications.getStatus",
+            scenario.onActivity(activity -> reference.get().invoke(0, "muon.notifications.getStatus",
                     new JSONArray().put("{\"category\":\"general\"}"), new byte[0][], status));
             assertEquals("unknown", new JSONObject(status.await()).getJSONObject("category").getString("state"));
             scenario.onActivity(activity -> reference.get().close());
@@ -108,7 +110,7 @@ public final class MuonNotificationServiceTest {
             });
             for (String category : new String[] { "", ",\"category\":\"missing-category\"" }) {
                 Result result = new Result();
-                scenario.onActivity(activity -> reference.get().invoke("muon.notifications.post",
+                scenario.onActivity(activity -> reference.get().invoke(0, "muon.notifications.post",
                         new JSONArray().put("{\"id\":\"invalid\",\"title\":\"Title\",\"body\":\"\"" + category + "}"),
                         new byte[0][], result));
                 String error = result.await();
@@ -125,7 +127,7 @@ public final class MuonNotificationServiceTest {
                 } catch (Exception error) { throw new AssertionError(error); }
             });
             Result disabled = new Result();
-            scenario.onActivity(activity -> reference.get().invoke("muon.notifications.getCapabilities",
+            scenario.onActivity(activity -> reference.get().invoke(0, "muon.notifications.getCapabilities",
                     new JSONArray(), new byte[0][], disabled));
             assertTrue(disabled.await().contains("disabled"));
             Result settingsAvailable = new Result();
@@ -155,7 +157,7 @@ public final class MuonNotificationServiceTest {
                 reference.set(new MuonAndroidNotificationService(activity, MuonAppConfig.load(activity)));
             });
             Result ensured = new Result();
-            scenario.onActivity(activity -> reference.get().invoke("muon.android.notifications.ensureChannel",
+            scenario.onActivity(activity -> reference.get().invoke(0, "muon.android.notifications.ensureChannel",
                     new JSONArray().put("{\"id\":\"" + id + "\",\"name\":\"Replacement\",\"importance\":\"high\"}"),
                     new byte[0][], ensured));
             JSONObject state = new JSONObject(ensured.await());
@@ -163,7 +165,7 @@ public final class MuonNotificationServiceTest {
             assertEquals("Blocked", state.getString("name"));
             assertFalse(state.getBoolean("enabled"));
             Result status = new Result();
-            scenario.onActivity(activity -> reference.get().invoke("muon.notifications.getStatus",
+            scenario.onActivity(activity -> reference.get().invoke(0, "muon.notifications.getStatus",
                     new JSONArray().put("{\"category\":\"" + id + "\"}"), new byte[0][], status));
             assertEquals("disabled", new JSONObject(status.await()).getJSONObject("category").getString("state"));
             scenario.onActivity(activity -> reference.get().close());

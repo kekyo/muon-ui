@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.util.Log;
@@ -111,6 +112,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
                 }
             });
             bridge = new MuonRpcBridge(activity, webView, this, config);
+            bridge.onNotificationIntent(activity.getIntent());
             bridge.getSystemBarsService().attach(content, this::updateInsets);
             if (bridge.isNativeHostReady()) {
                 onNativeHostReady(bridge);
@@ -192,6 +194,10 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
 
     void setResumed(boolean value) {
         if (bridge != null) { bridge.setResumed(value); }
+    }
+
+    void onNotificationIntent(Intent intent) {
+        if (bridge != null) { bridge.onNotificationIntent(intent); }
     }
 
     boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {

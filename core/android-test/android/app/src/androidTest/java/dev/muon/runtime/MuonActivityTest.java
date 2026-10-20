@@ -158,7 +158,7 @@ public final class MuonActivityTest {
                     api.getJSONArray("namespaces").toString());
             assertEquals(8, api.getJSONArray("browser").length());
             assertEquals(22, api.getJSONArray("fs").length());
-            assertEquals("[\"post\",\"cancel\",\"getStatus\",\"getCapabilities\"]", api.getJSONArray("notifications").toString());
+            assertEquals("[\"post\",\"cancel\",\"getStatus\",\"getCapabilities\",\"getPendingEvents\",\"acknowledgeEvent\",\"watchEvents\"]", api.getJSONArray("notifications").toString());
             assertEquals("[\"configure\",\"getState\",\"getInsets\",\"watchInsets\"]", api.getJSONArray("systemBars").toString());
             assertFalse(api.getBoolean("hasHardReload"));
         }

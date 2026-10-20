@@ -20,7 +20,10 @@ import android.app.NotificationManager;
 import android.app.NotificationChannel;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import android.view.accessibility.AccessibilityNodeInfo;
 import androidx.lifecycle.Lifecycle;
@@ -141,6 +144,8 @@ public final class MuonNotificationPermissionDialogTest {
                     assertEquals(0, activity.getNativePendingCallCountForTest());
                 }
                 NotificationManager manager = activity.getSystemService(NotificationManager.class);
+                setNotificationObservation(automation, true);
+                assertTrue(MuonNotificationObserver.awaitConnected(30, TimeUnit.SECONDS));
                 if (Build.VERSION.SDK_INT >= 26) {
                     manager.createNotificationChannel(new NotificationChannel("post-blocked", "Blocked", NotificationManager.IMPORTANCE_NONE));
                     activity.clearTestMessages();
@@ -167,12 +172,21 @@ public final class MuonNotificationPermissionDialogTest {
                                     + operation[0] + "',[" + JSONObject.quote(operation[1]) + "]);"
                                     + "muonAndroidTest.postMessage('posted');}catch(error){muonAndroidTest.postMessage(String(error));}})();", null));
                     assertEquals("posted", activity.awaitTestMessage(30, TimeUnit.SECONDS));
-                    var notifications = manager.getActiveNotifications();
+                    final int step = index;
+                    var notifications = MuonNotificationObserver.awaitActive(manager, active -> {
+                        if (active.length != new int[] { 1, 2, 2, 1, 0 }[step]) { return false; }
+                        for (var notification : active) {
+                            if (notification.getTag().equals("posting-a") && !(step == 2 ? "Updated" : "First")
+                                    .equals(notification.getNotification().extras.getString(Notification.EXTRA_TITLE))) { return false; }
+                        }
+                        return true;
+                    });
                     assertEquals(new int[] { 1, 2, 2, 1, 0 }[index], notifications.length);
                     for (var notification : notifications) {
                         assertNotNull(notification.getNotification().getSmallIcon());
                         assertNotNull(notification.getNotification().contentIntent);
-                        assertTrue((notification.getNotification().flags & Notification.FLAG_AUTO_CANCEL) != 0);
+                        // Notification removal must follow the durable operation commit.
+                        assertEquals(0, notification.getNotification().flags & Notification.FLAG_AUTO_CANCEL);
                         if (notification.getTag().equals("posting-a")) {
                             assertEquals(index == 2 ? "Updated" : "First",
                                     notification.getNotification().extras.getString(Notification.EXTRA_TITLE));
@@ -185,24 +199,161 @@ public final class MuonNotificationPermissionDialogTest {
                         }
                     }
                 }
-                scenario.recreate();
-                scenario.onActivity(reference::set);
-                MuonActivity recreated = reference.get();
-                assertTrue(recreated.awaitPageReadyForTest(30, TimeUnit.SECONDS));
-                recreated.clearTestMessages();
-                scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(
-                        "void (async()=>{const value=await __muon_plugin_call('android-notifications-capability',"
-                                + "'muon.android.notifications.getPermissionState',[]);muonAndroidTest.postMessage(value);})();", null));
-                String restored = recreated.awaitTestMessage(30, TimeUnit.SECONDS);
-                assertNotNull(restored);
-                JSONObject state = new JSONObject(restored);
-                assertEquals("granted", state.getString("runtimePermission"));
-                assertTrue(state.getBoolean("requestedBefore"));
+                activity.clearTestMessages();
+                scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                        void (async()=>{try{await __muon_plugin_call('notifications-capability','muon.notifications.post',
+                          [JSON.stringify({id:'event-default',title:'Event notification',body:'',data:{screen:'inbox'}})]);
+                          muonAndroidTest.postMessage('event-posted');}catch(error){muonAndroidTest.postMessage(String(error));}})();
+                        """, null));
+                assertEquals("event-posted", activity.awaitTestMessage(30, TimeUnit.SECONDS));
+                var posted = MuonNotificationObserver.awaitActive(manager, active -> active.length == 1);
+                assertEquals(1, posted.length);
+                // ActivityScenario matches the original Intent and cannot follow setIntent on notification activation.
+                scenario.close();
+                var monitor = instrumentation.addMonitor(MuonActivity.class.getName(), null, false);
+                AtomicReference<MuonActivity> currentActivity = new AtomicReference<>();
+                int originalRequestedOrientation = activity.getRequestedOrientation();
+                try {
+                    posted[0].getNotification().contentIntent.send();
+                    MuonActivity activated = (MuonActivity) instrumentation.waitForMonitorWithTimeout(monitor, 30000);
+                    assertNotNull(activated);
+                    currentActivity.set(activated);
+                    assertTrue(activated.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+                    activated.clearTestMessages();
+                    instrumentation.runOnMainSync(() -> activated.getWebViewForTest().evaluateJavascript("""
+                            void (async()=>{try{const events=await __muon_plugin_call('notifications-capability',
+                              'muon.notifications.getPendingEvents',[]);muonAndroidTest.postMessage(events);
+                            }catch(error){muonAndroidTest.postMessage(JSON.stringify({error:String(error)}));}})();
+                            """, null));
+                    String pendingEvents = activated.awaitTestMessage(30, TimeUnit.SECONDS);
+                    assertNotNull(pendingEvents);
+                    org.json.JSONArray events = new org.json.JSONArray(pendingEvents);
+                    assertEquals(1, events.length());
+                    JSONObject event = events.getJSONObject(0);
+                    assertEquals("event-default", event.getString("id"));
+                    assertEquals("activate", event.getString("type"));
+                    assertTrue(event.isNull("actionId"));
+                    assertEquals("inbox", event.getJSONObject("data").getString("screen"));
+                    assertEquals(0, MuonNotificationObserver.awaitActive(manager, active -> active.length == 0).length);
+                    var recreationMonitor = instrumentation.addMonitor(MuonActivity.class.getName(), null, false);
+                    MuonActivity recreated;
+                    try {
+                        instrumentation.runOnMainSync(activated::recreate);
+                        recreated = (MuonActivity) instrumentation.waitForMonitorWithTimeout(recreationMonitor, 30000);
+                    } finally { instrumentation.removeMonitor(recreationMonitor); }
+                    assertNotNull(recreated);
+                    assertTrue(activated != recreated);
+                    currentActivity.set(recreated);
+                    assertTrue(recreated.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+                    recreated.clearTestMessages();
+                    instrumentation.runOnMainSync(() -> recreated.getWebViewForTest().evaluateJavascript(
+                            "void (async()=>{const value=await __muon_plugin_call('android-notifications-capability',"
+                                    + "'muon.android.notifications.getPermissionState',[]);"
+                                    + "const events=JSON.parse(await __muon_plugin_call('notifications-capability','muon.notifications.getPendingEvents',[]));"
+                                    + "muonAndroidTest.postMessage(JSON.stringify({state:JSON.parse(value),events}));})();", null));
+                    String restored = recreated.awaitTestMessage(30, TimeUnit.SECONDS);
+                    assertNotNull(restored);
+                    JSONObject restoredReply = new JSONObject(restored);
+                    JSONObject state = restoredReply.getJSONObject("state");
+                    assertEquals("granted", state.getString("runtimePermission"));
+                    assertTrue(state.getBoolean("requestedBefore"));
+                    assertEquals(1, restoredReply.getJSONArray("events").length());
+                    assertEquals(event.getString("eventId"), restoredReply.getJSONArray("events").getJSONObject(0).getString("eventId"));
+                    int originalOrientation = recreated.getResources().getConfiguration().orientation;
+                    int otherOrientation = originalOrientation == Configuration.ORIENTATION_PORTRAIT
+                            ? Configuration.ORIENTATION_LANDSCAPE : Configuration.ORIENTATION_PORTRAIT;
+                    for (int orientation : new int[] { otherOrientation, originalOrientation }) {
+                        MuonActivity previous = currentActivity.get();
+                        var rotationMonitor = instrumentation.addMonitor(MuonActivity.class.getName(), null, false);
+                        MuonActivity rotated;
+                        try {
+                            instrumentation.runOnMainSync(() -> previous.setRequestedOrientation(
+                                    orientation == Configuration.ORIENTATION_PORTRAIT ? ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                            : ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+                            rotated = (MuonActivity) instrumentation.waitForMonitorWithTimeout(rotationMonitor, 30000);
+                        } finally { instrumentation.removeMonitor(rotationMonitor); }
+                        assertNotNull(rotated);
+                        assertTrue(previous != rotated);
+                        currentActivity.set(rotated);
+                        assertTrue(rotated.awaitResumedForTest(30, TimeUnit.SECONDS));
+                        assertEquals(orientation, rotated.getResources().getConfiguration().orientation);
+                        assertTrue(rotated.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+                        rotated.clearTestMessages();
+                        instrumentation.runOnMainSync(() -> rotated.getWebViewForTest().evaluateJavascript(
+                                "void (async()=>{muonAndroidTest.postMessage(await __muon_plugin_call('notifications-capability',"
+                                        + "'muon.notifications.getPendingEvents',[]));})();", null));
+                        String rotatedEvents = rotated.awaitTestMessage(30, TimeUnit.SECONDS);
+                        assertNotNull(rotatedEvents);
+                        var retained = new org.json.JSONArray(rotatedEvents);
+                        assertEquals(1, retained.length());
+                        assertEquals(event.toString(), retained.getJSONObject(0).toString());
+                    }
+                    String eventId = event.getString("eventId");
+                    instrumentation.runOnMainSync(() -> currentActivity.get().getWebViewForTest().evaluateJavascript(
+                            "void (async()=>{await __muon_plugin_call('notifications-capability','muon.notifications.acknowledgeEvent',["
+                                    + JSONObject.quote(eventId) + "]);muonAndroidTest.postMessage('acknowledged');})();", null));
+                    assertEquals("acknowledged", currentActivity.get().awaitTestMessage(30, TimeUnit.SECONDS));
+                    instrumentation.runOnMainSync(() -> currentActivity.get().getWebViewForTest().evaluateJavascript("""
+                            void (async()=>{await __muon_plugin_call('notifications-capability','muon.notifications.post',
+                              [JSON.stringify({id:'event-action',title:'Action notification',body:'',data:{screen:'detail'},
+                                actions:[{id:'default',title:'Open detail'}]})]);muonAndroidTest.postMessage('action-posted');})();
+                            """, null));
+                    assertEquals("action-posted", currentActivity.get().awaitTestMessage(30, TimeUnit.SECONDS));
+                    var actionPosted = MuonNotificationObserver.awaitActive(manager, active -> active.length == 1);
+                    assertEquals(1, actionPosted.length);
+                    Notification actionNotification = actionPosted[0].getNotification();
+                    assertEquals(1, actionNotification.actions.length);
+                    actionNotification.actions[0].actionIntent.send();
+                    assertNotNull(currentActivity.get().awaitNotificationIntentForTest(30, TimeUnit.SECONDS));
+                    String readEvents = "void (async()=>{muonAndroidTest.postMessage(await __muon_plugin_call('notifications-capability',"
+                            + "'muon.notifications.getPendingEvents',[]));})();";
+                    instrumentation.runOnMainSync(() -> currentActivity.get().getWebViewForTest().evaluateJavascript(readEvents, null));
+                    String actionEvents = currentActivity.get().awaitTestMessage(30, TimeUnit.SECONDS);
+                    assertNotNull(actionEvents);
+                    var operated = new org.json.JSONArray(actionEvents);
+                    assertEquals(1, operated.length());
+                    JSONObject actionEvent = operated.getJSONObject(0);
+                    assertEquals("action", actionEvent.getString("type"));
+                    assertEquals("default", actionEvent.getString("actionId"));
+                    assertEquals("detail", actionEvent.getJSONObject("data").getString("screen"));
+                    assertEquals(0, MuonNotificationObserver.awaitActive(manager, active -> active.length == 0).length);
+                    // A delayed default tap cannot replace the revision's first named operation.
+                    actionNotification.contentIntent.send();
+                    assertNotNull(currentActivity.get().awaitNotificationIntentForTest(30, TimeUnit.SECONDS));
+                    instrumentation.runOnMainSync(() -> currentActivity.get().getWebViewForTest().evaluateJavascript(readEvents, null));
+                    String repeatedEvents = currentActivity.get().awaitTestMessage(30, TimeUnit.SECONDS);
+                    assertNotNull(repeatedEvents);
+                    var repeated = new org.json.JSONArray(repeatedEvents);
+                    assertEquals(1, repeated.length());
+                    assertEquals(actionEvent.toString(), repeated.getJSONObject(0).toString());
+                    instrumentation.runOnMainSync(() -> currentActivity.get().getWebViewForTest().evaluateJavascript(
+                            "void (async()=>{await __muon_plugin_call('notifications-capability','muon.notifications.acknowledgeEvent',["
+                                    + JSONObject.quote(actionEvent.optString("eventId")) + "]);muonAndroidTest.postMessage('acknowledged');})();", null));
+                    assertEquals("acknowledged", currentActivity.get().awaitTestMessage(30, TimeUnit.SECONDS));
+                } finally {
+                    instrumentation.removeMonitor(monitor);
+                    instrumentation.runOnMainSync(() -> {
+                        if (currentActivity.get() != null) {
+                            currentActivity.get().setRequestedOrientation(originalRequestedOrientation);
+                            currentActivity.get().finish();
+                        }
+                    });
+                }
             }
         } finally {
+            setNotificationObservation(automation, false);
             automationInfo.flags = originalFlags;
             automation.setServiceInfo(automationInfo);
             automation.setOnAccessibilityEventListener(null);
+        }
+    }
+
+    private static void setNotificationObservation(UiAutomation automation, boolean enabled) throws Exception {
+        String command = "cmd notification " + (enabled ? "allow_listener " : "disallow_listener ")
+                + "dev.muon.testhost/dev.muon.runtime.MuonNotificationObserver";
+        try (var stream = new ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command))) {
+            byte[] output = new byte[1024];
+            while (stream.read(output) != -1) { /* Wait for the shell command to finish. */ }
         }
     }
 

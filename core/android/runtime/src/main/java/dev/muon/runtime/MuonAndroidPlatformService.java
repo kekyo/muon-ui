@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -103,7 +104,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             return;
         }
         if (functionPath.startsWith("muon.notifications.") || functionPath.startsWith("muon.android.notifications.")) {
-            notificationService.invoke(functionPath, arguments, attachments, completion);
+            notificationService.invoke(callId, functionPath, arguments, attachments, completion);
             return;
         }
         if (arguments.length() != 0 || attachments.length != 0) {
@@ -170,18 +171,23 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         filesystemService.cancel(callId);
         systemBarsService.cancel(callId);
         notificationPermissionService.cancel(callId);
+        notificationService.cancel(callId);
     }
 
     void cancelAll() {
         filesystemService.cancelAll();
         systemBarsService.cancelAll();
         notificationPermissionService.cancelAll();
+        notificationService.cancelAll();
     }
 
     void setResumed(boolean value) {
         settingsService.setResumed(value);
         notificationPermissionService.setResumed(value);
     }
+
+    void onNotificationIntent(Intent intent) { notificationService.onNotificationIntent(intent); }
+    int getActiveNotificationWatchCount() { return notificationService.getActiveWatchCount(); }
 
     boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
         return notificationPermissionService.onRequestPermissionsResult(code, permissions, results);

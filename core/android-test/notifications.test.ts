@@ -81,7 +81,7 @@ describe('local notification APIs', () => {
     { id: '', title: 'T', body: 'B' },
     { id: 'x', title: '', body: 'B' },
     { id: 'x', title: 'T', body: 'B', category: '' },
-    { id: 'x', title: 'T', body: 'B', actions: [] },
+    { id: 'x', title: 'T', body: 'B', silent: true },
     { id: 'x', title: 'T', body: 'B', data: { missing: undefined } },
     { id: 'x', title: 'T', body: 'B', data: Number.NaN },
     { id: 'x', title: 'T', body: 'B', data: new Date() },

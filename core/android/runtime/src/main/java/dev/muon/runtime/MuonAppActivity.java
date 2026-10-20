@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.webkit.WebView;
 import androidx.annotation.NonNull;
@@ -36,6 +37,12 @@ public final class MuonAppActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (host != null) { host.setResumed(true); }
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (host != null) { host.onNotificationIntent(intent); }
     }
 
     @Override protected void onPause() {

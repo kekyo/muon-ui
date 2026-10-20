@@ -35,7 +35,7 @@ public final class MuonNotificationTest {
                     "muon.notifications.getCapabilities", new JSONArray()));
             assertEquals(6, capabilities.length());
             for (String name : new String[] { "interaction", "launch", "actions" }) {
-                assertEquals("unsupported", capabilities.getJSONObject(name).getString("state"));
+                assertEquals("supported", capabilities.getJSONObject(name).getString("state"));
             }
             assertEquals("supported", capabilities.getJSONObject("persistence").getString("state"));
             assertEquals("supported", capabilities.getJSONObject("appStatus").getString("state"));
@@ -96,7 +96,7 @@ public final class MuonNotificationTest {
             assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
             for (String options : new String[] {
                     "{\"id\":\"x\",\"title\":\"Title\",\"body\":\"\",\"category\":\"missing\"}",
-                    "{\"id\":\"x\",\"title\":\"Title\",\"body\":\"\",\"actions\":[]}",
+                    "{\"id\":\"x\",\"title\":\"Title\",\"body\":\"\",\"actions\":[{\"id\":\"same\",\"title\":\"First\"},{\"id\":\"same\",\"title\":\"Second\"}]}",
                     "{\"id\":\"\",\"title\":\"Title\",\"body\":\"\"}" }) {
                 assertFalse(options, call(scenario, activity, "notifications-capability", "muon.notifications.post",
                         new JSONArray().put(options)).getBoolean("ok"));

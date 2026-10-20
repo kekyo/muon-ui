@@ -8,13 +8,17 @@ package dev.muon.runtime;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.Context;
+import android.net.Uri;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Looper;
+import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -26,6 +30,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.UUID;
+import java.util.function.Consumer;
 
 /** Posts application-owned local notifications independently of document lifetime. */
 final class MuonAndroidNotificationService implements AutoCloseable {
@@ -34,14 +42,35 @@ final class MuonAndroidNotificationService implements AutoCloseable {
     @Nullable private Activity activity;
     private final NotificationManager manager;
     private final boolean enabled;
+    private final Context context;
+    @Nullable private final MuonNotificationRuntime runtime;
+    private final Map<Integer, MuonAndroidPlatformService.Completion> asynchronous = new HashMap<>();
+    private final Map<Integer, String> acquisitions = new HashMap<>();
+    private final Map<String, Long> leases = new HashMap<>();
+    private final Map<Integer, PendingWatch> pendingWatches = new HashMap<>();
+    private final Runnable eventsChanged = this::readPendingWatches;
     private final Map<String, JSONObject> staticChannels = new HashMap<>();
     @Nullable private String defaultCategory;
     private int smallIcon;
+
+    private static final class PendingWatch {
+        final String token;
+        final long afterCursor;
+        final MuonAndroidPlatformService.Completion completion;
+        boolean reading;
+        PendingWatch(String token, long afterCursor, MuonAndroidPlatformService.Completion completion) {
+            this.token = token;
+            this.afterCursor = afterCursor;
+            this.completion = completion;
+        }
+    }
 
     MuonAndroidNotificationService(@NonNull Activity activity, @NonNull MuonAppConfig config) {
         this.activity = activity;
         manager = activity.getSystemService(NotificationManager.class);
         enabled = config.notificationsEnabled;
+        context = activity.getApplicationContext();
+        runtime = enabled ? MuonNotificationRuntime.get(context) : null;
         if (!enabled) { return; }
         try {
             if (config.notifications.has("defaultCategory")) {
@@ -76,7 +105,7 @@ final class MuonAndroidNotificationService implements AutoCloseable {
         }
     }
 
-    void invoke(@NonNull String path, @NonNull JSONArray arguments, @NonNull byte[][] attachments,
+    void invoke(int callId, @NonNull String path, @NonNull JSONArray arguments, @NonNull byte[][] attachments,
             @NonNull MuonAndroidPlatformService.Completion completion) {
         try {
             Activity current = requireActivity();
@@ -84,12 +113,27 @@ final class MuonAndroidNotificationService implements AutoCloseable {
             if (attachments.length != 0) { throw new IllegalArgumentException("Notifications do not accept attachments"); }
             switch (path) {
                 case "muon.notifications.post":
-                    post(current, objectArgument(arguments));
-                    completion.completeVoid();
+                    post(callId, current, objectArgument(arguments), completion);
                     return;
-                case "muon.notifications.cancel":
-                    manager.cancel(stringArgument(arguments, "id"), NOTIFICATION_ID);
-                    completion.completeVoid();
+                case "muon.notifications.cancel": {
+                    String id = stringArgument(arguments, "id");
+                    execute(callId, store -> { store.cancel(id, () -> manager.cancel(id, NOTIFICATION_ID)); return null; },
+                            completion, value -> completion.completeVoid());
+                    return;
+                }
+                case "muon.notifications.getPendingEvents":
+                    noArguments(arguments);
+                    execute(callId, store -> store.snapshot(-1).getJSONArray("events"), completion,
+                            value -> completion.completeString(value.toString()));
+                    return;
+                case "muon.notifications.acknowledgeEvent": {
+                    String eventId = stringArgument(arguments, "eventId");
+                    execute(callId, store -> { store.acknowledge(eventId); return null; }, completion,
+                            value -> completion.completeVoid());
+                    return;
+                }
+                case "muon.notifications.watchEvents":
+                    watch(callId, objectArgument(arguments), completion);
                     return;
                 case "muon.notifications.getStatus": {
                     JSONObject options = objectArgument(arguments);
@@ -111,10 +155,10 @@ final class MuonAndroidNotificationService implements AutoCloseable {
                 case "muon.notifications.getCapabilities":
                     noArguments(arguments);
                     completion.completeString(new JSONObject()
-                            .put("interaction", capability(false, "Notification events are not implemented"))
-                            .put("launch", capability(false, "Notification launch events are not implemented"))
+                            .put("interaction", capability(true, null))
+                            .put("launch", capability(true, null))
                             .put("persistence", capability(true, "Regular process exit is supported; force-stop is excluded"))
-                            .put("actions", capability(false, "Notification actions are not implemented"))
+                            .put("actions", capability(true, null))
                             .put("appStatus", capability(true, null))
                             .put("categoryStatus", capability(Build.VERSION.SDK_INT >= 26, CHANNELS_UNSUPPORTED)).toString());
                     return;
@@ -141,8 +185,9 @@ final class MuonAndroidNotificationService implements AutoCloseable {
         }
     }
 
-    private void post(Activity current, JSONObject options) throws JSONException {
-        keys(options, "id", "title", "body", "category", "data");
+    private void post(int callId, Activity current, JSONObject options,
+            MuonAndroidPlatformService.Completion completion) throws JSONException {
+        keys(options, "id", "title", "body", "category", "data", "actions");
         String id = identifier(options.get("id"), "id");
         String title = text(options.get("title"), "title", 1024, true);
         String body = text(options.get("body"), "body", 4096, false);
@@ -152,7 +197,8 @@ final class MuonAndroidNotificationService implements AutoCloseable {
         Object data = options.has("data") ? options.get("data") : JSONObject.NULL;
         validateData(data, 0);
         String wrapped = new JSONArray().put(data).toString();
-        if (wrapped.substring(1, wrapped.length() - 1).getBytes(StandardCharsets.UTF_8).length > 16384) {
+        String dataJson = wrapped.substring(1, wrapped.length() - 1);
+        if (dataJson.getBytes(StandardCharsets.UTF_8).length > 16384) {
             throw new IllegalArgumentException("Notification data exceeds 16384 UTF-8 bytes");
         }
         JSONObject app = appStatus(current);
@@ -162,24 +208,60 @@ final class MuonAndroidNotificationService implements AutoCloseable {
         if (Build.VERSION.SDK_INT >= 26 && !channelEnabled(category)) {
             throw new IllegalStateException("The notification channel is disabled: " + category);
         }
-        Intent intent = new Intent(current, current.getClass())
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent content = PendingIntent.getActivity(current, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        var builder = new NotificationCompat.Builder(current, category)
+        JSONArray actions = options.has("actions") ? options.getJSONArray("actions") : new JSONArray();
+        if (actions.length() > 3) { throw new IllegalArgumentException("Notifications support at most 3 actions"); }
+        HashSet<String> actionIds = new HashSet<>();
+        for (int i = 0; i < actions.length(); i++) {
+            JSONObject action = actions.getJSONObject(i);
+            keys(action, "id", "title");
+            String actionId = identifier(action.get("id"), "action id");
+            text(action.get("title"), "action title", 128, true);
+            if (!actionIds.add(actionId)) { throw new IllegalArgumentException("Notification action ids must be unique"); }
+        }
+        Class<? extends Activity> target = current.getClass();
+        execute(callId, store -> {
+            JSONObject status = appStatus(context);
+            if (status.getString("state").equals("disabled")) { throw new IllegalStateException(status.getString("reason")); }
+            if (Build.VERSION.SDK_INT >= 26 && !channelEnabled(category)) {
+                throw new IllegalStateException("The notification channel is disabled: " + category);
+            }
+            store.post(id, dataJson, actions.toString(), token -> manager.notify(id, NOTIFICATION_ID,
+                    createNotification(target, token, title, body, category, actions)));
+            return null;
+        }, completion, value -> completion.completeVoid());
+    }
+
+    private Notification createNotification(Class<? extends Activity> target, String token,
+            String title, String body, String category, JSONArray actions) {
+        var builder = new NotificationCompat.Builder(context, category)
                 .setSmallIcon(smallIcon).setContentTitle(title).setContentText(body)
-                .setContentIntent(content).setAutoCancel(true);
+                // The operation is persisted before this runtime requests removal.
+                .setContentIntent(operationIntent(target, token, null)).setAutoCancel(false);
+        for (int i = 0; i < actions.length(); i++) {
+            JSONObject action = actions.optJSONObject(i);
+            builder.addAction(new NotificationCompat.Action.Builder(0, action.optString("title"),
+                    operationIntent(target, token, action.optString("id"))).build());
+        }
         if (Build.VERSION.SDK_INT < 26) {
-            String importance = staticChannels.get(category).getString("importance");
+            String importance = staticChannels.get(category).optString("importance");
             builder.setPriority(importance.equals("min") ? NotificationCompat.PRIORITY_MIN
                     : importance.equals("low") ? NotificationCompat.PRIORITY_LOW
                     : importance.equals("high") ? NotificationCompat.PRIORITY_HIGH : NotificationCompat.PRIORITY_DEFAULT);
         }
-        // Returning means the platform submission call completed, not that the user saw it.
-        manager.notify(id, NOTIFICATION_ID, builder.build());
+        return builder.build();
     }
 
-    private JSONObject appStatus(Activity current) throws JSONException {
+    private PendingIntent operationIntent(Class<? extends Activity> target, String token, @Nullable String actionId) {
+        Uri.Builder uri = new Uri.Builder().scheme("muon-notification").authority(context.getPackageName())
+                .appendPath(token).appendPath(actionId == null ? "activate" : "action");
+        if (actionId != null) { uri.appendPath(actionId); }
+        // Extras do not distinguish PendingIntents. Revision and action belong in the data URI.
+        Intent intent = new Intent(context, target).setData(uri.build())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        return PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
+    private JSONObject appStatus(Context current) throws JSONException {
         if (Build.VERSION.SDK_INT >= 33
                 && current.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return status("disabled", "Notification runtime permission is not granted");
@@ -187,6 +269,145 @@ final class MuonAndroidNotificationService implements AutoCloseable {
         return manager.areNotificationsEnabled() ? status("enabled", null)
                 : status("disabled", "Application notifications are disabled");
     }
+
+    void onNotificationIntent(@Nullable Intent intent) {
+        if (!enabled || intent == null || intent.getData() == null) { return; }
+        Uri uri = intent.getData();
+        if (!"muon-notification".equals(uri.getScheme()) || !context.getPackageName().equals(uri.getAuthority())
+                || uri.getQuery() != null || uri.getFragment() != null) { return; }
+        var parts = uri.getPathSegments();
+        if (parts.size() != 2 && parts.size() != 3) { return; }
+        String token = parts.get(0);
+        String type = parts.get(1);
+        String actionId = parts.size() == 3 ? parts.get(2) : null;
+        try {
+            if (!UUID.fromString(token).toString().equals(token)) { return; }
+        } catch (IllegalArgumentException error) { return; }
+        MuonNotificationRuntime applicationRuntime = runtime;
+        applicationRuntime.activate(token, type, actionId,
+                id -> manager.cancel(id, NOTIFICATION_ID), new MuonNotificationRuntime.Result() {
+            @Override public void complete(Object result) {}
+            @Override public void fail(String diagnostic) { Log.e("MuonNotifications", "Could not complete notification operation: " + diagnostic); }
+        });
+    }
+
+    private void execute(int callId, MuonNotificationRuntime.Operation operation,
+            MuonAndroidPlatformService.Completion completion, Consumer<Object> success) {
+        asynchronous.put(callId, completion);
+        runtime.execute(operation, new MuonNotificationRuntime.Result() {
+            @Override public void complete(Object value) {
+                if (asynchronous.get(callId) == completion) {
+                    asynchronous.remove(callId);
+                    success.accept(value);
+                }
+            }
+            @Override public void fail(String diagnostic) {
+                if (asynchronous.get(callId) == completion) {
+                    asynchronous.remove(callId);
+                    String token = acquisitions.remove(callId);
+                    if (token != null) { releaseWatch(token); }
+                    completion.fail(diagnostic);
+                }
+            }
+        });
+    }
+
+    private void watch(int callId, JSONObject options, MuonAndroidPlatformService.Completion completion) throws JSONException {
+        String operation = text(options.get("operation"), "watch operation", 16, true);
+        if (operation.equals("acquire")) {
+            keys(options, "operation");
+            String token = UUID.randomUUID().toString();
+            leases.put(token, 0L);
+            acquisitions.put(callId, token);
+            runtime.addListener(eventsChanged);
+            execute(callId, store -> store.snapshot(-1).getLong("cursor"), completion, value -> {
+                acquisitions.remove(callId);
+                long cursor = (Long) value;
+                leases.put(token, cursor);
+                completion.completeString("{\"token\":\"" + token + "\",\"cursor\":" + cursor + "}");
+            });
+            return;
+        }
+        if (!operation.equals("next") && !operation.equals("release")) {
+            throw new IllegalArgumentException("Unknown notification watch operation");
+        }
+        keys(options, operation.equals("next") ? new String[] { "operation", "token", "afterCursor" }
+                : new String[] { "operation", "token" });
+        String token = identifier(options.get("token"), "watch token");
+        if (operation.equals("release")) {
+            releaseWatch(token);
+            completion.completeVoid();
+            return;
+        }
+        if (!leases.containsKey(token)) { throw new IllegalArgumentException("Notification subscription is not active"); }
+        Object after = options.opt("afterCursor");
+        if (!(after instanceof Number) || !Double.isFinite(((Number) after).doubleValue())
+                || ((Number) after).doubleValue() != ((Number) after).longValue()
+                || ((Number) after).longValue() < 0 || ((Number) after).longValue() > 9007199254740991L) {
+            throw new IllegalArgumentException("Notification cursor must be a nonnegative safe integer");
+        }
+        for (PendingWatch pending : pendingWatches.values()) {
+            if (pending.token.equals(token)) { throw new IllegalArgumentException("Notification subscription already has a pending call"); }
+        }
+        pendingWatches.put(callId, new PendingWatch(token, ((Number) after).longValue(), completion));
+        readPendingWatches();
+    }
+
+    private void readPendingWatches() {
+        for (Map.Entry<Integer, PendingWatch> entry : new ArrayList<>(pendingWatches.entrySet())) {
+            int callId = entry.getKey();
+            PendingWatch pending = entry.getValue();
+            if (pending.reading) { continue; }
+            pending.reading = true;
+            runtime.execute(store -> store.snapshot(pending.afterCursor), new MuonNotificationRuntime.Result() {
+                @Override public void complete(Object value) {
+                    if (pendingWatches.get(callId) != pending) { return; }
+                    pending.reading = false;
+                    JSONObject snapshot = (JSONObject) value;
+                    long cursor = snapshot.optLong("cursor");
+                    leases.put(pending.token, cursor);
+                    if (cursor > pending.afterCursor) {
+                        pendingWatches.remove(callId);
+                        pending.completion.completeString(snapshot.toString());
+                    }
+                }
+                @Override public void fail(String diagnostic) {
+                    if (pendingWatches.get(callId) == pending) {
+                        pendingWatches.remove(callId);
+                        pending.completion.fail(diagnostic);
+                    }
+                }
+            });
+        }
+    }
+
+    private void releaseWatch(String token) {
+        Long cursor = leases.remove(token);
+        for (Map.Entry<Integer, PendingWatch> entry : new ArrayList<>(pendingWatches.entrySet())) {
+            if (entry.getValue().token.equals(token)) {
+                pendingWatches.remove(entry.getKey());
+                entry.getValue().completion.completeString("{\"events\":null,\"cursor\":" + (cursor == null ? 0 : cursor) + "}");
+            }
+        }
+        if (leases.isEmpty() && runtime != null) { runtime.removeListener(eventsChanged); }
+    }
+
+    void cancel(int callId) {
+        asynchronous.remove(callId);
+        pendingWatches.remove(callId);
+        String token = acquisitions.remove(callId);
+        if (token != null) { releaseWatch(token); }
+    }
+
+    void cancelAll() {
+        asynchronous.clear();
+        acquisitions.clear();
+        pendingWatches.clear();
+        leases.clear();
+        if (runtime != null) { runtime.removeListener(eventsChanged); }
+    }
+
+    int getActiveWatchCount() { return leases.size(); }
 
     boolean hasChannel(String id) {
         // Settings remain available even when notification APIs are disabled.
@@ -324,5 +545,5 @@ final class MuonAndroidNotificationService implements AutoCloseable {
         return activity;
     }
 
-    @Override public void close() { activity = null; }
+    @Override public void close() { cancelAll(); activity = null; }
 }

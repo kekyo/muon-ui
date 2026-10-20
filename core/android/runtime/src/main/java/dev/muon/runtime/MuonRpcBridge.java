@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 
 import android.net.Uri;
 import android.os.Handler;
@@ -846,6 +847,8 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     }
 
     void setResumed(boolean value) { platformService.setResumed(value); }
+    void onNotificationIntent(Intent intent) { platformService.onNotificationIntent(intent); }
+    int getActiveNotificationWatchCountForTest() { return platformService.getActiveNotificationWatchCount(); }
 
     boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
         return platformService.onRequestPermissionsResult(code, permissions, results);

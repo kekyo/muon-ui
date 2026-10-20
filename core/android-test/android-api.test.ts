@@ -62,6 +62,9 @@ const expectedFunctionPaths = [
   'muon.notifications.cancel',
   'muon.notifications.getStatus',
   'muon.notifications.getCapabilities',
+  'muon.notifications.getPendingEvents',
+  'muon.notifications.watchEvents',
+  'muon.notifications.acknowledgeEvent',
 ] as const;
 
 describe('muon Android API metadata', () => {

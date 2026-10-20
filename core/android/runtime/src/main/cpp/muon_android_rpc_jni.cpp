@@ -153,6 +153,9 @@ static const std::vector<std::string> kNotificationFunctionPaths = {
     "muon.notifications.cancel",
     "muon.notifications.getStatus",
     "muon.notifications.getCapabilities",
+    "muon.notifications.getPendingEvents",
+    "muon.notifications.watchEvents",
+    "muon.notifications.acknowledgeEvent",
 };
 
 static MuonAndroidRpcHost* GetAndroidRpcHost(jlong handle) {

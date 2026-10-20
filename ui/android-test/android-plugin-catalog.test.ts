@@ -97,10 +97,13 @@ it.each([true, false])(
       `data:text/javascript,${encodeURIComponent(resolver.load(commonId)!)}`
     );
     expect(Object.keys(common).sort()).toEqual([
+      "acknowledgeEvent",
       "cancel",
       "getCapabilities",
+      "getPendingEvents",
       "getStatus",
       "post",
+      "watchEvents",
     ]);
   },
 );

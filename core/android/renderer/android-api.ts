@@ -1125,11 +1125,12 @@ export const createMuonAndroidSimpleApi = (
     }),
     fs: createMuonAndroidFsApi(client, capabilityIds['muon.fs']),
     notifications: createMuonNotificationsApi(
-      async (name, args) =>
+      async (name, args, options) =>
         await client.call(
           capabilityIds['muon.notifications'],
           `muon.notifications.${name}`,
-          args
+          args,
+          options
         )
     ),
     android: Object.freeze({

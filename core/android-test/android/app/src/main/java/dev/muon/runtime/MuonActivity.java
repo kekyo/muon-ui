@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.net.Uri;
 import android.os.Bundle;
@@ -31,10 +32,12 @@ public final class MuonActivity extends Activity {
     private static final String TEST_OBJECT_NAME = "muonAndroidTest";
 
     private final CountDownLatch pageReady = new CountDownLatch(1);
+    private final CountDownLatch resumed = new CountDownLatch(1);
     private final CountDownLatch startupFailureReady = new CountDownLatch(1);
     private final CountDownLatch destroyed = new CountDownLatch(1);
     private final LinkedBlockingQueue<String> testMessages = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<String> finishedPageUrls = new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<Intent> notificationIntents = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<Integer> mainFrameHttpStatuses =
             new LinkedBlockingQueue<>();
     private WebView webView;
@@ -84,6 +87,18 @@ public final class MuonActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         if (host != null) { host.setResumed(true); }
+        resumed.countDown();
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (host != null) { host.onNotificationIntent(intent); }
+        notificationIntents.add(intent);
+    }
+
+    @Nullable Intent awaitNotificationIntentForTest(long timeout, TimeUnit unit) throws InterruptedException {
+        return notificationIntents.poll(timeout, unit);
     }
 
     @Override protected void onPause() {
@@ -122,6 +137,11 @@ public final class MuonActivity extends Activity {
     boolean awaitPageReadyForTest(long timeout, @NonNull TimeUnit unit)
             throws InterruptedException {
         return pageReady.await(timeout, unit);
+    }
+
+    boolean awaitResumedForTest(long timeout, @NonNull TimeUnit unit)
+            throws InterruptedException {
+        return resumed.await(timeout, unit);
     }
 
     boolean awaitStartupFailureForTest(long timeout, @NonNull TimeUnit unit)

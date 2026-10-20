@@ -15,6 +15,10 @@ import {
 } from '../../android/renderer/android-api.js';
 import { installMuonAndroidNativePluginApi } from '../../android/renderer/native-plugin-api.js';
 import { readMuonAndroidRendererMetadata } from '../../android/renderer/native-plugin-metadata.js';
+import type {
+  MuonNotificationEvent,
+  MuonNotificationWatcher,
+} from '../../common/renderer/notifications.js';
 
 /** Test operations that require direct RPC client controls. */
 export interface MuonAndroidTestOperations {
@@ -332,6 +336,25 @@ if (bridge === undefined) {
   const notificationOutput = document.createElement('pre');
   notificationOutput.id = 'notification-result';
   notifications.append(notificationsLegend, notificationOutput);
+  const notificationEvents = document.createElement('pre');
+  notificationEvents.id = 'notification-events';
+  const notificationRoute = document.createElement('output');
+  notificationRoute.id = 'notification-route';
+  const receivedEvents = new Map<string, MuonNotificationEvent>();
+  let notificationWatcher: MuonNotificationWatcher | undefined;
+  const displayEvent = (event: MuonNotificationEvent): void => {
+    if (receivedEvents.has(event.eventId)) return;
+    receivedEvents.set(event.eventId, event);
+    notificationEvents.textContent = JSON.stringify(
+      [...receivedEvents.values()],
+      null,
+      2
+    );
+    // Routing is idempotent. Actual business mutations should use eventId as
+    // their transaction's deduplication key before acknowledging the event.
+    notificationRoute.textContent = `Notification ${event.id}: ${event.actionId ?? 'open'} ${JSON.stringify(event.data)}`;
+  };
+  notifications.append(notificationRoute, notificationEvents);
   const notificationActions: ReadonlyArray<
     readonly [string, () => Promise<unknown>]
   > = [
@@ -343,6 +366,7 @@ if (bridge === undefined) {
           title: 'Muon order',
           body: 'Order is preparing',
           data: { order: 42 },
+          actions: [{ id: 'view-order', title: 'View order' }],
         }),
     ],
     [
@@ -352,7 +376,8 @@ if (bridge === undefined) {
           id: 'driver-order',
           title: 'Muon order updated',
           body: 'Order is ready',
-          data: { order: 42 },
+          data: { order: 42, updated: true },
+          actions: [{ id: 'view-order', title: 'View updated order' }],
         }),
     ],
     [
@@ -418,6 +443,43 @@ if (bridge === undefined) {
           type: 'notification-channel',
           channelId: 'general',
         }),
+    ],
+    [
+      'Read pending notification events',
+      async () => {
+        const events = await androidApi.notifications!.getPendingEvents();
+        for (const event of events) displayEvent(event);
+        return events;
+      },
+    ],
+    [
+      'Watch notification events',
+      async () => {
+        if (notificationWatcher === undefined)
+          notificationWatcher =
+            await androidApi.notifications!.watchEvents(displayEvent);
+        // Register first, then read pending events. displayEvent deduplicates
+        // events that appear through both paths without consuming either path.
+        for (const event of await androidApi.notifications!.getPendingEvents())
+          displayEvent(event);
+        return 'Watching';
+      },
+    ],
+    [
+      'Stop watching notification events',
+      async () => {
+        await notificationWatcher?.close();
+        notificationWatcher = undefined;
+        return 'Stopped; pending events are retained';
+      },
+    ],
+    [
+      'Acknowledge displayed notification events',
+      async () => {
+        for (const event of receivedEvents.values())
+          await androidApi.notifications!.acknowledgeEvent(event.eventId);
+        return await androidApi.notifications!.getPendingEvents();
+      },
     ],
   ];
   for (const [label, action] of notificationActions) {

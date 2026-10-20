@@ -12,6 +12,12 @@ declare module "muon:notifications" {
   export const getStatus: MuonNotificationsApi["getStatus"];
   /** Read feature support independently of user permission. */
   export const getCapabilities: MuonNotificationsApi["getCapabilities"];
+  /** Read persisted unacknowledged events without consuming them. */
+  export const getPendingEvents: MuonNotificationsApi["getPendingEvents"];
+  /** Subscribe to new operations in this page context. */
+  export const watchEvents: MuonNotificationsApi["watchEvents"];
+  /** Acknowledge one event for the application after processing it. */
+  export const acknowledgeEvent: MuonNotificationsApi["acknowledgeEvent"];
 }
 
 declare module "muon:android.settings" {

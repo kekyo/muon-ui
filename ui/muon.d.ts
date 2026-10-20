@@ -50,6 +50,14 @@ declare global {
     | readonly MuonNotificationData[]
     | { readonly [key: string]: MuonNotificationData };
 
+  /** A named notification button that opens the application. */
+  interface MuonNotificationAction {
+    /** Nonempty ID of up to 128 UTF-16 code units, unique within this notification. */
+    readonly id: string;
+    /** Nonempty user-visible label of up to 128 UTF-16 code units. */
+    readonly title: string;
+  }
+
   /** Application-owned local notification. */
   interface MuonNotificationOptions {
     /** Stable app-scoped ID, up to 128 UTF-16 code units; reposting updates it. */
@@ -62,6 +70,38 @@ declare global {
     readonly category?: string;
     /** JSON data for notification interaction; maximum encoded size is 16384 UTF-8 bytes and depth is 64. */
     readonly data?: MuonNotificationData;
+    /** Up to three named launch buttons; requires the actions capability. */
+    readonly actions?: readonly MuonNotificationAction[];
+  }
+
+  /** One persisted operation on a posted notification revision. */
+  interface MuonNotificationEvent {
+    /** Stable identifier for deduplication and explicit acknowledgement. */
+    readonly eventId: string;
+    /** Application notification ID supplied to post(). */
+    readonly id: string;
+    /** Default notification activation or a named action button. */
+    readonly type: "activate" | "action";
+    /** Named action ID, or null for default activation. */
+    readonly actionId: string | null;
+    /** Data from the operated revision; null when post() omitted data. */
+    readonly data: MuonNotificationData;
+  }
+
+  /** Receives notification events serially; returning does not acknowledge them. */
+  type MuonNotificationListener = (
+    event: MuonNotificationEvent,
+  ) => void | Promise<void>;
+
+  /** A page-owned subscription that does not own persisted events. */
+  interface MuonNotificationWatcher {
+    /**
+     * Releases this subscription and cancels its pending native wait.
+     * @returns Completion of release; repeated calls share the same operation.
+     * @remarks May be awaited inside the listener. Already running listeners are
+     * not awaited, and later listeners are prevented. Pending events remain intact.
+     */
+    readonly close: () => Promise<void>;
   }
 
   /** Support for a feature, independently of current notification permission. */
@@ -117,12 +157,22 @@ declare global {
      * @returns Completion of the OS API submission, not delivery or viewing confirmation.
      * @remarks Never requests permission implicitly. Rejects known permission or
      * channel disablement, unregistered Android categories and unsupported options.
+     * On event-capable backends, unoperated revisions and unacknowledged events
+     * share 256 reserved slots. A full store rejects new posts. Updating an ID
+     * invalidates its unoperated older revision and reuses that slot; previously
+     * received events remain intact. Unoperated revisions expire after 30 days.
+     * Removal by the user or OS does not release its reserved slot; use
+     * cancel(), replace that ID, or let the revision expire.
+     * OS submission and local persistence are not one atomic transaction.
+     * Android APK replacement may clear posted notifications; they are not
+     * automatically reposted after an update.
      */
     readonly post: (options: MuonNotificationOptions) => Promise<void>;
     /**
      * Withdraws one notification without affecting other IDs.
      * @param id - Stable app-scoped notification ID.
      * @returns Completion; a missing notification is also successful.
+     * @remarks Invalidates an unoperated revision without removing its received events.
      */
     readonly cancel: (id: string) => Promise<void>;
     /**
@@ -136,6 +186,39 @@ declare global {
      * @returns Support and diagnostics; does not imply user permission.
      */
     readonly getCapabilities: () => Promise<MuonNotificationCapabilities>;
+    /**
+     * Reads persisted, unacknowledged operations without consuming them.
+     * @returns Events retained across page and process destruction, oldest first.
+     * @remarks Subscribe before reading, then deduplicate by eventId. Events expire
+     * 30 days after receipt. Only the first operation on a revision creates an
+     * event and withdraws its notification. Late operations on an updated,
+     * cancelled or expired unoperated revision are ignored.
+     * Android events survive APK updates retaining the application ID and data;
+     * uninstalling or clearing application data removes the stored events.
+     */
+    readonly getPendingEvents: () => Promise<readonly MuonNotificationEvent[]>;
+    /**
+     * Subscribes to newly received operations in this page context.
+     * @param listener - Serial event handler; errors are logged without acknowledging.
+     * @returns A handle delivered before any listener invocation.
+     * @remarks This does not replay existing events. Subscribe before calling
+     * getPendingEvents(), and deduplicate by eventId. Other pages may receive the
+     * same event; another page's acknowledgement can prevent later delivery.
+     * Transport errors close the subscription after logging. Page destruction
+     * releases the subscription without deleting application-owned events.
+     */
+    readonly watchEvents: (
+      listener: MuonNotificationListener,
+    ) => Promise<MuonNotificationWatcher>;
+    /**
+     * Removes one event from the application's pending set after processing.
+     * @param eventId - Stable ID received through getPendingEvents() or watchEvents().
+     * @returns Durable completion; unknown or previously acknowledged IDs are no-ops.
+     * @remarks Acknowledgement affects all pages and does not revoke callbacks
+     * already dispatched. Up to 1024 acknowledged IDs are kept for 30 days;
+     * unknown operation tokens are ignored even after that record expires.
+     */
+    readonly acknowledgeEvent: (eventId: string) => Promise<void>;
   }
 
   /** Initial importance for an Android notification channel. */

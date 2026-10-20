@@ -75,6 +75,9 @@ export const notificationFunctionNames = [
   'cancel',
   'getStatus',
   'getCapabilities',
+  'getPendingEvents',
+  'watchEvents',
+  'acknowledgeEvent',
 ] as const;
 
 /** Fully-qualified built-in function paths implemented by the Android backend. */

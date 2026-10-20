@@ -18,7 +18,7 @@ muon-uiのnpmパッケージから、Webアセットを内蔵したAndroid APK�
 
 通常のアプリビルドにはNDK、CMake、Muonのソース取得は不要です。MuonのJava・ネイティブ部品は事前ビルドしたAARとしてnpm内に収録しています。GradleとAndroidXなどの初回取得にはネットワーク接続が必要です。Android Studioと接続端末はビルドの必須条件ではありません。
 
-APKの最低インストールAPIは24ですが、古いOSでの動作は未検証です。WebViewは`WEB_MESSAGE_LISTENER`、`WEB_MESSAGE_ARRAY_BUFFER`、`DOCUMENT_START_SCRIPT`を必要とし、不足時は起動画面に理由を表示します。検証したWebViewはPixel 6が153.0.8010.36、エミュレーターが149.0.7827.5です。arm64の16 KiB配置は静的検査済みですが、実行検証はPixel 6の4 KiBとx86_64エミュレーターの16 KiBで行っています。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiBページへの対応](https://developer.android.com/guide/practices/page-sizes)
+APKの最低インストールAPIは24です。OSのバージョンに加えて、下記のWebView機能が必要です。WebViewは`WEB_MESSAGE_LISTENER`、`WEB_MESSAGE_ARRAY_BUFFER`、`DOCUMENT_START_SCRIPT`を必要とし、不足時は起動画面に理由を表示します。検証したWebViewはPixel 6が153.0.8010.36、エミュレーターが149.0.7827.5です。arm64の16 KiB配置は静的検査済みですが、実行検証はPixel 6の4 KiBとx86_64エミュレーターの16 KiBで行っています。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiBページへの対応](https://developer.android.com/guide/practices/page-sizes)
 
 JDKと[Android CLI](https://developer.android.com/tools/agents/android-cli)を用意し、SDKのライセンスを確認したうえで、必要なSDKパッケージをインストールします。
 
@@ -112,6 +112,8 @@ npx muon build --target android --assets ./dist
 | `permissions` | Manifestに追加する`android.permission.…`の配列。既定は空 |
 | `sdkPath` | SDKの場所。省略時は`ANDROID_HOME`、`ANDROID_SDK_ROOT`、PATH上のadbから検出 |
 | `plugins` | 後述の事前ビルド済みプラグイン。既定は空 |
+| `systemBars` | 起動時のシステムバーとコンテンツ配置 |
+| `notifications` | 通知の小さいアイコンと静的チャンネル |
 | `signing` | 後述のrelease署名設定 |
 | `fcm`、`quickjs` | 未提供。省略またはfalseのみ受け付ける |
 
@@ -130,7 +132,7 @@ await window.muon.fs.writeTextFile('note.txt', 'Saved on Android', 'utf8');
 const note = await window.muon.fs.readTextFile('note.txt', 'utf8');
 ```
 
-simpleモードでは`plugin.plugins`を省略すると現在対応している34個の組込み関数を公開します。明示した場合は、そのリストだけが対象です。空配列、または`internal`を含まないリストでは組込み関数を公開しません。各エントリーの`allow`で関数を限定でき、直接RPCを組み立てた場合もネイティブ側で権限を検査します。
+simpleモードでは`plugin.plugins`を省略すると対応している組込み関数を公開します。通知関数の公開には、別途`notifications.enabled: true`が必要です。明示した場合は、そのリストだけが対象です。空配列、または`internal`を含まないリストでは組込み関数を公開しません。各エントリーの`allow`で関数を限定でき、直接RPCを組み立てた場合もネイティブ側で権限を検査します。
 
 ### validateモードでimportする
 
@@ -167,9 +169,83 @@ const note = await readTextFile('note.txt', 'utf8');
 
 `sources`・`packages`はビルド時のimport検査です。同じページ内で有効なcapabilityを取得したコードは、その許可範囲でRPCを呼べます。呼出し元JSファイルごとの実行時認証や、同一originのiframeから親ページへのアクセスを含む隔離は保証しません。WebMessageが通知する送信元はoriginとメインフレーム判定であり、JSファイル名や文書の完全URLは含まれません。[WebMessageListenerの仕様](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener)、[Android版の制約](./limitation.md#android-webviewバックエンド)
 
-`muon.fs`の相対パスはアプリ専用のfiles領域を指します。同じアプリIDと署名鍵を使えば、更新後も保存データを利用できますが、アンインストールすると削除される点には注意が必要です。`content://`とファイル選択ダイアログは未提供です。基本のbrowser・environments・fs APIの対応範囲は[Android API対応方針](../../android-api-compatibility.md)を参照してください。同文書のQuickJS関連は試作専用です。
+`muon.fs`の相対パスはアプリ専用のfiles領域を指します。同じアプリIDと署名鍵を使えば、更新後も保存データを利用できますが、アンインストールすると削除される点には注意が必要です。`content://`とファイル選択ダイアログは未提供です。APIの用途は[内蔵プラグインリファレンス](./muon-built-in-plugin-reference.md)を参照してください。Androidで未対応の関数は公開せず、no-opへ置き換えることもありません。
 
 外部通信が必要なら`permissions`に`android.permission.INTERNET`を追加します。Android版はCEF版の`network.allow`などによる宛先制限を適用しません。HTTPの平文通信は無効です。権限名をManifestに追加するだけでは、ユーザーへの実行時権限要求は行われません。ローカルネットワーク権限など、権限ダイアログが必要な機能は公開経路では未提供です。[Android版の制約](./limitation.md#android-webviewバックエンド)、[Androidのローカルネットワーク権限](https://developer.android.com/privacy-and-security/local-network-permission)
+
+## システムバーと安全領域
+
+Androidのステータスバーとナビゲーションバーは、`muon.android.systemBars`で個別に制御できます。起動時の指定は`muon.json`の`android.systemBars`、またはViteの`build.android.systemBars`に記述します。
+
+```json
+{
+  "android": {
+    "systemBars": {
+      "statusBar": { "visible": true, "icons": "dark" },
+      "navigationBar": { "visible": true },
+      "contentLayout": "safe-area"
+    }
+  }
+}
+```
+
+既定の配置は`safe-area`です。OSがバーの背後まで描画する環境でも、MuonがWebViewの外側にバーとノッチの余白を確保します。`edge-to-edge`ではWebViewを端まで配置し、ページ側でCSS変数`--muon-safe-area-top`などを使って操作部品を避けます。この変数はWeb側でまだ必要な余白なので、`safe-area`では0になります。ネイティブ側とCSS側で同じ余白を二重に加えないでください。
+
+実行中の`configure()`は指定項目だけを更新します。既存のfullscreen APIとも要求状態を共有し、Activity再生成では実行中の要求を復元します。プロセスを新しく起動した場合はビルド時設定から始めます。上下のバーを非表示にしても、ユーザーはOSのスワイプ操作で一時表示できます。`getState().actual`はOSの報告値であり、この一時表示を必ず検出できるわけではありません。
+
+Androidのバージョンやマルチウインドウなどによって、OSが表示要求を調整する場合があります。要求値と観測値を分けて扱ってください。API 24・25ではナビゲーションバーの濃色アイコンを指定できません。APIとCSS変数の詳細は[内蔵プラグインリファレンス](./muon-built-in-plugin-reference.md#androidのシステムバーと安全領域)、OS側の条件は[Androidのedge-to-edge](https://developer.android.com/develop/ui/views/layout/edge-to-edge)を参照してください。
+
+## ローカル通知とOS設定画面
+
+通知を利用する場合は、共通の`notifications`で有効化し、Android用の小さいアイコンと用途分類を`android.notifications`に指定します。用途分類のIDはAPI 26以降のOSチャンネルIDにもなります。
+
+```json
+{
+  "notifications": { "enabled": true, "defaultCategory": "orders" },
+  "android": {
+    "notifications": {
+      "smallIcon": "icons/notification.png",
+      "channels": [
+        {
+          "id": "orders",
+          "name": "Orders",
+          "description": "Order progress and collection",
+          "importance": "default"
+        }
+      ]
+    }
+  }
+}
+```
+
+`smallIcon`は24～1024ピクセルの正方形PNGで、透明な背景に白いシルエットを描いた画像が必要です。色付き画像、完全に不透明な画像、ランチャーアイコンの流用は受け付けません。ビルド時に各画面密度用の24 dpアイコンを生成します。通常のアプリアイコンは従来どおり`android.icon`などで指定します。
+
+通知有効ビルドでは`POST_NOTIFICATIONS`をManifestへ追加します。API 33以降の許可要求は、説明したうえで`muon.android.notifications.requestPermission()`を呼んでください。起動や投稿だけでは要求しません。通知を無効にしたビルドには通知APIを公開せず、ユーザー設定の`permissions`に同権限があっても自動では要求しません。[Androidの通知権限](https://developer.android.com/develop/ui/views/notifications/notification-permission)
+
+validateモードでは`muon:notifications`と`muon:android.notifications`からimportします。共通の投稿には`muon.notifications.post`、権限要求には`muon.android.notifications.requestPermission`など、実際に使う関数を許可してください。
+
+```ts
+import { post } from "muon:notifications";
+import { requestPermission } from "muon:android.notifications";
+
+const permission = await requestPermission();
+if (permission.state.notificationsEnabled) {
+  await post({
+    id: "order-42",
+    title: "Order ready",
+    body: "Your order is ready to collect.",
+    data: { orderId: 42 },
+  });
+}
+```
+
+静的チャンネルはアプリ起動時に登録します。動的に増やす場合は、投稿前に`ensureChannel()`を呼びます。既存チャンネルの重要度やユーザー設定は上書きしません。API 24・25にはチャンネル機能がないため、ビルド時に宣言した分類を使用し、`ensureChannel()`と`getChannel()`は非対応になります。`defaultCategory`は静的に宣言したIDを参照する必要があります。[Androidのチャンネル](https://developer.android.com/develop/ui/views/notifications/channels)
+
+OS設定画面を開く場合は`muon.android.settings.open()`を使います。アプリ情報、通知全体、登録済みチャンネルの画面に対応します。復帰後には`getPermissionState()`や`getStatus()`を再取得してください。画面を開いた結果から、ユーザーが設定を変えたかどうかは分かりません。
+
+通知操作はアプリが終了していても受信でき、ページ初期化前に受け取ったイベントも保存します。購読と未受領一覧を併用し、`eventId`で重複を除いた後に受領確認してください。APK更新でOS上の通知が削除される場合も、同じアプリIDとデータを維持する更新なら保存済みの未受領イベントを取得できます。自動再投稿は行いません。[イベントと保存上限](./muon-built-in-plugin-reference.md#通知イベントと受領確認)、[Androidの更新時の通知処理](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010)
+
+予約通知、FCM、継続実行サービス、通知から直接処理を完了するバックグラウンド操作は未提供です。通知ボタンは自アプリを開いて操作IDを渡します。
 
 ## release APKへ署名する
 
@@ -274,4 +350,4 @@ validateモードではメタデータが必須です。ビルド時にABI別の
 
 FCMの通知配送とバックグラウンド処理は後続作業です。今回のAPKはFirebase設定なしで動作します。
 
-QuickJSの正式提供時は、開発PCでJavaScriptを単一ESMへbundleし、組み込みmoduleを外部参照として残す方針です。コードとハッシュ・必要機能の情報をAPKのassetsへ同梱し、アプリと同時に更新します。永続データはコードから分離します。任意のnpmパッケージ、Node.js全体との互換性、JavaScriptだけの独立更新は含めません。詳しくは[plan6のデプロイメント方針](./plans/plan6.md#8-quickjsのjavascriptデプロイメント方針)を参照してください。
+QuickJSの正式提供時は、開発PCでJavaScriptを単一ESMへbundleし、組み込みmoduleを外部参照として残す方針です。コードとハッシュ・必要機能の情報をAPKのassetsへ同梱し、アプリと同時に更新します。永続データはコードから分離します。任意のnpmパッケージ、Node.js全体との互換性、JavaScriptだけの独立更新は含めません。

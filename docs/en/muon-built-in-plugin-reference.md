@@ -4,13 +4,140 @@ This chapter writes APIs in the `window.muon.*` form to make plugin namespaces a
 This is also the object hierarchy actually exposed by `plugin.mode: "simple"`.
 In the default `validate` mode, import functions from the corresponding virtual modules and use them.
 
-The Android WebView backend exposes only a subset of the desktop APIs in this chapter. See [Android WebView backend limitations](./limitation.md#android-webview-backend) and the [Android API compatibility policy](../../android-api-compatibility.md) for available functions and platform-specific behavior. Functions that are not exposed are not replaced with no-ops.
+The Android WebView backend exposes only a subset of the desktop APIs in this chapter. See [Android WebView backend limitations](./limitation.md#android-webview-backend) and the [Android guide](./android.md#configuration-and-muon-apis) for available functions and platform-specific behavior. Functions that are not exposed are not replaced with no-ops.
 
 For example, for `window.muon.executor.spawn`, first allow `muon.executor.spawn` in `plugin.plugins[].imports` or Vite `pluginAccess.plugins[].imports`, then import `spawn` from `muon:executor`:
 
 ```ts
 import { spawn } from "muon:executor";
 ```
+
+## Notifications and Android features
+
+Use `muon.notifications` for local notifications on Android, Windows, and Linux. Android system bars, notification permissions and channels, and OS settings screens are under `muon.android`. The CEF backend does not expose `muon.android`.
+
+| Simple-mode namespace | Validate-mode import | Purpose |
+| --- | --- | --- |
+| `window.muon.notifications` | `muon:notifications` | Posting, cancellation, and interaction events |
+| `window.muon.android.systemBars` | `muon:android.systemBars` | System bars and safe areas |
+| `window.muon.android.notifications` | `muon:android.notifications` | Android notification permissions and channels |
+| `window.muon.android.settings` | `muon:android.settings` | Application-scoped OS settings screens |
+
+Notification APIs are included only in applications built with `notifications.enabled: true`. Function permissions are also required. For example, allow `muon.notifications.post` through `imports[].allow` in validate mode. Remove notification imports and permission entries when building with notifications disabled. See [notification build settings](./muon-json-reference.md#notifications-key).
+
+### Shared notification API
+
+| Function | Return value | Behavior |
+| --- | --- | --- |
+| `post(options)` | `Promise<void>` | Post or replace an application-scoped `id` |
+| `cancel(id)` | `Promise<void>` | Withdraw one notification; an absent ID also succeeds |
+| `getCapabilities()` | `Promise<MuonNotificationCapabilities>` | Read supported features and diagnostic reasons |
+| `getStatus(category?)` | `Promise<MuonNotificationStatus>` | Read current posting permission |
+| `watchEvents(listener)` | `Promise<MuonNotificationWatcher>` | Subscribe to new operations in this page |
+| `getPendingEvents()` | `Promise<readonly MuonNotificationEvent[]>` | Read unacknowledged events, oldest first, without consuming them |
+| `acknowledgeEvent(eventId)` | `Promise<void>` | Acknowledge a processed event and remove it from the pending set |
+
+`post()` requires string fields `id`, `title`, and `body`. `category` identifies a purpose; omission uses `notifications.defaultCategory`. Android maps it to a registered channel. CEF accepts arbitrary purpose categories and does not require Android channel settings.
+
+```ts
+import { getCapabilities, post } from "muon:notifications";
+
+const capabilities = await getCapabilities();
+await post({
+  id: "order-42",
+  title: "Order ready",
+  body: "Your order is ready to collect.",
+  category: "orders",
+  data: { orderId: 42 },
+  ...(capabilities.actions.state === "supported"
+    ? { actions: [{ id: "view", title: "View order" }] }
+    : {}),
+});
+```
+
+Limits are 128 UTF-16 code units for `id` and `category`, 1024 for `title`, and 4096 for `body`. The body may be empty. `data` accepts JSON values with a maximum encoded size of 16 KiB in UTF-8 and depth of 64; omitted data becomes `null` in the event. Functions and circular references cannot be stored. Up to three `actions` are allowed. Each action requires nonempty `id` and `title` strings of at most 128 code units, and action IDs must be unique within the notification.
+
+`post()` never requests permission implicitly. It rejects known disablement, unregistered Android categories, and unsupported options such as additional buttons. Success means the OS submission completed; it does not guarantee a banner or that the user read it. OS suppression and retention policies still apply. See [Android notification permissions](https://developer.android.com/develop/ui/views/notifications/notification-permission) and the [Linux notification specification](https://specifications.freedesktop.org/notification/latest/).
+
+Each `getCapabilities()` field is `{ state, reason }`. The state is `supported`, `unsupported`, or `unknown`; `reason` is `null` when no explanation is needed.
+
+| Field | Feature |
+| --- | --- |
+| `interaction` | Delivering operations to the running application |
+| `launch` | Starting an exited application and delivering its operation |
+| `persistence` | Keeping notifications after normal process exit |
+| `actions` | Additional named buttons |
+| `appStatus` | Reading application-wide posting permission |
+| `categoryStatus` | Reading OS settings for an individual category |
+
+Feature support and current posting permission are separate. `getStatus()` returns `app` and `category`, whose posting states are `enabled`, `disabled`, or `unknown`. Without an argument, `category` is `null`; the default category is not queried implicitly. A requested category also includes its `id`. Linux may report unknown application and category states; Windows may report an unknown category state. Do not interpret `unknown` as permission granted.
+
+### Notification events and acknowledgement
+
+Events have `{ eventId, id, type, actionId, data }`. Ordinary notification clicks use `type: "activate"` and `actionId: null`; buttons use `type: "action"` and their specified ID. An action named `"default"` remains distinct from an ordinary click. `data` belongs to the posted revision that was operated.
+
+Subscribe before reading pending events, then deduplicate by `eventId`. Returning from a callback does not acknowledge its event. Call `acknowledgeEvent(eventId)` after application processing completes. An exit between processing and acknowledgement allows redelivery, so operations that must not run twice, such as confirming an order, also need application-side deduplication using a stored `eventId`.
+
+`watchEvents()` delivers only new operations, without replaying existing events. Each subscription invokes its listener serially. Release it with the returned `close()` method; page destruction also releases it. Closing a subscription preserves notifications and pending events. Multiple pages may receive the same event, and acknowledgement affects the whole application. Callbacks that have already started are not cancelled.
+
+Unoperated posts and unacknowledged events share 256 reserved slots. New posts are rejected when the store is full. Unoperated posts expire 30 days after posting; pending events expire 30 days after receipt. Removal by the OS or user does not free a slot, so use `cancel()` for IDs that are no longer needed. Replacing an ID invalidates its older unoperated revision while preserving received events. Late operations on an old revision do not create a new event.
+
+On Linux, old and new notifications may briefly coexist during replacement. OS submission and local persistence are not one atomic transaction. Android APK replacement may remove OS notifications, and Muon does not repost them automatically. Updates preserving the application ID and data retain saved pending events. Uninstalling or clearing application data is outside that guarantee. See [Android package changes and notification removal](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010).
+
+See [notification deployment registration](./package-install-location-advanced-topics.md#notification-deployment-registration) for CEF launch requirements and update/removal procedures.
+
+### Android system bars and safe areas
+
+| Function | Return value | Behavior |
+| --- | --- | --- |
+| `configure(options)` | `Promise<void>` | Request bar visibility, icon colors, and content placement |
+| `getState()` | `Promise<MuonAndroidSystemBarsState>` | Read `requested` settings and OS-reported `actual` values |
+| `getInsets()` | `Promise<MuonAndroidSystemBarsInsets>` | Wait for initial geometry and read current insets |
+| `watchInsets(listener)` | `Promise<MuonAndroidInsetsWatcher>` | Subscribe to initial geometry and later changes; release with `close()` |
+
+`configure()` applies a partial update. Set `visible` and `icons: "light" | "dark"` in `statusBar` and `navigationBar`; omitted values retain their requests. `contentLayout` is `safe-area` or `edge-to-edge`. Unsupported fields and invalid values reject the entire request without partial application. Dark navigation icons are unsupported on API 24 and 25.
+
+`requested` contains application requests and is unaffected by transient swipe reveals. `actual` contains values reported by Android's public APIs. Before initialization, each bar's `visible` and `icons` fields are `null`. These are not measurements of rendered pixels: a transient overlay may still be reported as hidden. On API 29 and earlier, AndroidX also approximates visibility from available insets. See [WindowInsets.isVisible](https://developer.android.com/reference/android/view/WindowInsets#isVisible(int)) and [Android InsetsController](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/InsetsController.java).
+
+`browser.enterFullscreen()` requests both bars hidden, and `exitFullscreen()` requests both visible, sharing the same state. These operations preserve icon colors and content placement. `configure()` completion means the request was applied, not that OS animation has finished.
+
+Insets are distances from each edge, returned as `top`, `right`, `bottom`, and `left` in CSS pixels. `systemBars` covers visible bars, `displayCutout` covers notches and cutouts, `systemGestures` covers gesture-reserved areas, and `ime` covers the software keyboard. `safeArea` is the per-edge maximum of bars and cutouts. Keyboard and gesture insets are not added automatically.
+
+In `safe-area` mode, native layout reserves the safe area and the additional web clearance, `contentSafeArea`, is zero. In `edge-to-edge` mode, the page handles placement. CSS variables `--muon-safe-area-top`, `--muon-safe-area-right`, `--muon-safe-area-bottom`, and `--muon-safe-area-left` correspond to `contentSafeArea` and update after rotation or zoom. On Android, do not add the same clearance again through CSS `env(safe-area-inset-*)`.
+
+```css
+.app-controls {
+  padding: var(--muon-safe-area-top, 0px)
+    var(--muon-safe-area-right, 0px)
+    var(--muon-safe-area-bottom, 0px)
+    var(--muon-safe-area-left, 0px);
+}
+```
+
+See the [Android guide](./android.md#system-bars-and-safe-areas) for initial layout and bar settings.
+
+### Android notification permissions and channels
+
+| Function | Behavior |
+| --- | --- |
+| `getPermissionState()` | Read runtime permission and application-wide notification settings |
+| `requestPermission()` | Explicitly request permission from the foreground Activity |
+| `getCapabilities()` | Read Android-specific `channels` support |
+| `ensureChannel(options)` | Register a channel and return its effective OS settings |
+| `getChannel(id)` | Read channel settings; return `null` if unregistered |
+
+`getPermissionState()` returns `runtimePermission: "not-required" | "granted" | "denied"`, `notificationsEnabled`, `requestedBefore`, `shouldShowRationale`, and `settingsSuggested`. Below API 33, runtime permission is `not-required`, but OS settings can still disable notifications. `denied` includes never requested. `requestedBefore` records that Muon called the request API; it does not prove that a dialog appeared. `settingsSuggested` is not a permanent-denial diagnosis.
+
+`requestPermission()` returns fresh `state` and `result: "granted" | "not-granted" | "interrupted" | "not-required"`. `not-granted` cannot distinguish every denial, dismissal, and suppressed dialog. Concurrent requests, a missing foreground Activity, and destruction of the requesting page are errors. Startup and posting never display a permission dialog automatically. See [Android permission outcomes](https://developer.android.com/develop/ui/views/notifications/notification-permission).
+
+Channels are available on API 26 and later. Registration requires `id`, `name`, and `importance: "min" | "low" | "default" | "high"`; `description` is optional. Existing user settings are preserved. The returned object is `{ id, name, description, importance, enabled }`; a disabled importance is `none`. API 24 and 25 reject channel operations and accept posts only to statically declared categories. See [Android channels](https://developer.android.com/develop/ui/views/notifications/channels).
+
+### Android OS settings screens
+
+`isAvailable(target)` checks the requested screen itself. `open(target, options?)` opens it from the foreground Activity and returns `{ requestedTarget, target, fallbackUsed }`. It does not report whether the user changed a setting. Read permission and status again after the application resumes.
+
+Targets are `"app-details"`, `"notifications"`, and `{ type: "notification-channel", channelId }`. Channel settings require API 26 or later and a registered ID. If a dedicated notification screen is unavailable, app details are used only when explicitly permitted with `{ fallback: "app-details" }`. The dedicated notification screen is unsupported on API 24 and 25. A missing Activity or destination rejects the Promise. See [Android settings actions](https://developer.android.com/reference/android/provider/Settings).
+
 
 ## muon.browser namespace
 

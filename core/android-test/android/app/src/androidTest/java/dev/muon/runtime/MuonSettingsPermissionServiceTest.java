@@ -106,7 +106,13 @@ public final class MuonSettingsPermissionServiceTest {
             assertEquals("notifications", result.getString("requestedTarget"));
             assertEquals(Build.VERSION.SDK_INT < 26 ? "app-details" : "notifications", result.getString("target"));
             assertEquals(Build.VERSION.SDK_INT < 26, result.getBoolean("fallbackUsed"));
-            assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK));
+            var instrumentation = InstrumentationRegistry.getInstrumentation();
+            var returned = instrumentation.addMonitor(MuonWindowActivity.class.getName(), null, false);
+            try {
+                assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK));
+                assertNotNull("Back must return to the caller before the scenario closes",
+                        instrumentation.waitForMonitorWithTimeout(returned, 30000));
+            } finally { instrumentation.removeMonitor(returned); }
             scenario.onActivity(activity -> service.get().close());
             Result closed = new Result();
             scenario.onActivity(activity -> service.get().invoke("muon.android.settings.isAvailable",
@@ -160,7 +166,13 @@ public final class MuonSettingsPermissionServiceTest {
             if (Build.VERSION.SDK_INT >= 26) {
                 assertEquals("general", result.getJSONObject("target").getString("channelId"));
             } else { assertEquals("app-details", result.getString("target")); }
-            assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK));
+            var instrumentation = InstrumentationRegistry.getInstrumentation();
+            var returned = instrumentation.addMonitor(MuonWindowActivity.class.getName(), null, false);
+            try {
+                assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK));
+                assertNotNull("Back must return to the caller before the scenario closes",
+                        instrumentation.waitForMonitorWithTimeout(returned, 30000));
+            } finally { instrumentation.removeMonitor(returned); }
             scenario.onActivity(activity -> { settings.get().close(); notifications.get().close(); });
         }
     }

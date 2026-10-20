@@ -60,7 +60,7 @@ export const createWindowsNotificationDriver = async (
   appId: string,
   displayName: string,
 ): Promise<WindowsNotificationDriver> => {
-  if (!/^dev\.muon\.Notification(?:Test|Probe)\.[\w.-]+$/u.test(appId))
+  if (!/^dev\.muon\.Notification(?:Test|Probe)\.[\w.-]+$/iu.test(appId))
     throw new Error("Notification cleanup requires a dedicated test app ID");
   const environment = resolveWindowsE2eEnvironment(process.env);
   const target = resolveWindowsRuntimeTarget(

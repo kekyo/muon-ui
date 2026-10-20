@@ -2076,6 +2076,7 @@ describe("muon build", () => {
       comment: "Config Comment",
       categories: ["Development"],
       startupNotify: true,
+      notificationsEnabled: false,
       iconFileName: "muon-desktop-icon.png",
     });
     await expect(
@@ -2925,7 +2926,7 @@ describe("muon build", () => {
       },
       launcher: {
         appId: "missing-config-sample",
-        desktopId: "missing-config-sample",
+        desktopId: expect.stringMatching(/^dev\.muon\.[a-z_][a-z0-9_]*$/u),
       },
       notifications: { enabled: false },
       plugin: {

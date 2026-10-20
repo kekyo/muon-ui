@@ -66,6 +66,7 @@ import {
 import { createWindowsIconFromPngFile } from "./windows-icon.js";
 import {
   createLinuxDesktopEntry,
+  createLinuxNotificationService,
   mergeMuonLinuxDesktopOptions,
   quoteDesktopExecArgument,
   type MuonLinuxDesktopOptions,
@@ -75,6 +76,7 @@ import {
   resolveMuonNodeProject,
 } from "./node-project.js";
 import type { MuonProgressCallback } from "../common/progress.js";
+import { isJsonObject } from "../common/build-config.js";
 
 import type {
   MuonPackType,
@@ -695,16 +697,38 @@ const packageDeb = async (
     "applications",
     `${target.linuxDesktop.desktopId}.desktop`,
   );
+  const installedLauncher = `/usr/lib/${metadata.packageName}/${target.distributionDirectoryName}/${launcherName}`;
+  const desktopLauncher = target.linuxDesktop.notificationsEnabled
+    ? installedLauncher
+    : `/usr/bin/${metadata.packageName}`;
   await mkdir(dirname(applicationsPath), { recursive: true });
   await writeFile(
     applicationsPath,
     createLinuxDesktopEntry({
       desktop: target.linuxDesktop,
-      exec: `${quoteDesktopExecArgument(`/usr/bin/${metadata.packageName}`)} --muon-launch-from=normal`,
-      tryExec: `/usr/bin/${metadata.packageName}`,
+      exec: `${quoteDesktopExecArgument(desktopLauncher)} --muon-launch-from=normal`,
+      tryExec: desktopLauncher,
       icon: target.linuxDesktop.desktopId,
+      appId: target.runtimeAppId,
+      launcherPath: installedLauncher,
     }),
   );
+  if (target.linuxDesktop.notificationsEnabled) {
+    const servicePath = join(
+      packageRoot,
+      "usr/share/dbus-1/services",
+      `${target.linuxDesktop.desktopId}.service`,
+    );
+    await mkdir(dirname(servicePath), { recursive: true });
+    await writeFile(
+      servicePath,
+      createLinuxNotificationService(
+        target.linuxDesktop.desktopId,
+        target.runtimeAppId,
+        installedLauncher,
+      ),
+    );
+  }
   const iconPath = join(
     packageRoot,
     "usr",
@@ -731,20 +755,32 @@ const packageDeb = async (
       "",
     ].join("\n"),
   );
-  if (linuxSandbox === "setuid") {
+  if (linuxSandbox === "setuid" || target.linuxDesktop.notificationsEnabled) {
+    const updateIconCache = target.linuxDesktop.notificationsEnabled
+      ? [
+          "if command -v gtk-update-icon-cache >/dev/null 2>&1; then",
+          "  gtk-update-icon-cache --force --ignore-theme-index /usr/share/icons/hicolor",
+          "fi",
+        ]
+      : [];
     const postinstPath = join(packageRoot, "DEBIAN", "postinst");
     await writeFile(
       postinstPath,
       [
         "#!/bin/sh",
         "set -e",
-        `helper=${JSON.stringify(privilegedPreparePath)}`,
-        'if [ ! -f "$helper" ]; then',
-        '  echo "muon-runtime-helper is missing: $helper" >&2',
-        "  exit 1",
-        "fi",
-        'chown root:root "$helper"',
-        'chmod 4755 "$helper"',
+        ...(linuxSandbox === "setuid"
+          ? [
+              `helper=${JSON.stringify(privilegedPreparePath)}`,
+              'if [ ! -f "$helper" ]; then',
+              '  echo "muon-runtime-helper is missing: $helper" >&2',
+              "  exit 1",
+              "fi",
+              'chown root:root "$helper"',
+              'chmod 4755 "$helper"',
+            ]
+          : []),
+        ...updateIconCache,
         "exit 0",
         "",
       ].join("\n"),
@@ -757,10 +793,15 @@ const packageDeb = async (
       [
         "#!/bin/sh",
         "set -e",
-        'if [ "$1" = "purge" ]; then',
-        `  rm -rf ${JSON.stringify(`${systemRuntimeRoot}/${metadata.packageName}`)}`,
-        `  # Shared CEF cache ${systemCefCacheRoot} is intentionally preserved.`,
-        "fi",
+        ...(linuxSandbox === "setuid"
+          ? [
+              'if [ "$1" = "purge" ]; then',
+              `  rm -rf ${JSON.stringify(`${systemRuntimeRoot}/${metadata.packageName}`)}`,
+              `  # Shared CEF cache ${systemCefCacheRoot} is intentionally preserved.`,
+              "fi",
+            ]
+          : []),
+        ...updateIconCache,
         "exit 0",
         "",
       ].join("\n"),
@@ -857,6 +898,147 @@ const packageNsis = async (
   const uninstallRegistryKey = createNsisUninstallRegistryKey(
     target.runtimeAppId,
   );
+  const launcherConfig = target.embeddedConfig.launcher;
+  const registration = isJsonObject(launcherConfig)
+    ? launcherConfig.notificationRegistration
+    : undefined;
+  if (
+    registration !== undefined &&
+    (!isJsonObject(registration) ||
+      typeof registration.activatorClsid !== "string" ||
+      typeof registration.displayName !== "string")
+  ) {
+    throw new Error("Windows notification registration metadata is invalid.");
+  }
+  const notificationRegistration = isJsonObject(registration)
+    ? {
+        clsid: String(registration.activatorClsid),
+        displayName: String(registration.displayName),
+      }
+    : undefined;
+  const notificationInstall: string[] = [];
+  const notificationUninstall: string[] = [];
+  const notificationBeforeInstall: string[] = [];
+  if (notificationRegistration !== undefined) {
+    const appKey = escapeNsis(
+      `Software\\Classes\\AppUserModelId\\${target.runtimeAppId}`,
+    );
+    const clsidKey = escapeNsis(
+      `Software\\Classes\\CLSID\\${notificationRegistration.clsid}`,
+    );
+    const serverKey = `${clsidKey}\\\\LocalServer32`;
+    const launcher = `$INSTDIR\\${escapeNsis(launcherFileName)}`;
+    const command = `$\\\"${launcher}$\\\" --muon-notification-activation`;
+    const registryView = [
+      "  ${If} ${RunningX64}",
+      "    SetRegView 64",
+      "  ${EndIf}",
+    ];
+    notificationInstall.push(
+      ...registryView,
+      // Recreate an owned registration when the executable moves. Updating
+      // values alone leaves Windows COM activation using its previous path.
+      `  ReadRegStr $0 HKCU "${serverKey}" "MuonAppId"`,
+      `  StrCmp $0 "${escapeNsis(target.runtimeAppId)}" 0 notification_relocation_done`,
+      `  ReadRegStr $1 HKCU "${serverKey}" "ServerExecutable"`,
+      '  StrCmp $1 "" notification_relocation_done',
+      `  StrCmp $1 "${launcher}" notification_relocation_done`,
+      `  ReadRegStr $0 HKCU "${serverKey}" ""`,
+      '  StrCmp $0 "$\\"$1$\\" --muon-notification-activation" 0 notification_relocation_done',
+      `  ReadRegStr $0 HKCU "${appKey}" "CustomActivator"`,
+      `  StrCmp $0 "${escapeNsis(notificationRegistration.clsid)}" 0 notification_relocation_done`,
+      "  ClearErrors",
+      `  DeleteRegKey HKCU "${clsidKey}"`,
+      "  IfErrors notification_registration_failed",
+      "notification_relocation_done:",
+      "  ClearErrors",
+      `  WriteRegStr HKCU "${appKey}" "DisplayName" "${escapeNsis(notificationRegistration.displayName)}"`,
+      `  WriteRegStr HKCU "${appKey}" "IconUri" "$INSTDIR\\notification-icon.png"`,
+      `  WriteRegStr HKCU "${appKey}" "CustomActivator" "${escapeNsis(notificationRegistration.clsid)}"`,
+      `  WriteRegStr HKCU "${serverKey}" "" "${command}"`,
+      `  WriteRegStr HKCU "${serverKey}" "ServerExecutable" "${launcher}"`,
+      `  WriteRegStr HKCU "${serverKey}" "MuonAppId" "${escapeNsis(target.runtimeAppId)}"`,
+      "  SetRegView 32",
+      "  IfErrors notification_registration_failed notification_registration_done",
+      "notification_registration_failed:",
+      '  MessageBox MB_OK|MB_ICONSTOP "Windows notification registration failed." /SD IDOK',
+      "  SetErrorLevel 5",
+      "  Abort",
+      "notification_registration_done:",
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "MuonNotificationClsid" "${escapeNsis(notificationRegistration.clsid)}"`,
+      `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "MuonNotificationLauncher" "${launcher}"`,
+    );
+    notificationUninstall.push(
+      ...registryView,
+      `  ReadRegStr $0 HKCU "${serverKey}" "MuonAppId"`,
+      `  StrCmp $0 "${escapeNsis(target.runtimeAppId)}" 0 obsolete_installation`,
+      `  ReadRegStr $0 HKCU "${serverKey}" "ServerExecutable"`,
+      `  StrCmp $0 "${launcher}" 0 obsolete_installation`,
+      `  ReadRegStr $0 HKCU "${serverKey}" ""`,
+      `  StrCmp $0 "${command}" 0 obsolete_installation`,
+      `  ReadRegStr $0 HKCU "${appKey}" "CustomActivator"`,
+      `  StrCmp $0 "${escapeNsis(notificationRegistration.clsid)}" 0 obsolete_installation`,
+      "  ClearErrors",
+      `  ExecWait '$\\\"${launcher}$\\\" --muon-notification-clear-history' $0`,
+      "  IfErrors notification_cleanup_failed",
+      "  IntCmp $0 0 notification_cleanup_done notification_cleanup_failed notification_cleanup_failed",
+      "notification_cleanup_failed:",
+      '  MessageBox MB_OK|MB_ICONSTOP "Windows notification history could not be cleared. The installed application has been kept." /SD IDOK',
+      "  SetErrorLevel 5",
+      "  Abort",
+      "notification_cleanup_done:",
+      `  DeleteRegKey HKCU "${clsidKey}"`,
+      `  DeleteRegKey HKCU "${appKey}"`,
+      "  SetRegView 32",
+    );
+  } else {
+    const appKey = escapeNsis(
+      `Software\\Classes\\AppUserModelId\\${target.runtimeAppId}`,
+    );
+    // A disabled update must run the previous launcher before replacing it:
+    // the new embedded configuration deliberately has no notification identity.
+    // Separate installation locations retain their own launch registration.
+    notificationBeforeInstall.push(
+      `  ReadRegStr $0 HKCU "${escapeNsis(uninstallRegistryKey)}" "InstallLocation"`,
+      '  StrCmp $0 "$INSTDIR" 0 notification_update_done',
+      `  ReadRegStr $1 HKCU "${escapeNsis(uninstallRegistryKey)}" "MuonNotificationClsid"`,
+      '  StrCmp $1 "" notification_update_done',
+      `  ReadRegStr $2 HKCU "${escapeNsis(uninstallRegistryKey)}" "MuonNotificationLauncher"`,
+      '  StrCmp $2 "" notification_update_done',
+      '  ${GetParent} "$2" $0',
+      '  StrCmp $0 "$INSTDIR" 0 notification_update_done',
+      "  ${If} ${RunningX64}",
+      "    SetRegView 64",
+      "  ${EndIf}",
+      '  ReadRegStr $0 HKCU "Software\\Classes\\CLSID\\$1\\LocalServer32" "MuonAppId"',
+      `  StrCmp $0 "${escapeNsis(target.runtimeAppId)}" 0 notification_update_done`,
+      '  ReadRegStr $0 HKCU "Software\\Classes\\CLSID\\$1\\LocalServer32" "ServerExecutable"',
+      '  StrCmp $0 "$2" 0 notification_update_done',
+      '  ReadRegStr $0 HKCU "Software\\Classes\\CLSID\\$1\\LocalServer32" ""',
+      '  StrCmp $0 "$\\"$2$\\" --muon-notification-activation" 0 notification_update_done',
+      `  ReadRegStr $0 HKCU "${appKey}" "CustomActivator"`,
+      '  StrCmp $0 "$1" 0 notification_update_done',
+      "  ClearErrors",
+      "  ExecWait '$\\\"$2$\\\" --muon-notification-clear-history' $0",
+      "  IfErrors notification_update_failed",
+      "  IntCmp $0 0 notification_update_cleared notification_update_failed notification_update_failed",
+      "notification_update_cleared:",
+      "  ClearErrors",
+      '  DeleteRegKey HKCU "Software\\Classes\\CLSID\\$1"',
+      `  DeleteRegKey HKCU "${appKey}"`,
+      "  IfErrors notification_update_failed notification_update_done",
+      "notification_update_failed:",
+      '  MessageBox MB_OK|MB_ICONSTOP "Windows notification cleanup failed. The existing application has been kept." /SD IDOK',
+      "  SetErrorLevel 5",
+      "  Abort",
+      "notification_update_done:",
+      "  SetRegView 32",
+    );
+    notificationInstall.push(
+      `  DeleteRegValue HKCU "${escapeNsis(uninstallRegistryKey)}" "MuonNotificationClsid"`,
+      `  DeleteRegValue HKCU "${escapeNsis(uninstallRegistryKey)}" "MuonNotificationLauncher"`,
+    );
+  }
   const installDirectoryLimit = await getNsisInstallDirectoryLimit(
     target.outputPath,
   );
@@ -877,6 +1059,10 @@ const packageNsis = async (
     scriptPath,
     [
       "Unicode true",
+      '!include "x64.nsh"',
+      ...(notificationRegistration === undefined
+        ? ['!include "FileFunc.nsh"']
+        : []),
       "ManifestLongPathAware true",
       `Name "${escapeNsis(nsisDisplayName)}"`,
       `OutFile "${escapeNsis(outputPath)}"`,
@@ -903,8 +1089,10 @@ const packageNsis = async (
       "paths_valid:",
       "FunctionEnd",
       "Section",
+      ...notificationBeforeInstall,
       '  SetOutPath "$INSTDIR"',
       `  File /r "${escapeNsis(target.outputPath)}\\*"`,
+      ...notificationInstall,
       `  CreateShortCut "$SMPROGRAMS\\${escapeNsis(nsisDisplayName)}.lnk" "$INSTDIR\\${escapeNsis(launcherFileName)}"`,
       '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
       `  WriteRegStr HKCU "${escapeNsis(uninstallRegistryKey)}" "DisplayName" "${escapeNsis(nsisDisplayName)}"`,
@@ -919,10 +1107,28 @@ const packageNsis = async (
       "SectionEnd",
       "",
       'Section "Uninstall"',
+      // A relocated update owns the shared shortcut, state and registration.
+      // Its old uninstaller may remove only its own obsolete files.
+      `  ReadRegStr $0 HKCU "${escapeNsis(uninstallRegistryKey)}" "InstallLocation"`,
+      '  StrCmp $0 "$INSTDIR" 0 obsolete_installation',
+      ...notificationUninstall,
       `  Delete "$SMPROGRAMS\\${escapeNsis(nsisDisplayName)}.lnk"`,
       `  DeleteRegKey HKCU "${escapeNsis(uninstallRegistryKey)}"`,
       '  RMDir /r "$INSTDIR"',
       `  RMDir /r "$LOCALAPPDATA\\${escapeNsis(target.runtimeAppId)}"`,
+      "  Goto uninstall_done",
+      "obsolete_installation:",
+      "  SetRegView 32",
+      `  ReadRegStr $0 HKCU "${escapeNsis(uninstallRegistryKey)}" "InstallLocation"`,
+      '  StrLen $1 "$INSTDIR\\"',
+      "  StrCpy $2 $0 $1",
+      '  StrCmp $2 "$INSTDIR\\" 0 remove_obsolete_files',
+      '  MessageBox MB_OK|MB_ICONSTOP "The current application is installed inside this directory. The directory has been kept." /SD IDOK',
+      "  SetErrorLevel 5",
+      "  Abort",
+      "remove_obsolete_files:",
+      '  RMDir /r "$INSTDIR"',
+      "uninstall_done:",
       "SectionEnd",
       "",
       "Function .onInstSuccess",

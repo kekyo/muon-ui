@@ -4,8 +4,10 @@
 // https://github.com/kekyo/muon-ui
 
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join, win32 } from "node:path";
+import { promisify } from "node:util";
 import type { RemoteAgent, RemoteManagedProcess } from "agent-rover";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -20,6 +22,7 @@ import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.js";
 import { stageWindowsRuntimeDirectory } from "./plugin-e2e/windows-staging.js";
 import { runNotificationDesktopCase } from "./notifications-desktop-case.js";
 import { createWindowsNotificationDriver } from "./notifications-windows-accessibility.js";
+import { runWindowsNotificationLaunchCase } from "./notifications-windows-launch-case.js";
 import type { MuonNotificationEvent } from "../common/renderer/notifications.js";
 
 const target = resolveWindowsRuntimeTarget(process.env.MUON_E2E_WINDOWS_TARGET);
@@ -37,9 +40,25 @@ let agent: RemoteAgent | undefined;
 let cdpHost = "";
 
 beforeAll(async () => {
+  // Package the cold-launch consumer through the actual CLI, built before
+  // acquiring the limited Windows session.
+  await promisify(execFile)(
+    "npm",
+    ["run", "build:js", "--workspace", "muon-ui"],
+    {
+      cwd: resolve("../.."),
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
   const connection = await connectWindowsAgent(environment, target);
   if (connection.status !== "connected") throw new Error(connection.reason);
   agent = connection.agent;
+  // The runtime build also prepares the host PE resource updater.
+  await promisify(execFile)(
+    process.execPath,
+    ["scripts/stage-muon-builder.mjs"],
+    { cwd: resolve("../../ui"), maxBuffer: 16 * 1024 * 1024 },
+  );
   cdpHost = (await discoverWindowsTestNetwork(agent)).cdpHost;
   await stageWindowsRuntimeDirectory(
     agent,
@@ -67,7 +86,11 @@ beforeAll(async () => {
       await readFile(resolve("../..", target.releaseRuntimeDirectory, name)),
     );
   }
-  for (const name of ["store", "service", "windows_driver"]) {
+  await agent.files.writeFile(
+    win32.join(native, "muon.png"),
+    await readFile(resolve("../../images/muon-256.png")),
+  );
+  for (const name of ["store", "service", "maintenance", "windows_driver"]) {
     const executable = `muon_notification_${name}${name === "windows_driver" ? "" : "_test"}.exe`;
     await agent.files.writeFile(
       win32.join(native, executable),
@@ -102,6 +125,12 @@ describe(`Windows notifications through Playwright MCP (${target.target})`, () =
       "muon_notification_windows_driver.exe",
       ["--callback-shutdown"],
     ],
+    [
+      "launch-registration",
+      "muon_notification_windows_driver.exe",
+      ["--launch-registration"],
+    ],
+    ["maintenance", "muon_notification_maintenance_test.exe", []],
   ] as const)(
     "verifies native %s behavior on Windows",
     async (name, executable, args) => {
@@ -480,6 +509,20 @@ describe(`Windows notifications through Playwright MCP (${target.target})`, () =
           (await application.waitForExit({ timeoutMs: 30000 })).root.exitCode,
           await application.stderrText(),
         ).toBe(0);
+        await client.close();
+        await closeMcp();
+        closeMcp = undefined;
+        await driver.close();
+        driver = undefined;
+        await runWindowsNotificationLaunchCase(remote, {
+          target,
+          runtime,
+          artifacts,
+          endpoint,
+          title,
+          cdpPort,
+          mode,
+        });
       } finally {
         try {
           await client.close();

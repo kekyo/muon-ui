@@ -20,6 +20,7 @@ LAUNCHER_RESOURCE_OBJECTS ?=
 PLUGIN_INSPECTOR_RESOURCE_OBJECTS ?=
 WINDRES ?= windres
 WINDOWS_FILESYSTEM_TEST_TARGET ?=
+WINDOWS_NOTIFICATION_TEST_TARGET ?=
 VERSION_HEADER ?=
 RUNTIME_INFO_HEADER ?=
 AR ?= ar
@@ -35,8 +36,14 @@ PREPARE_RESOURCE_OBJECTS := $(OUT_DIR)/muon_prepare_resource.o $(OUT_DIR)/engrav
 
 ifneq ($(strip $(PREPARE_WINDOWS_RESOURCE_OBJECTS)),)
 PREPARE_OBJECTS += $(OUT_DIR)/muon_windows_path.o
+LAUNCHER_NOTIFICATION_OBJECTS := $(OUT_DIR)/muon_notification_windows.o
+LAUNCHER_NOTIFICATION_LIBS := -lruntimeobject -lole32 -lshell32 -ladvapi32
 UNICODE_ENTRY_FLAGS := -municode
 endif
+
+$(OUT_DIR)/muon_notification_windows.o: src/muon_notification_windows.c src/muon_notification_windows.h
+	mkdir -p "$(OUT_DIR)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o "$@" "$<"
 
 $(OUT_DIR)/muon_windows_path.o: ../core/common/src/muon_windows_path.c ../core/common/include/muon_windows_path.h
 	mkdir -p "$(OUT_DIR)"
@@ -44,7 +51,7 @@ $(OUT_DIR)/muon_windows_path.o: ../core/common/src/muon_windows_path.c ../core/c
 
 .PHONY: all clean
 
-all: $(LIB_TARGET) $(PREPARE_TARGET) $(LAUNCHER_TARGET) $(RUNTIME_HELPER_TARGET) $(PLUGIN_INSPECTOR_TARGET) $(WINDOWS_FILESYSTEM_TEST_TARGET)
+all: $(LIB_TARGET) $(PREPARE_TARGET) $(LAUNCHER_TARGET) $(RUNTIME_HELPER_TARGET) $(PLUGIN_INSPECTOR_TARGET) $(WINDOWS_FILESYSTEM_TEST_TARGET) $(WINDOWS_NOTIFICATION_TEST_TARGET)
 
 .PHONY: test-linux-module-cache
 test-linux-module-cache: $(OUT_DIR)/linux_module_cache_test
@@ -126,9 +133,9 @@ $(PREPARE_TARGET): src/muon_prepare.c src/prepare.h src/prepare_progress.h src/m
 	mkdir -p "$(OUT_DIR)"
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(CFLAGS) $(LDFLAGS) $(UNICODE_ENTRY_FLAGS) -o "$@" src/muon_prepare.c $(PREPARE_RESOURCE_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
 
-$(LAUNCHER_TARGET): src/muon_launcher.c src/launcher_progress.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h src/prepare.h src/prepare_progress.h $(OUT_DIR)/launcher_progress.o $(LIB_TARGET) $(LAUNCHER_RESOURCE_OBJECTS)
+$(LAUNCHER_TARGET): src/muon_launcher.c src/launcher_progress.h src/launcher_config.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h src/prepare.h src/prepare_progress.h $(OUT_DIR)/launcher_progress.o $(LIB_TARGET) $(LAUNCHER_RESOURCE_OBJECTS) $(LAUNCHER_NOTIFICATION_OBJECTS)
 	mkdir -p "$(OUT_DIR)"
-	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(LAUNCHER_CPPFLAGS) $(CFLAGS) $(LAUNCHER_LDFLAGS) $(UNICODE_ENTRY_FLAGS) -o "$@" src/muon_launcher.c "$(OUT_DIR)/launcher_progress.o" $(LAUNCHER_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(LAUNCHER_LDLIBS)
+	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) $(LAUNCHER_CPPFLAGS) $(CFLAGS) $(LAUNCHER_LDFLAGS) $(UNICODE_ENTRY_FLAGS) -o "$@" src/muon_launcher.c "$(OUT_DIR)/launcher_progress.o" $(LAUNCHER_NOTIFICATION_OBJECTS) $(LAUNCHER_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS) $(LAUNCHER_LDLIBS) $(LAUNCHER_NOTIFICATION_LIBS)
 
 ifneq ($(strip $(RUNTIME_HELPER_TARGET)),)
 $(RUNTIME_HELPER_TARGET): src/muon_runtime_helper.c src/prepare.h src/common.h src/sha1.h $(SHA2_SOURCE_DIR)/sha2.h $(LIB_TARGET)
@@ -145,5 +152,10 @@ $(WINDOWS_FILESYSTEM_TEST_TARGET): test/windows_filesystem_test.c src/common.h $
 	$(CC) $(CPPFLAGS) $(SHA2_CPPFLAGS) -Isrc $(CFLAGS) $(LDFLAGS) -municode -Wl,--wrap=fwrite,--wrap=muon_atomic_replace -o "$@" "$<" $(PREPARE_RESOURCE_OBJECTS) "$(LIB_TARGET)" $(LDLIBS)
 endif
 
+ifneq ($(strip $(WINDOWS_NOTIFICATION_TEST_TARGET)),)
+$(WINDOWS_NOTIFICATION_TEST_TARGET): test/windows_notification_test.c src/muon_notification_windows.h $(OUT_DIR)/muon_notification_windows.o
+	$(CC) $(CPPFLAGS) -Isrc $(CFLAGS) $(LDFLAGS) -o "$@" "$<" "$(OUT_DIR)/muon_notification_windows.o" -lruntimeobject -lole32 -lshell32 -ladvapi32
+endif
+
 clean:
-	rm -f "$(PREPARE_TARGET)" "$(LAUNCHER_TARGET)" $(if $(strip $(RUNTIME_HELPER_TARGET)),"$(RUNTIME_HELPER_TARGET)") "$(PLUGIN_INSPECTOR_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/launcher_progress.o" $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(LAUNCHER_RESOURCE_OBJECTS) $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)
+	rm -f "$(PREPARE_TARGET)" "$(LAUNCHER_TARGET)" $(if $(strip $(RUNTIME_HELPER_TARGET)),"$(RUNTIME_HELPER_TARGET)") "$(PLUGIN_INSPECTOR_TARGET)" "$(LIB_TARGET)" "$(OUT_DIR)/launcher_progress.o" $(LAUNCHER_NOTIFICATION_OBJECTS) $(PREPARE_WINDOWS_RESOURCE_OBJECTS) $(LAUNCHER_RESOURCE_OBJECTS) $(PLUGIN_INSPECTOR_RESOURCE_OBJECTS) $(PREPARE_OBJECTS) $(PREPARE_RESOURCE_OBJECTS)

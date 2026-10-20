@@ -938,6 +938,271 @@ afterAll(async () => {
 
 describeWindowsNsis(suiteName, { concurrent: false }, () => {
   it.each(["windows-i686", "windows-amd64"] as const)(
+    "owns notification launch registration across updates and old-path uninstall (%s)",
+    async (target) => {
+      if (windowsAgent === undefined)
+        throw new Error("Windows e2e environment is not configured.");
+      const agent = windowsAgent;
+      const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+      const packageName = `muon-notification-install-${suffix}`;
+      const appId = `dev.muon.notificationtest.install.${suffix}`;
+      const identity = createWindowsNsisInstallIdentity(
+        packageName,
+        appId,
+        target,
+      );
+      const localRoot = await createTemporaryDirectory(
+        "muon-notification-install-",
+      );
+      const remoteRoot = await createRemoteTestDirectory(
+        agent,
+        windowsE2eEnvironment,
+        packageName,
+      );
+      const packageDirectory = await createFakeMuonPackageDist(localRoot, [
+        target,
+      ]);
+      // Keep packing small while exercising the real launcher's early
+      // maintenance entry. No runtime initialization is needed for uninstall.
+      await writeExecutable(
+        join(packageDirectory, "native", target, "muon-launcher.exe"),
+        await readFile(
+          resolve("..", "builder", `dist-${target}`, "muon-launcher.exe"),
+        ),
+      );
+      await writeViteProject(
+        localRoot,
+        packageDirectory,
+        [target],
+        packageName,
+      );
+      await writeFile(
+        join(localRoot, "muon.json"),
+        JSON.stringify({ notifications: { enabled: true } }),
+      );
+      const firstPath = joinWindowsPath(remoteRoot, "installed 日本語");
+      const nextPath = joinWindowsPath(remoteRoot, "updated 日本語");
+      let clsid = "";
+      const run = async (label: string, script: string): Promise<string> => {
+        const result = await runWindowsPowerShell(
+          agent,
+          remoteRoot,
+          label,
+          `$ErrorActionPreference='Stop'\n${script}`,
+          90000,
+        );
+        expectWindowsCommandSucceeded(result, label);
+        return result.stdout.trim();
+      };
+      try {
+        const packed = await packMuonApp({
+          appId,
+          packageName,
+          packageVersion: "1.2.3",
+          author: "muon Tester",
+          environment: process.env,
+          packageDirectory,
+          root: localRoot,
+          targets: [target],
+          types: ["nsis"],
+        });
+        const built = packed.targets[0]!;
+        if (built.target === "android")
+          throw new Error("Expected desktop package");
+        const registration = (
+          built.embeddedConfig.launcher as {
+            notificationRegistration: { activatorClsid: string };
+          }
+        ).notificationRegistration;
+        clsid = registration.activatorClsid;
+        const installer = joinWindowsPath(remoteRoot, "setup.exe");
+        await agent.files.writeFile(
+          installer,
+          await readFile(packed.artifacts[0]!.path),
+        );
+        const launcherName = basename(built.launcherPath);
+        const serverKey = `Software\\Classes\\CLSID\\${clsid}\\LocalServer32`;
+        const appKey = `Software\\Classes\\AppUserModelId\\${identity.runtimeAppId}`;
+        const registryBase = `[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,[Microsoft.Win32.RegistryView]::Registry64)`;
+        const assertOwner = async (path: string): Promise<void> => {
+          const launcher = joinWindowsPath(path, launcherName);
+          const state = JSON.parse(
+            await run(
+              "read-owner",
+              `
+$root=${registryBase}
+$server=$root.OpenSubKey(${quotePowerShellString(serverKey)})
+$app=$root.OpenSubKey(${quotePowerShellString(appKey)})
+if($null -eq $server -or $null -eq $app){throw 'Notification launch registration is missing'}
+[pscustomobject]@{Owner=$server.GetValue('MuonAppId');Server=$server.GetValue('ServerExecutable');Command=$server.GetValue('');Activator=$app.GetValue('CustomActivator')} | ConvertTo-Json -Compress
+$server.Dispose();$app.Dispose();$root.Dispose()
+`,
+            ),
+          ) as Record<string, string>;
+          expect(state).toEqual({
+            Owner: identity.runtimeAppId,
+            Server: launcher,
+            Command: `"${launcher}" --muon-notification-activation`,
+            Activator: clsid,
+          });
+        };
+        const install = async (path: string): Promise<void> => {
+          await run(
+            "install-notifications",
+            `$app=Start-Process -FilePath ${quotePowerShellString(installer)} -ArgumentList ${quotePowerShellString(`/S /D=${path}`)} -Wait -PassThru; exit $app.ExitCode`,
+          );
+          await assertOwner(path);
+        };
+        await install(firstPath);
+        const profile = await run(
+          "profile",
+          `
+$profile=Join-Path $env:LOCALAPPDATA ${quotePowerShellString(`${identity.runtimeAppId}\\profile`)}
+New-Item -ItemType Directory -Force $profile | Out-Null
+[IO.File]::WriteAllText((Join-Path $profile 'notifications.json'),'pending-event-fixture')
+Write-Output $profile
+`,
+        );
+        await install(firstPath);
+        expect(
+          (
+            await agent.files.readFile(
+              joinWindowsPath(profile, "notifications.json"),
+            )
+          ).toString(),
+        ).toBe("pending-event-fixture");
+        await install(nextPath);
+        // Run the older uninstaller in place: _?= makes NSIS waitable and
+        // prevents its temporary copy from outliving this assertion.
+        await run(
+          "old-uninstall",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(firstPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${firstPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        await assertOwner(nextPath);
+        expect(
+          (
+            await agent.files.readFile(
+              joinWindowsPath(profile, "notifications.json"),
+            )
+          ).toString(),
+        ).toBe("pending-event-fixture");
+        expect(
+          await agent.files.exists(joinWindowsPath(nextPath, launcherName)),
+        ).toBe(true);
+        const nestedPath = joinWindowsPath(nextPath, "relocated child");
+        await install(nestedPath);
+        await run(
+          "protect-nested-installation",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(nextPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${nextPath}`)} -Wait -PassThru; if($app.ExitCode -ne 5){throw ('Expected protected parent uninstall, got '+$app.ExitCode)}`,
+        );
+        await assertOwner(nestedPath);
+        expect(
+          await agent.files.exists(joinWindowsPath(nestedPath, launcherName)),
+        ).toBe(true);
+        await install(nextPath);
+        await run(
+          "old-nested-uninstall",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(nestedPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${nestedPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        await assertOwner(nextPath);
+        const maintenance = await runWindowsProcess(
+          agent,
+          remoteRoot,
+          "owned-maintenance",
+          joinWindowsPath(nextPath, launcherName),
+          ["--muon-notification-clear-history"],
+          30000,
+        );
+        expect(maintenance.exitCode, JSON.stringify(maintenance)).toBe(0);
+        await writeFile(
+          join(localRoot, "muon.json"),
+          JSON.stringify({ notifications: { enabled: false } }),
+        );
+        const disabled = await packMuonApp({
+          appId,
+          packageName,
+          packageVersion: "1.2.4",
+          author: "muon Tester",
+          environment: process.env,
+          packageDirectory,
+          root: localRoot,
+          targets: [target],
+          types: ["nsis"],
+        });
+        const disabledInstaller = joinWindowsPath(
+          remoteRoot,
+          "disabled-setup.exe",
+        );
+        await agent.files.writeFile(
+          disabledInstaller,
+          await readFile(disabled.artifacts[0]!.path),
+        );
+        // Installing another location must leave the currently owned launch
+        // registration and application state intact.
+        await run(
+          "disabled-other-location",
+          `$app=Start-Process -FilePath ${quotePowerShellString(disabledInstaller)} -ArgumentList ${quotePowerShellString(`/S /D=${firstPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        await assertOwner(nextPath);
+        await install(nextPath);
+        await run(
+          "disabled-same-location",
+          `$app=Start-Process -FilePath ${quotePowerShellString(disabledInstaller)} -ArgumentList ${quotePowerShellString(`/S /D=${nextPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        expect(
+          await run(
+            "assert-disabled-unregistered",
+            `
+$root=${registryBase}
+if($null -ne $root.OpenSubKey(${quotePowerShellString(serverKey)}) -or $null -ne $root.OpenSubKey(${quotePowerShellString(appKey)})){throw 'Disabled update kept notification launch registration'}
+$root.Dispose()
+Write-Output 'unregistered'
+`,
+          ),
+        ).toBe("unregistered");
+        expect(
+          (
+            await agent.files.readFile(
+              joinWindowsPath(profile, "notifications.json"),
+            )
+          ).toString(),
+        ).toBe("pending-event-fixture");
+        await run(
+          "current-uninstall",
+          `$app=Start-Process -FilePath ${quotePowerShellString(joinWindowsPath(nextPath, "Uninstall.exe"))} -ArgumentList ${quotePowerShellString(`/S _?=${nextPath}`)} -Wait -PassThru; exit $app.ExitCode`,
+        );
+        expect(
+          await run(
+            "assert-unregistered",
+            `
+$root=${registryBase}
+if($null -ne $root.OpenSubKey(${quotePowerShellString(serverKey)}) -or $null -ne $root.OpenSubKey(${quotePowerShellString(appKey)})){throw 'Owned notification registration remains'}
+$root.Dispose()
+Write-Output 'unregistered'
+`,
+          ),
+        ).toBe("unregistered");
+        expect(await agent.files.exists(profile)).toBe(false);
+      } finally {
+        await run(
+          "cleanup-notification-install",
+          `
+$root=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::CurrentUser,[Microsoft.Win32.RegistryView]::Registry64)
+${clsid ? `$root.DeleteSubKeyTree(${quotePowerShellString(`Software\\Classes\\CLSID\\${clsid}`)},$false)` : ""}
+$root.DeleteSubKeyTree(${quotePowerShellString(`Software\\Classes\\AppUserModelId\\${identity.runtimeAppId}`)},$false)
+$root.Dispose()
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue ('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\'+${quotePowerShellString(identity.runtimeAppId)})
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $env:LOCALAPPDATA ${quotePowerShellString(identity.runtimeAppId)})
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $env:LOCALAPPDATA ${quotePowerShellString(`Programs\\${identity.installDirectoryName}`)})
+Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA ${quotePowerShellString(`Microsoft\\Windows\\Start Menu\\Programs\\${identity.displayName}.lnk`)})
+`,
+        );
+        await removeRemoteDirectoryIfExists(agent, remoteRoot);
+      }
+    },
+  );
+
+  it.each(["windows-i686", "windows-amd64"] as const)(
     "installs at a short Unicode destination and rejects unsupported paths before writing (%s)",
     async (target) => {
       if (windowsAgent === undefined)

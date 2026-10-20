@@ -127,7 +127,11 @@ export interface MuonLinuxDesktopOptions {
   /**
    * Desktop entry identifier without the `.desktop` suffix.
    *
-   * @defaultValue Uses the resolved muon `appId`.
+   * @defaultValue Uses the resolved muon `appId` when it is a valid D-Bus
+   * application ID, otherwise a stable ID derived from it.
+   * @remarks An explicit identifier must be a valid D-Bus application ID when
+   * notifications are enabled. The default remains stable when notifications
+   * are disabled so the previous registration can be removed.
    */
   readonly desktopId?: string;
   /**

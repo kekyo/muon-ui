@@ -33,6 +33,7 @@ import {
   quoteDesktopExecArgument,
 } from "../../ui/cef/linux-desktop.js";
 import { createGnomeNotificationDriver } from "./notifications-accessibility.js";
+import { createKdeNotificationDriver } from "./notifications-kde-accessibility.js";
 import { runNotificationDesktopCase } from "./notifications-desktop-case.js";
 
 const execute = promisify(execFile);
@@ -71,13 +72,17 @@ describe.skipIf(process.platform !== "linux")(
   () => {
     it.each(["simple", "validate"] as const)(
       desktop
-        ? "delivers events from the GNOME notification UI in %s mode"
+        ? "delivers events from the Linux notification UI in %s mode"
         : "shares persisted notifications across pages in %s mode",
       async (mode) => {
         const directory = await mkdtemp(join(tmpdir(), "muon-notifications-"));
         const artifacts = resolve(
           ".run",
-          desktop ? "notifications-desktop" : "notifications-linux",
+          desktop
+            ? process.env.MUON_TEST_NOTIFICATION_SHELL === "kde"
+              ? "notifications-desktop-kde"
+              : "notifications-desktop"
+            : "notifications-linux",
           mode,
         );
         await mkdir(artifacts, { recursive: true });
@@ -366,6 +371,7 @@ describe.skipIf(process.platform !== "linux")(
                   comment: "Notification test driver",
                   categories: ["Development"],
                   startupNotify: false,
+                  notificationsEnabled: false,
                   iconPath,
                   iconFileName: `${appId}.png`,
                   configFileName: "muon.json",
@@ -375,6 +381,8 @@ describe.skipIf(process.platform !== "linux")(
                   .join(" "),
                 tryExec: executable,
                 icon: iconPath,
+                appId: undefined,
+                launcherPath: undefined,
               }),
               { flag: "wx" },
             );
@@ -461,7 +469,10 @@ describe.skipIf(process.platform !== "linux")(
             ),
           ).not.toBe("");
           if (desktop) {
-            const driver = await createGnomeNotificationDriver();
+            const driver =
+              process.env.MUON_TEST_NOTIFICATION_SHELL === "kde"
+                ? await createKdeNotificationDriver()
+                : await createGnomeNotificationDriver();
             closeDesktop = async () => await driver.close();
             // GNOME suppresses banners for resident notifications from the
             // focused application. Exercise delivery while our driver is hidden.

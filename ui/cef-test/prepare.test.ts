@@ -756,6 +756,7 @@ const writeLinuxDesktopFiles = async (
     comment: string;
     categories: readonly string[];
     startupNotify: boolean;
+    notificationsEnabled?: boolean;
     iconFileName?: string;
   },
 ): Promise<void> => {
@@ -769,6 +770,7 @@ const writeLinuxDesktopFiles = async (
         comment: desktop.comment,
         categories: desktop.categories,
         startupNotify: desktop.startupNotify,
+        notificationsEnabled: desktop.notificationsEnabled ?? false,
         iconFileName,
       },
       null,
@@ -1160,10 +1162,19 @@ const buildEmbeddedNodeRuntimeHarness = async (
   await writeFile(
     harnessPath,
     `#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "launcher_config.h"
 
-int main(void) {
+int main(int argc, char **argv) {
+  if (argc == 2 && strcmp(argv[1], "--notification-clsid") == 0) {
+    char *clsid = NULL;
+    if (muon_launcher_get_embedded_notification_clsid(&clsid) != 0) return 1;
+    printf("%s\\n", clsid == NULL ? "absent" : clsid);
+    free(clsid);
+    return 0;
+  }
   MuonNodeRuntimeRequirement requirement;
   int present = 0;
   if (muon_launcher_get_embedded_node_runtime_requirement(
@@ -1641,6 +1652,61 @@ describe("embedded Node runtime requirement", () => {
     );
   });
 
+  it.each([
+    { config: {}, expected: "absent" },
+    {
+      config: {
+        launcher: {
+          notificationRegistration: {
+            activatorClsid: "{58941eb1-8ca0-4dd4-83ae-e7e97b9c1b94}",
+          },
+        },
+      },
+      expected: "{58941eb1-8ca0-4dd4-83ae-e7e97b9c1b94}",
+    },
+    {
+      config: {
+        launcher: { notificationRegistration: { activatorClsid: "" } },
+      },
+      expected: null,
+    },
+    {
+      config: { launcher: { notificationRegistration: true } },
+      expected: null,
+    },
+    {
+      config: {
+        launcher: {
+          notificationRegistration: { activatorClsid: "bad\0value" },
+        },
+      },
+      expected: null,
+    },
+  ])(
+    "reads notification maintenance identity $expected",
+    async ({ config, expected }) => {
+      const directory = await createTemporaryDirectory(
+        "muon-notification-identity-",
+      );
+      const executable = join(directory, "harness");
+      await writeEmbeddedNodeRuntimeHarness(
+        harnessPath,
+        encodeMuonConfigTlv(config),
+        executable,
+      );
+      if (expected === null) {
+        await expect(
+          execFileAsync(executable, ["--notification-clsid"]),
+        ).rejects.toMatchObject({ code: 1 });
+      } else {
+        const { stdout } = await execFileAsync(executable, [
+          "--notification-clsid",
+        ]);
+        expect(stdout.trim()).toBe(expected);
+      }
+    },
+  );
+
   it("decodes a normalized requirement without reading random slot padding", async () => {
     const root = await createTemporaryDirectory(
       "muon-embedded-node-runtime-valid-",
@@ -1746,6 +1812,41 @@ describe("embedded Node runtime requirement", () => {
 });
 
 describe("muon-builder", () => {
+  it("passes the originating launcher path independently of the cached runtime", async () => {
+    const fixture = await createPrepareFixture();
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      '#!/bin/sh\nprintf "%s\\n" "$MUON_LAUNCHER_PATH" "$MUON_LAUNCHER_APP_ID" "$1"\n',
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    const launcher = await writeEmbeddedLauncher(
+      fixture,
+      {
+        launcher: { appId: "dev.muon.launch-origin" },
+      },
+      "日本語 launcher",
+    );
+    const { stdout } = await execFileAsync(
+      launcher,
+      ["--muon-notification-activation"],
+      {
+        env: {
+          ...process.env,
+          MUON_LAUNCHER_PATH: "/stale/parent-launcher",
+          MUON_CACHE_DIR: fixture.cacheDir,
+          MUON_CEF_CATALOG_URL: fixture.catalogPath,
+          XDG_STATE_HOME: join(fixture.projectPath, "state"),
+          XDG_DATA_HOME: join(fixture.projectPath, "data"),
+        },
+      },
+    );
+    expect(stdout.trim().split("\n")).toEqual([
+      launcher,
+      "dev.muon.launch-origin",
+      "--muon-notification-activation",
+    ]);
+  });
+
   it("relocates Linux module caches to the final runtime directory on preparation and reuse", async () => {
     const fixture = await createPrepareFixture();
     fixture.stageDir = join(fixture.projectPath, '日本語 runtime "quoted"');
@@ -4017,6 +4118,7 @@ requestedAtUnix=123
         comment: "",
         categories: ["Utility"],
         startupNotify: false,
+        notificationsEnabled: false,
         iconPath: icon,
         iconFileName: "icon.png",
         configFileName: "muon-desktop.json",
@@ -4238,6 +4340,131 @@ exit 19
     await expect(
       readFile(join(outputDirectory, "state-launcher.txt"), "utf8"),
     ).resolves.toBe("state launcher\n");
+  });
+
+  it("registers Linux notification activation and unregisters only after successful owned maintenance", async () => {
+    const fixture = await createPrepareFixture();
+    const stateHome = await createTemporaryDirectory(
+      "muon-notification-state-",
+    );
+    const dataHome = await createTemporaryDirectory("muon-notification-data-");
+    const appId = "dev.muon.NotificationLifecycle";
+    const output = join(fixture.projectPath, "maintenance.log");
+    await writeFile(
+      join(fixture.muonPath, "muon-core"),
+      `#!/bin/sh
+printf '%s:%s:%s\\n' "$1" "$MUON_LAUNCHER_APP_ID" "$MUON_LAUNCHER_PATH" >> '${output}'
+if [ "$1" = "--muon-notification-clear-history" ]; then
+  exit "\${MUON_TEST_MAINTENANCE_RESULT:-0}"
+fi
+exit 0
+`,
+    );
+    await chmod(join(fixture.muonPath, "muon-core"), 0o755);
+    await writeFile(
+      join(fixture.muonPath, "muon-install.json"),
+      JSON.stringify({ type: "portable", runtimeMode: "in-place" }),
+    );
+    await writeLinuxDesktopFiles(fixture.muonPath, {
+      desktopId: appId,
+      name: "Notification lifecycle",
+      comment: "",
+      categories: ["Utility"],
+      startupNotify: true,
+      notificationsEnabled: true,
+    });
+    await copyFile(
+      resolve("../images/muon-256.png"),
+      join(fixture.muonPath, "muon-desktop-icon.png"),
+    );
+    const launcher = await writeEmbeddedLauncher(fixture, {
+      launcher: { appId },
+    });
+    const env = {
+      ...process.env,
+      MUON_CACHE_DIR: fixture.cacheDir,
+      MUON_CEF_CATALOG_URL: fixture.catalogPath,
+      XDG_STATE_HOME: stateHome,
+      XDG_DATA_HOME: dataHome,
+    };
+    const run = async (args: string[], result: string) =>
+      await execFileAsync(launcher, args, {
+        env: { ...env, MUON_TEST_MAINTENANCE_RESULT: result },
+      });
+    await run([], "0");
+    const desktopPath = getUserDesktopEntryPath(dataHome, appId);
+    const servicePath = join(dataHome, "dbus-1/services", `${appId}.service`);
+    const desktop = await readFile(desktopPath, "utf8");
+    const service = await readFile(servicePath, "utf8");
+    expect(desktop).toContain("DBusActivatable=true\n");
+    expect(desktop).toContain(`X-muon-Launcher=${launcher}\n`);
+    expect(desktop).toContain(`Icon=${appId}\n`);
+    expect(service).toContain(`Name=${appId}\n`);
+    expect(service).toContain(
+      `Exec="${launcher}" --muon-notification-activation\n`,
+    );
+    expect(service).toContain(`X-muon-AppId=${appId}\n`);
+    const icon = join(dataHome, "icons/hicolor/256x256/apps", `${appId}.png`);
+    await expect(readFile(icon)).resolves.toEqual(
+      await readFile(resolve("../images/muon-256.png")),
+    );
+    const pending = join(stateHome, "pending-event.json");
+    await writeFile(pending, '{"eventId":"keep"}');
+    await run(["--muon-notification-clear-history"], "0");
+    await expect(readFile(servicePath, "utf8")).resolves.toBe(service);
+    await expect(
+      run(["--muon-notification-unregister"], "23"),
+    ).rejects.toMatchObject({ code: 23 });
+    await expect(readFile(servicePath, "utf8")).resolves.toBe(service);
+    await writeFile(desktopPath, `${desktop}X-muon-AppId=foreign\n`);
+    const beforeDuplicate = await readFile(output, "utf8");
+    await expect(
+      run(["--muon-notification-unregister"], "0"),
+    ).rejects.toMatchObject({ code: 1 });
+    await expect(readFile(output, "utf8")).resolves.toBe(beforeDuplicate);
+    await writeFile(desktopPath, desktop);
+    await writeFile(
+      servicePath,
+      service.replace(`X-muon-AppId=${appId}`, "X-muon-AppId=foreign"),
+    );
+    const beforeForeign = await readFile(output, "utf8");
+    await expect(
+      run(["--muon-notification-unregister"], "0"),
+    ).rejects.toMatchObject({ code: 1 });
+    await expect(readFile(output, "utf8")).resolves.toBe(beforeForeign);
+    await writeFile(servicePath, service);
+    await run(["--muon-notification-unregister"], "0");
+    await expect(access(servicePath)).rejects.toThrow();
+    await expect(access(desktopPath)).rejects.toThrow();
+    await expect(access(icon)).rejects.toThrow();
+    await expect(readFile(pending, "utf8")).resolves.toBe('{"eventId":"keep"}');
+    await run([], "0");
+    const metadataPath = join(fixture.muonPath, "muon-desktop.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    await writeFile(
+      metadataPath,
+      JSON.stringify({ ...metadata, notificationsEnabled: false }),
+    );
+    const otherLauncher = await writeEmbeddedLauncher(
+      fixture,
+      { launcher: { appId } },
+      "another-location",
+    );
+    await execFileAsync(otherLauncher, [], { env });
+    await expect(readFile(servicePath, "utf8")).resolves.toBe(service);
+    await expect(readFile(desktopPath, "utf8")).resolves.toBe(desktop);
+    await expect(run([], "23")).rejects.toMatchObject({ code: 23 });
+    await expect(readFile(servicePath, "utf8")).resolves.toBe(service);
+    await run([], "0");
+    await expect(access(servicePath)).rejects.toThrow();
+    await expect(access(icon)).rejects.toThrow();
+    expect(await readFile(desktopPath, "utf8")).not.toContain(
+      "DBusActivatable=true",
+    );
+    await expect(readFile(pending, "utf8")).resolves.toBe('{"eventId":"keep"}');
   });
 
   it("launchers a portable install in place without using the user state runtime", async () => {

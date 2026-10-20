@@ -27,6 +27,10 @@ declare global {
     readonly executor: MuonExecutorApi;
     /** Filesystem operations exposed by the built-in muon filesystem plugin. */
     readonly fs: MuonFsApi;
+    /** Android-only operations, present when permitted by the plugin policy. */
+    readonly android?: MuonAndroidApi;
+    /** Native local notifications, present only when enabled and permitted. */
+    readonly notifications?: MuonNotificationsApi;
     /**
      * Optional out-of-process Node.js runtime.
      *
@@ -35,6 +39,513 @@ declare global {
      * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
+  }
+
+  /** Values preserved when notification data is serialized and restored. */
+  type MuonNotificationData =
+    | null
+    | boolean
+    | number
+    | string
+    | readonly MuonNotificationData[]
+    | { readonly [key: string]: MuonNotificationData };
+
+  /** A named notification action, independently of support for starting an exited app. */
+  interface MuonNotificationAction {
+    /** Nonempty ID of up to 128 UTF-16 code units, unique within this notification. */
+    readonly id: string;
+    /** Nonempty user-visible label of up to 128 UTF-16 code units. */
+    readonly title: string;
+  }
+
+  /** Application-owned local notification. */
+  interface MuonNotificationOptions {
+    /** Stable app-scoped ID, up to 128 UTF-16 code units; reposting updates it. */
+    readonly id: string;
+    /** Nonempty display title, up to 1024 UTF-16 code units. */
+    readonly title: string;
+    /** Body text, up to 4096 UTF-16 code units; may be empty. */
+    readonly body: string;
+    /** Purpose key, up to 128 code units; omission uses notifications.defaultCategory. */
+    readonly category?: string;
+    /** JSON data for notification interaction; maximum encoded size is 16384 UTF-8 bytes and depth is 64. */
+    readonly data?: MuonNotificationData;
+    /** Up to three named action buttons; requires the actions capability. */
+    readonly actions?: readonly MuonNotificationAction[];
+  }
+
+  /** One persisted operation on a posted notification revision. */
+  interface MuonNotificationEvent {
+    /** Stable identifier for deduplication and explicit acknowledgement. */
+    readonly eventId: string;
+    /** Application notification ID supplied to post(). */
+    readonly id: string;
+    /** Default notification activation or a named action button. */
+    readonly type: "activate" | "action";
+    /** Named action ID, or null for default activation. */
+    readonly actionId: string | null;
+    /** Data from the operated revision; null when post() omitted data. */
+    readonly data: MuonNotificationData;
+  }
+
+  /** Receives notification events serially; returning does not acknowledge them. */
+  type MuonNotificationListener = (
+    event: MuonNotificationEvent,
+  ) => void | Promise<void>;
+
+  /** A page-owned subscription that does not own persisted events. */
+  interface MuonNotificationWatcher {
+    /**
+     * Releases this subscription and cancels its pending native wait.
+     * @returns Completion of release; repeated calls share the same operation.
+     * @remarks May be awaited inside the listener. Already running listeners are
+     * not awaited, and later listeners are prevented. Pending events remain intact.
+     */
+    readonly close: () => Promise<void>;
+  }
+
+  /** Support for a feature, independently of current notification permission. */
+  interface MuonNotificationSupport {
+    /** Support established from this implementation and its environment. */
+    readonly state: "supported" | "unsupported" | "unknown";
+    /** Diagnostic reason when applicable; null when no explanation is needed. */
+    readonly reason: string | null;
+  }
+
+  /** Features available in the current implementation and OS environment. */
+  interface MuonNotificationCapabilities {
+    /** Delivery of notification operations to the running application. */
+    readonly interaction: MuonNotificationSupport;
+    /** Starting an exited application and delivering its notification operation. */
+    readonly launch: MuonNotificationSupport;
+    /** Keeping posted notifications after normal application process exit. */
+    readonly persistence: MuonNotificationSupport;
+    /** Additional named action buttons. */
+    readonly actions: MuonNotificationSupport;
+    /** Reading application-wide posting permission. */
+    readonly appStatus: MuonNotificationSupport;
+    /** Reading OS controls for an individual purpose category. */
+    readonly categoryStatus: MuonNotificationSupport;
+  }
+
+  /** Current posting permission observation; not evidence of display or reading. */
+  interface MuonNotificationPostingState {
+    /** Whether posting is enabled, disabled, or cannot be determined. */
+    readonly state: "enabled" | "disabled" | "unknown";
+    /** Diagnostic reason, or null when no explanation is needed. */
+    readonly reason: string | null;
+  }
+
+  /** Application state and, only when requested, category-specific state. */
+  interface MuonNotificationStatus {
+    /** Current application-wide permission observation. */
+    readonly app: MuonNotificationPostingState;
+    /** Category observation, independently of app state; null for an app-only query. */
+    readonly category:
+      | (MuonNotificationPostingState & {
+          /** Requested category ID. */
+          readonly id: string;
+        })
+      | null;
+  }
+
+  /** Shared native local notification operations, present only in enabled builds. */
+  interface MuonNotificationsApi {
+    /**
+     * Posts or replaces one notification using its app-scoped stable ID.
+     * @param options - Content, category and JSON data for this notification.
+     * @returns Completion of the OS API submission, not delivery or viewing confirmation.
+     * @remarks Never requests permission implicitly. Rejects known permission or
+     * channel disablement, unregistered Android categories and unsupported options.
+     * On event-capable backends, unoperated revisions and unacknowledged events
+     * share 256 reserved slots. A full store rejects new posts. Updating an ID
+     * invalidates its unoperated older revision and reuses that slot; previously
+     * received events remain intact. Unoperated revisions expire after 30 days.
+     * Removal by the user or OS does not release its reserved slot; use
+     * cancel(), replace that ID, or let the revision expire.
+     * OS submission and local persistence are not one atomic transaction.
+     * Linux updates submit a distinct OS notification before withdrawing the old
+     * revision; both may briefly appear during replacement.
+     * Android APK replacement may clear posted notifications; they are not
+     * automatically reposted after an update.
+     */
+    readonly post: (options: MuonNotificationOptions) => Promise<void>;
+    /**
+     * Withdraws one notification without affecting other IDs.
+     * @param id - Stable app-scoped notification ID.
+     * @returns Completion; a missing notification is also successful.
+     * @remarks Invalidates an unoperated revision without removing its received events.
+     */
+    readonly cancel: (id: string) => Promise<void>;
+    /**
+     * Reads fresh posting state, separately from feature support.
+     * @param category - Optional purpose key; omission queries only the application.
+     * @returns App-wide state and the explicitly requested category, if any.
+     */
+    readonly getStatus: (category?: string) => Promise<MuonNotificationStatus>;
+    /**
+     * Reads support for each notification feature in the current environment.
+     * @returns Support and diagnostics; does not imply user permission.
+     * @remarks Linux's direct notification backend cannot launch an exited app.
+     * A service advertising persistence does not establish retention after process
+     * exit, so that backend reports unknown unless the service lacks persistence.
+     */
+    readonly getCapabilities: () => Promise<MuonNotificationCapabilities>;
+    /**
+     * Reads persisted, unacknowledged operations without consuming them.
+     * @returns Events retained across page and process destruction, oldest first.
+     * @remarks Subscribe before reading, then deduplicate by eventId. Events expire
+     * 30 days after receipt. Only the first operation on a revision creates an
+     * event and withdraws its notification. Late operations on an updated,
+     * cancelled or expired unoperated revision are ignored.
+     * Android events survive APK updates retaining the application ID and data;
+     * uninstalling or clearing application data removes the stored events.
+     */
+    readonly getPendingEvents: () => Promise<readonly MuonNotificationEvent[]>;
+    /**
+     * Subscribes to newly received operations in this page context.
+     * @param listener - Serial event handler; errors are logged without acknowledging.
+     * @returns A handle delivered before any listener invocation.
+     * @remarks This does not replay existing events. Subscribe before calling
+     * getPendingEvents(), and deduplicate by eventId. Other pages may receive the
+     * same event; another page's acknowledgement can prevent later delivery.
+     * Transport errors close the subscription after logging. Page destruction
+     * releases the subscription without deleting application-owned events.
+     */
+    readonly watchEvents: (
+      listener: MuonNotificationListener,
+    ) => Promise<MuonNotificationWatcher>;
+    /**
+     * Removes one event from the application's pending set after processing.
+     * @param eventId - Stable ID received through getPendingEvents() or watchEvents().
+     * @returns Durable completion; unknown or previously acknowledged IDs are no-ops.
+     * @remarks Acknowledgement affects all pages and does not revoke callbacks
+     * already dispatched. Up to 1024 acknowledged IDs are kept for 30 days;
+     * unknown operation tokens are ignored even after that record expires.
+     */
+    readonly acknowledgeEvent: (eventId: string) => Promise<void>;
+  }
+
+  /** Initial importance for an Android notification channel. */
+  type MuonAndroidNotificationImportance = "min" | "low" | "default" | "high";
+
+  /** Channel definition registered before posting to its category. */
+  interface MuonAndroidNotificationChannelOptions {
+    /** Stable purpose key, up to 128 code units; also used as notification category. */
+    readonly id: string;
+    /** Nonempty user-visible name, up to 128 code units. */
+    readonly name: string;
+    /** User-visible explanation, up to 1024 code units; defaults to an empty string. */
+    readonly description?: string;
+    /** Initial importance; existing channels retain their OS/user-controlled settings. */
+    readonly importance: MuonAndroidNotificationImportance;
+  }
+
+  /** Effective channel settings read from Android. */
+  interface MuonAndroidNotificationChannel {
+    /** Stable channel and purpose ID. */
+    readonly id: string;
+    /** Name currently registered with Android. */
+    readonly name: string;
+    /** Description currently registered with Android. */
+    readonly description: string;
+    /** OS-controlled importance; none means the channel is disabled. */
+    readonly importance: MuonAndroidNotificationImportance | "none";
+    /** Whether this channel is enabled, independently of app-wide permission. */
+    readonly enabled: boolean;
+  }
+
+  /** Features specific to Android notifications. */
+  interface MuonAndroidNotificationCapabilities {
+    /** OS channels require API 26; older versions only support static Muon categories. */
+    readonly channels: MuonNotificationSupport;
+  }
+
+  /** Operations specific to the Android WebView backend. */
+  interface MuonAndroidApi {
+    /** Control and observe the Android system bars. */
+    readonly systemBars: MuonAndroidSystemBarsApi;
+    /** Open app-scoped Android system settings. */
+    readonly settings: MuonAndroidSettingsApi;
+    /** Notification permission operations, present only when enabled and permitted. */
+    readonly notifications?: MuonAndroidNotificationsApi;
+  }
+
+  /** System settings screens scoped to this application. */
+  type MuonAndroidSettingsTarget =
+    | "app-details"
+    | "notifications"
+    | {
+        /** Channel settings require a concrete channel ID. */
+        readonly type: "notification-channel";
+        /** Registered channel ID belonging to this application. */
+        readonly channelId: string;
+      };
+
+  /** Explicit fallback when a dedicated settings screen is unavailable. */
+  interface MuonAndroidSettingsOptions {
+    /** Permit opening app information instead of the requested screen. */
+    readonly fallback?: "app-details";
+  }
+
+  /** Accepted settings launch, without a claim about the user's changes. */
+  interface MuonAndroidSettingsResult {
+    /** Screen requested by the caller. */
+    readonly requestedTarget: MuonAndroidSettingsTarget;
+    /** Screen for which Android accepted the launch request. */
+    readonly target: MuonAndroidSettingsTarget;
+    /** Whether the explicitly permitted fallback was used. */
+    readonly fallbackUsed: boolean;
+  }
+
+  /** Access to the application's Android settings screens. */
+  interface MuonAndroidSettingsApi {
+    /**
+     * Checks whether Android can resolve this screen for the current app.
+     * @param target - Screen to check, without applying fallback.
+     * @returns Current availability; a later launch can still fail.
+     */
+    readonly isAvailable: (
+      target: MuonAndroidSettingsTarget,
+    ) => Promise<boolean>;
+    /**
+     * Opens an Android settings screen from the foreground Activity.
+     * @param target - Screen requested for this app.
+     * @param options - Explicit fallback policy; no fallback by default.
+     * @returns The accepted destination, not a settings-change result.
+     * @remarks Read permission and system bar state again when the app resumes.
+     * Rejects when the Activity or destination is unavailable.
+     */
+    readonly open: (
+      target: MuonAndroidSettingsTarget,
+      options?: MuonAndroidSettingsOptions,
+    ) => Promise<MuonAndroidSettingsResult>;
+  }
+
+  /** Current notification permission observations; not a permanent-denial diagnosis. */
+  interface MuonAndroidNotificationPermissionState {
+    /** API <33 needs no runtime permission; denied includes never requested. */
+    readonly runtimePermission: "not-required" | "granted" | "denied";
+    /** Whether Android currently permits notifications for this application. */
+    readonly notificationsEnabled: boolean;
+    /** Whether Muon invoked the OS request API before; does not prove a dialog appeared. */
+    readonly requestedBefore: boolean;
+    /** Android's current recommendation to explain the permission before requesting. */
+    readonly shouldShowRationale: boolean;
+    /**
+     * Whether directing the user to settings may help; not proof of permanent denial.
+     * @remarks True when notifications are disabled and runtime permission is not
+     * needed or already granted, or when a previous request has no rationale flag.
+     */
+    readonly settingsSuggested: boolean;
+  }
+
+  /** Observations after a notification permission request settles. */
+  interface MuonAndroidNotificationPermissionResult {
+    /** Fresh OS permission and app-wide notification state. */
+    readonly state: MuonAndroidNotificationPermissionState;
+    /**
+     * Limited outcome provided by the OS callback.
+     * @remarks Interrupted means an empty permission result. Not-granted does
+     * not distinguish denial from every dismissal or suppressed dialog.
+     */
+    readonly result: "granted" | "not-granted" | "interrupted" | "not-required";
+  }
+
+  /** Android notification permission operations, exposed only when notifications are enabled. */
+  interface MuonAndroidNotificationsApi {
+    /**
+     * Reads availability of Android-only notification features.
+     * @returns Channel support independently of user permission.
+     */
+    readonly getCapabilities: () => Promise<MuonAndroidNotificationCapabilities>;
+    /**
+     * Registers a channel, preserving existing OS and user settings.
+     * @param options - New channel definition; existing channels are left unchanged.
+     * @returns Current effective channel settings; rejects on API 24/25.
+     */
+    readonly ensureChannel: (
+      options: MuonAndroidNotificationChannelOptions,
+    ) => Promise<MuonAndroidNotificationChannel>;
+    /**
+     * Reads the current OS channel settings.
+     * @param id - Category/channel ID to query.
+     * @returns The channel or null when absent; rejects on API 24/25.
+     */
+    readonly getChannel: (
+      id: string,
+    ) => Promise<MuonAndroidNotificationChannel | null>;
+    /**
+     * Reads current OS state without requesting permission.
+     * @returns Fresh runtime permission and app-wide notification observations.
+     */
+    readonly getPermissionState: () => Promise<MuonAndroidNotificationPermissionState>;
+    /**
+     * Explicitly requests notification permission from the foreground Activity.
+     * @returns State after the limited OS outcome; API <33 returns not-required.
+     * @remarks Only one request can be pending. Rejects if the Activity is not
+     * available or foreground, or when its page context is destroyed. No request
+     * runs automatically at startup or when a notification is posted.
+     */
+    readonly requestPermission: () => Promise<MuonAndroidNotificationPermissionResult>;
+  }
+
+  /** Placement of web content relative to system bars and display cutouts. */
+  type MuonAndroidContentLayout = "safe-area" | "edge-to-edge";
+
+  /** Color of the system bar icons, independently of the content background. */
+  type MuonAndroidSystemBarIcons = "light" | "dark";
+
+  /** Partial configuration of one Android system bar. */
+  interface MuonAndroidSystemBarOptions {
+    /** Whether the bar should be visible; omission preserves its request. */
+    readonly visible?: boolean;
+    /** Icon color; omission preserves the current appearance. */
+    readonly icons?: MuonAndroidSystemBarIcons;
+  }
+
+  /** Partial Android system bar configuration. */
+  interface MuonAndroidSystemBarsOptions {
+    /** Top status bar configuration. */
+    readonly statusBar?: MuonAndroidSystemBarOptions;
+    /** Bottom navigation bar configuration. */
+    readonly navigationBar?: MuonAndroidSystemBarOptions;
+    /** Placement policy; omission preserves the current layout. */
+    readonly contentLayout?: MuonAndroidContentLayout;
+  }
+
+  /** Requested layout and requested and observed Android system bar appearance. */
+  interface MuonAndroidSystemBarsState {
+    /** Application requests, unaffected by transient system bar reveals. */
+    readonly requested: {
+      /** Requested web content placement. */
+      readonly contentLayout: MuonAndroidContentLayout;
+      /** Status bar request. */
+      readonly statusBar: {
+        /** Whether the application requests the bar to remain visible. */
+        readonly visible: boolean;
+        /** Requested icon color, or null when inherited from the theme. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
+      };
+      /** Navigation bar request. */
+      readonly navigationBar: {
+        /** Whether the application requests the bar to remain visible. */
+        readonly visible: boolean;
+        /** Requested icon color, or null when inherited from the theme. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
+      };
+    };
+    /**
+     * Visibility and icon appearance reported by Android's public window APIs.
+     * @remarks Null means window insets are not available yet. Visibility is an
+     * OS-reported value, not a measurement of rendered screen pixels. Transient
+     * swipe overlays may remain reported as hidden. On API 29 and earlier,
+     * AndroidX approximates visibility from the available inset information.
+     * @see https://developer.android.com/reference/android/view/WindowInsets#isVisible(int)
+     * @see https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/InsetsController.java
+     */
+    readonly actual: {
+      /** Status bar state reported by Android. */
+      readonly statusBar: {
+        /** Whether Android reports the bar as visible; null before insets are available. */
+        readonly visible: boolean | null;
+        /** Icon appearance reported by Android, or null before insets are available. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
+      };
+      /** Navigation bar state reported by Android. */
+      readonly navigationBar: {
+        /** Whether Android reports the bar as visible; null before insets are available. */
+        readonly visible: boolean | null;
+        /** Icon appearance reported by Android, or null before insets are available. */
+        readonly icons: MuonAndroidSystemBarIcons | null;
+      };
+    };
+  }
+
+  /** Android system bar operations. */
+  interface MuonAndroidSystemBarsApi {
+    /**
+     * Updates bar visibility, icon colors, and web content placement.
+     * @param options - Partial configuration; omitted settings retain their request.
+     * @returns Completion of the request, before any OS animation finishes.
+     * @remarks Unsupported keys and invalid values are rejected. Hidden bars
+     * remain available through the system's transient swipe gesture.
+     */
+    readonly configure: (
+      options: MuonAndroidSystemBarsOptions,
+    ) => Promise<void>;
+    /**
+     * Reads requested layout and bar appearance without changing the request.
+     * @returns Current system bar state, including unknown observations.
+     */
+    readonly getState: () => Promise<MuonAndroidSystemBarsState>;
+    /**
+     * Read the current geometry after the first window insets become available.
+     * @returns Insets in CSS pixels at the current page scale.
+     */
+    readonly getInsets: () => Promise<MuonAndroidSystemBarsInsets>;
+    /**
+     * Subscribe to the initial geometry and subsequent changes without polling.
+     * @param listener - Receives CSS-pixel snapshots serially.
+     * @returns A handle that releases the subscription and cancels its pending wait.
+     * @remarks The first callback runs after the caller receives the handle.
+     * Changes may be coalesced while the listener is running. Listener
+     * errors are logged and do not stop later updates. Transport errors are logged
+     * and close the subscription. Page destruction also releases subscriptions.
+     */
+    readonly watchInsets: (
+      listener: MuonAndroidInsetsListener,
+    ) => Promise<MuonAndroidInsetsWatcher>;
+  }
+
+  /** Insets measured from each edge, in CSS pixels. */
+  interface MuonAndroidInsets {
+    /** Distance from the top edge. */
+    readonly top: number;
+    /** Distance from the right edge. */
+    readonly right: number;
+    /** Distance from the bottom edge. */
+    readonly bottom: number;
+    /** Distance from the left edge. */
+    readonly left: number;
+  }
+
+  /** Native insets and the remaining web content clearance at the current scale. */
+  interface MuonAndroidSystemBarsInsets {
+    /** Monotonic revision within the current WebView host. */
+    readonly revision: number;
+    /** Unit of all edge distances after applying the WebView page scale. */
+    readonly unit: "css-px";
+    /** Current web content placement policy. */
+    readonly contentLayout: MuonAndroidContentLayout;
+    /** Insets occupied by visible system bars. */
+    readonly systemBars: MuonAndroidInsets;
+    /** Insets needed to avoid the display cutout. */
+    readonly displayCutout: MuonAndroidInsets;
+    /** Areas reserved for system navigation gestures. */
+    readonly systemGestures: MuonAndroidInsets;
+    /** Software keyboard insets, independent of the safe area. */
+    readonly ime: MuonAndroidInsets;
+    /** Per-edge maximum of systemBars and displayCutout. */
+    readonly safeArea: MuonAndroidInsets;
+    /** Remaining clearance for web content; zero in safe-area layout. */
+    readonly contentSafeArea: MuonAndroidInsets;
+  }
+
+  /** Receives one insets snapshot, with updates serialized until it settles. */
+  type MuonAndroidInsetsListener = (
+    insets: MuonAndroidSystemBarsInsets,
+  ) => void | Promise<void>;
+
+  /** Owns a page-local Android insets subscription. */
+  interface MuonAndroidInsetsWatcher {
+    /**
+     * Release the subscription without waiting for another geometry change.
+     * @returns Completion of release; repeated calls share the same operation.
+     * @remarks May be awaited from inside a listener. It prevents further listener
+     * calls, but does not wait for a listener that is already executing.
+     */
+    readonly close: () => Promise<void>;
   }
 
   /**

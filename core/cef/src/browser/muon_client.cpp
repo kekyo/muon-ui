@@ -17,6 +17,7 @@
 #include "plugins/muon_cef_plugin_metadata.h"
 #include "plugins/muon_plugin_metadata.h"
 #include "network/muon_network_request_handler.h"
+#include "notifications/muon_notification_rpc.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 #include "browser/show_dev_tools_task.h"
@@ -27,6 +28,7 @@
 #include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_fs_dialogs_plugin.h"
 #include "ui/muon_ui_fs_dialogs.h"
+#include "ui/muon_ui_notification_activation.h"
 
 #include "include/cef_app.h"
 #include "include/cef_command_ids.h"
@@ -1383,6 +1385,42 @@ bool MuonClient::OnBeforePopup(
   return true;
 }
 
+void MuonClient::ActivateNotificationWindow(std::string startup_id) {
+  CEF_REQUIRE_UI_THREAD();
+  if (message_loop_quit_requested_) return;
+  notification_activation_pending_ = true;
+  notification_startup_id_ = std::move(startup_id);
+  // Prefer the application's original window, then a surviving popup if the
+  // original has closed. Never create another browser for an OS interaction.
+  for (const auto popup : {false, true}) {
+    for (const auto& [id, browser] : browsers_by_id_) {
+      if (!browser || browser->IsPopup() != popup) continue;
+      CefRefPtr<CefBrowserView> view;
+      CefRefPtr<CefWindow> window;
+      std::string error;
+      if (!GetBrowserViewAndWindow(browser, &view, &window, &error) || window->IsClosed()) continue;
+      notification_activation_pending_ = false;
+#if defined(OS_LINUX)
+      if (PresentMuonModalDialog(window)) return;
+#endif
+      if (window->IsMinimized()) window->Restore();
+      window->Show();
+      window->Activate();
+#if defined(OS_LINUX)
+      const auto backend = ResolveMuonLinuxDisplayBackend(
+          GetMuonStartupCommandLine(), std::getenv("XDG_SESSION_TYPE"),
+          std::getenv("WAYLAND_DISPLAY"), std::getenv("DISPLAY"));
+      if (backend == kMuonLinuxDisplayBackendX11)
+        muon_ui_notification_activate_x11(window->GetWindowHandle(),
+                                          notification_startup_id_.c_str());
+#endif
+      notification_startup_id_.clear();
+      view->RequestFocus();
+      return;
+    }
+  }
+}
+
 void MuonClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
   CEF_REQUIRE_UI_THREAD();
   {
@@ -1408,6 +1446,8 @@ void MuonClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
     quit_message_loop_after_pending_fs_dialogs_ = false;
     quit_message_loop_after_pending_fs_dialogs_browser_id_ = 0;
   }
+  if (notification_activation_pending_)
+    ActivateNotificationWindow(std::move(notification_startup_id_));
   {
     std::ostringstream log;
     log << "MuonClient OnAfterCreated end this="
@@ -3817,8 +3857,10 @@ void MuonClient::InvokeRpcPlugin(const MuonRpcCallRequest& request,
     BeginPendingFsDialogCall(call.context.browser_id, fs_dialog_policy);
   }
   CefRefPtr<MuonClient> self(this);
+  auto bound_request = request;
+  BindMuonNotificationWatchOwner(bound_request, plugin_runtime_->GetFunctions());
   plugin_runtime_->Invoke(
-      request,
+      bound_request,
       [self, completion = std::move(completion), call_key,
        modal_browser_id = call.modal_browser_id,
        track_fs_dialog_call = call.track_fs_dialog_call,

@@ -25,6 +25,51 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(AndroidJUnit4.class)
 public final class MuonActivityTest {
     @Test
+    public void preservesSystemBarsWhileKeepingDisabledNotificationsUnpublished() throws Exception {
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> reference = new AtomicReference<>();
+            scenario.onActivity(reference::set);
+            MuonActivity first = reference.get();
+            assertTrue(first.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      try {
+                        await muon.android.systemBars.configure({contentLayout:'edge-to-edge'});
+                        muonAndroidTest.postMessage(JSON.stringify({
+                          available: await muon.android.settings.isAvailable('app-details'),
+                          common: typeof muon.notifications,
+                          android: typeof muon.android.notifications
+                        }));
+                      } catch (error) {
+                        muonAndroidTest.postMessage(JSON.stringify({error:String(error)}));
+                      }
+                    })();
+                    """, null));
+            String message = first.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(message);
+            JSONObject exposed = new JSONObject(message);
+            assertTrue(message, exposed.getBoolean("available"));
+            assertEquals("undefined", exposed.getString("common"));
+            assertEquals("undefined", exposed.getString("android"));
+            scenario.recreate();
+            scenario.onActivity(reference::set);
+            MuonActivity recreated = reference.get();
+            assertTrue(first != recreated);
+            assertTrue(recreated.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      const state = await muon.android.systemBars.getState();
+                      muonAndroidTest.postMessage(JSON.stringify(state));
+                    })();
+                    """, null));
+            String state = recreated.awaitTestMessage(30, TimeUnit.SECONDS);
+            assertNotNull(state);
+            assertEquals("edge-to-edge",
+                    new JSONObject(state).getJSONObject("requested").getString("contentLayout"));
+        }
+    }
+
+    @Test
     public void exposesMultipleQuickJsRuntimesThroughMuonNode() throws Exception {
         try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
             AtomicReference<MuonActivity> activityReference = new AtomicReference<>();

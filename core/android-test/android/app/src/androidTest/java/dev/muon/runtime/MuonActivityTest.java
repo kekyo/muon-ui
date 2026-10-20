@@ -22,6 +22,7 @@ import android.view.WindowInsetsAnimation;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SdkSuppress;
 import androidx.webkit.WebViewCompat;
 import androidx.webkit.WebMessageCompat;
 
@@ -41,6 +42,42 @@ import java.nio.charset.StandardCharsets;
 
 @RunWith(AndroidJUnit4.class)
 public final class MuonActivityTest {
+    @Test
+    @SdkSuppress(minSdkVersion = 26)
+    public void servesAnInFlightAssetRequestAfterActivityDestruction() throws Exception {
+        AtomicReference<WebViewClient> client = new AtomicReference<>();
+        AtomicReference<WebView> view = new AtomicReference<>();
+        try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
+            AtomicReference<MuonActivity> activity = new AtomicReference<>();
+            scenario.onActivity(activity::set);
+            assertTrue(activity.get().awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            scenario.onActivity(current -> {
+                view.set(current.getWebViewForTest());
+                client.set(view.get().getWebViewClient());
+            });
+        }
+        // The request callback can already be queued on WebView's background
+        // thread when the Activity destroys its host on the main thread.
+        WebResourceRequest request = new WebResourceRequest() {
+            @Override public android.net.Uri getUrl() {
+                return android.net.Uri.parse(MuonActivity.TRUSTED_ORIGIN + "/index.html");
+            }
+            @Override public boolean isForMainFrame() { return false; }
+            @Override public boolean isRedirect() { return false; }
+            @Override public boolean hasGesture() { return false; }
+            @Override public String getMethod() { return "GET"; }
+            @Override public java.util.Map<String, String> getRequestHeaders() {
+                return Collections.emptyMap();
+            }
+        };
+        WebResourceResponse response = client.get().shouldInterceptRequest(view.get(), request);
+        assertNotNull("A trusted asset must not fall through to the network", response);
+        assertEquals(200, response.getStatusCode());
+        try (var body = response.getData()) {
+            assertTrue(body.read() >= 0);
+        }
+    }
+
     @Test
     public void rejectsForeignAndSubframeRpcBeforeNativeExecution() throws Exception {
         try (ActivityScenario<MuonActivity> scenario = ActivityScenario.launch(MuonActivity.class)) {
@@ -141,6 +178,8 @@ public final class MuonActivityTest {
                             "namespaces: Object.keys(globalThis.muon)," +
                             "browser: Object.keys(globalThis.muon.browser)," +
                             "fs: Object.keys(globalThis.muon.fs)," +
+                            "notifications: Object.keys(globalThis.muon.notifications)," +
+                            "systemBars: Object.keys(globalThis.muon.android.systemBars)," +
                             "hasHardReload: 'hardReload' in globalThis.muon.browser" +
                             "})",
                     value -> {
@@ -152,10 +191,12 @@ public final class MuonActivityTest {
             assertNotNull(result.get());
             String decoded = new JSONArray("[" + result.get() + "]").getString(0);
             JSONObject api = new JSONObject(decoded);
-            assertEquals("[\"browser\",\"environments\",\"fs\",\"test\"]",
+            assertEquals("[\"browser\",\"environments\",\"fs\",\"notifications\",\"android\",\"test\"]",
                     api.getJSONArray("namespaces").toString());
             assertEquals(8, api.getJSONArray("browser").length());
             assertEquals(22, api.getJSONArray("fs").length());
+            assertEquals("[\"post\",\"cancel\",\"getStatus\",\"getCapabilities\",\"getPendingEvents\",\"acknowledgeEvent\",\"watchEvents\"]", api.getJSONArray("notifications").toString());
+            assertEquals("[\"configure\",\"getState\",\"getInsets\",\"watchInsets\"]", api.getJSONArray("systemBars").toString());
             assertFalse(api.getBoolean("hasHardReload"));
         }
     }
@@ -268,6 +309,19 @@ public final class MuonActivityTest {
             scenario.onActivity(reference::set);
             MuonActivity activity = reference.get();
             assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
+            activity.clearTestMessages();
+            scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                    void (async () => {
+                      await muon.android.systemBars.configure({contentLayout:'edge-to-edge'});
+                      globalThis.animationInsets = [];
+                      globalThis.animationWatch = await muon.android.systemBars.watchInsets(snapshot => {
+                        animationInsets.push(snapshot);
+                      });
+                      muonAndroidTest.postMessage('watching');
+                    })();
+                    """, null));
+            assertEquals("watching", activity.awaitTestMessage(30, TimeUnit.SECONDS));
+            long previousRevision = 0;
             String[] commands = {"enterFullscreen", "exitFullscreen", "toggleFullscreen", "toggleFullscreen"};
             for (int step = 0; step < commands.length; step++) {
                 boolean visible = step % 2 == 1;
@@ -318,7 +372,34 @@ public final class MuonActivityTest {
                         current.getWindow().getDecorView().setWindowInsetsAnimationCallback(null);
                     });
                 }
+                activity.clearTestMessages();
+                scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript("""
+                        void (async () => {
+                          const snapshot = await muon.android.systemBars.getInsets();
+                          const css = getComputedStyle(document.documentElement);
+                          muonAndroidTest.postMessage(JSON.stringify({snapshot,
+                            revisions:animationInsets.map(value => value.revision),
+                            top:parseFloat(css.getPropertyValue('--muon-safe-area-top')),
+                            bottom:parseFloat(css.getPropertyValue('--muon-safe-area-bottom'))}));
+                        })();
+                        """, null));
+                String observed = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+                assertNotNull(observed);
+                JSONObject result = new JSONObject(observed);
+                JSONObject snapshot = result.getJSONObject("snapshot");
+                long currentRevision = snapshot.getLong("revision");
+                assertTrue(currentRevision > previousRevision);
+                JSONArray revisions = result.getJSONArray("revisions");
+                assertTrue(revisions.length() > 0);
+                assertEquals(currentRevision, revisions.getLong(revisions.length() - 1));
+                assertEquals(visible, snapshot.getJSONObject("systemBars").getDouble("top") > 0);
+                assertEquals(visible, snapshot.getJSONObject("systemBars").getDouble("bottom") > 0);
+                assertEquals(snapshot.getJSONObject("safeArea").getDouble("top"), result.getDouble("top"), 0.01);
+                assertEquals(snapshot.getJSONObject("safeArea").getDouble("bottom"), result.getDouble("bottom"), 0.01);
+                previousRevision = currentRevision;
             }
+            scenario.onActivity(current -> current.getWebViewForTest()
+                    .evaluateJavascript("void animationWatch.close();", null));
         }
     }
 
@@ -973,7 +1054,7 @@ public final class MuonActivityTest {
             assertTrue(activity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
             String name = "relative-data-" + System.nanoTime() + ".txt";
             activity.clearTestMessages();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const path = %s;
                       try {
@@ -985,7 +1066,7 @@ public final class MuonActivityTest {
                         muonAndroidTest.postMessage(JSON.stringify({ error: String(error) }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(name));
+                    """, JSONObject.quote(name));
             scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(script, null));
             String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
             assertNotNull(message);
@@ -1010,7 +1091,7 @@ public final class MuonActivityTest {
             activity.clearTestMessages();
             String basePath = activity.getFilesDir().getAbsolutePath()
                     + "/fs-api-" + System.nanoTime();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const base = %s;
                       const nested = `${base}/nested`;
@@ -1090,7 +1171,7 @@ public final class MuonActivityTest {
                         }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(basePath));
+                    """, JSONObject.quote(basePath));
 
             scenario.onActivity(current -> current.getWebViewForTest()
                     .evaluateJavascript(script, null));
@@ -1129,7 +1210,7 @@ public final class MuonActivityTest {
             activity.clearTestMessages();
             String basePath = activity.getFilesDir().getAbsolutePath()
                     + "/fs-boundary-" + System.nanoTime();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const base = %s;
                       const capture = async (operation) => {
@@ -1190,7 +1271,7 @@ public final class MuonActivityTest {
                         }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(basePath));
+                    """, JSONObject.quote(basePath));
 
             scenario.onActivity(current -> current.getWebViewForTest()
                     .evaluateJavascript(script, null));
@@ -1225,7 +1306,7 @@ public final class MuonActivityTest {
             activity.clearTestMessages();
             String basePath = activity.getFilesDir().getAbsolutePath()
                     + "/fs-watch-" + System.nanoTime();
-            String script = """
+            String script = String.format("""
                     void (async () => {
                       const base = %s;
                       try {
@@ -1255,7 +1336,7 @@ public final class MuonActivityTest {
                         }));
                       }
                     })();
-                    """.formatted(JSONObject.quote(basePath));
+                    """, JSONObject.quote(basePath));
 
             scenario.onActivity(current -> current.getWebViewForTest()
                     .evaluateJavascript(script, null));

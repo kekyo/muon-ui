@@ -4,7 +4,7 @@
 これは `plugin.mode: "simple"` で実際に公開されるオブジェクト階層でもあります。
 既定の `validate` モードでは、対応するvirtual moduleから関数をインポートして使用します。
 
-Android WebViewバックエンドは、この章にあるデスクトップAPIの一部だけを公開します。Androidで利用できる関数とプラットフォーム固有の挙動は、[Android WebViewバックエンドの制約](./limitation.md#android-webviewバックエンド)と[Android API対応方針](../../android-api-compatibility.md)を参照してください。公開されない関数をno-opへ置き換えることはありません。
+Android WebViewバックエンドは、この章にあるデスクトップAPIの一部だけを公開します。Androidで利用できる関数とプラットフォーム固有の挙動は、[Android WebViewバックエンドの制約](./limitation.md#android-webviewバックエンド)と[Androidガイド](./android.md#設定とmuon-api)を参照してください。公開されない関数をno-opへ置き換えることはありません。
 
 例えば `window.muon.executor.spawn` は、`plugin.plugins[].imports` またはVite `pluginAccess.plugins[].imports` で `muon.executor.spawn` を許可したうえで、
 `muon:executor` から `spawn` をインポートします:
@@ -12,6 +12,132 @@ Android WebViewバックエンドは、この章にあるデスクトップAPI�
 ```ts
 import { spawn } from "muon:executor";
 ```
+
+## 通知とAndroid固有機能
+
+Android・Windows・Linuxのローカル通知は`muon.notifications`で操作します。Androidのシステムバー、通知権限・チャンネル、OS設定画面は`muon.android`以下にあります。CEF版には`muon.android`を公開しません。
+
+| simpleモードの名前空間 | validateモードのimport元 | 用途 |
+| --- | --- | --- |
+| `window.muon.notifications` | `muon:notifications` | 通知の投稿、取り消し、操作イベント |
+| `window.muon.android.systemBars` | `muon:android.systemBars` | システムバーと安全領域 |
+| `window.muon.android.notifications` | `muon:android.notifications` | Androidの通知権限とチャンネル |
+| `window.muon.android.settings` | `muon:android.settings` | アプリに関するOS設定画面 |
+
+通知APIは`notifications.enabled: true`でビルドしたアプリだけに含まれます。関数の許可も必要です。validateモードでは、例えば`muon.notifications.post`を`imports[].allow`へ指定します。通知を無効にするビルドでは、通知関数のimportと許可設定も削除してください。[通知のビルド設定](./muon-json-reference.md#notificationsキー)
+
+### 共通通知API
+
+| 関数 | 戻り値 | 動作 |
+| --- | --- | --- |
+| `post(options)` | `Promise<void>` | 同じアプリ内の`id`を指定して投稿・更新する |
+| `cancel(id)` | `Promise<void>` | 指定した通知を取り消す。存在しないIDも成功する |
+| `getCapabilities()` | `Promise<MuonNotificationCapabilities>` | 環境が対応する機能と理由を取得する |
+| `getStatus(category?)` | `Promise<MuonNotificationStatus>` | 現在の投稿可否を取得する |
+| `watchEvents(listener)` | `Promise<MuonNotificationWatcher>` | このページで新しく受け取った操作を購読する |
+| `getPendingEvents()` | `Promise<readonly MuonNotificationEvent[]>` | 未受領イベントを古い順に取得する。取得だけでは削除しない |
+| `acknowledgeEvent(eventId)` | `Promise<void>` | 処理済みイベントの受領を確認し、未受領一覧から削除する |
+
+`post()`の必須項目は文字列の`id`、`title`、`body`です。`category`は用途を表す識別子で、省略時には`notifications.defaultCategory`を使用します。Androidでは登録済みチャンネルと対応付けます。CEFでは任意の用途分類を指定でき、Android用のチャンネル設定は不要です。
+
+```ts
+import { getCapabilities, post } from "muon:notifications";
+
+const capabilities = await getCapabilities();
+await post({
+  id: "order-42",
+  title: "Order ready",
+  body: "Your order is ready to collect.",
+  category: "orders",
+  data: { orderId: 42 },
+  ...(capabilities.actions.state === "supported"
+    ? { actions: [{ id: "view", title: "View order" }] }
+    : {}),
+});
+```
+
+`id`と`category`は最大128、`title`は最大1024、`body`は最大4096 UTF-16コード単位です。`body`は空文字でも構いません。`data`にはJSONで表せる値を渡せます。上限はUTF-8で16 KiB、深さ64で、省略時のイベントデータは`null`です。関数や循環参照は保存できません。`actions`は最大3件で、各`id`と`title`は空でない最大128コード単位の文字列です。操作IDは通知内で重複できません。
+
+`post()`は暗黙に権限を要求しません。無効化を検出した場合、Androidで未登録の分類を指定した場合、非対応の追加ボタンなどを指定した場合はPromiseを拒否します。成功はOSへの投稿要求が完了したことを表し、バナーの表示やユーザーの閲覧を保証しません。OSの通知抑止や保持方針も適用されます。[Androidの通知権限](https://developer.android.com/develop/ui/views/notifications/notification-permission)、[Linuxの通知仕様](https://specifications.freedesktop.org/notification/latest/)
+
+`getCapabilities()`の各項目は`{ state, reason }`です。`state`は`supported`、`unsupported`、`unknown`のいずれかで、説明が不要な`reason`は`null`です。
+
+| 項目 | 確認する機能 |
+| --- | --- |
+| `interaction` | 実行中のアプリへの通知操作の配送 |
+| `launch` | 終了済みアプリの起動と操作の配送 |
+| `persistence` | 通常のプロセス終了後の通知保持 |
+| `actions` | 名前付き追加ボタン |
+| `appStatus` | アプリ全体の投稿可否の取得 |
+| `categoryStatus` | 用途分類別のOS設定の取得 |
+
+機能への対応と現在の投稿可否は別です。`getStatus()`は`app`と`category`を返し、投稿可否の`state`は`enabled`、`disabled`、`unknown`です。引数を省略した場合の`category`は`null`で、既定分類を暗黙には調べません。分類を指定した場合はその`id`も返します。Linuxでは全体・分類別、Windowsでは分類別の状態を取得できず、`unknown`になる場合があります。`unknown`を許可済みと解釈しないでください。
+
+### 通知イベントと受領確認
+
+イベントは`{ eventId, id, type, actionId, data }`です。通常の通知クリックは`type: "activate"`と`actionId: null`、追加ボタンは`type: "action"`と指定した操作IDを返します。`"default"`という操作IDも通常クリックと区別します。`data`は操作された投稿時点の値です。
+
+購読を開始してから未受領一覧を読み、`eventId`で重複を除いて処理してください。コールバックが正常終了しても自動では受領確認しません。アプリの処理が完了した後に`acknowledgeEvent(eventId)`を呼びます。アプリの処理と受領確認の間に終了すると再配送されるため、注文の確定など重複実行できない処理には、保存した`eventId`を使ったアプリ側の重複対策も必要です。
+
+`watchEvents()`は既存イベントを再配送せず、新しい操作だけを通知します。リスナーは購読ごとに順番に呼ばれます。戻り値の`close()`で解除でき、ページ破棄でも解除されます。解除しても通知と未受領イベントは残ります。複数ページに同じイベントが届く場合があり、受領確認はアプリ全体へ作用します。すでに開始したコールバックは取り消しません。
+
+保存には上限があります。未操作の投稿と未受領イベントは合計256枠で、満杯の場合は新しい投稿を拒否します。未操作の投稿は投稿後30日、未受領イベントは受信後30日で期限切れになります。OSやユーザーが通知を消しただけでは枠を解放しないため、不要になったIDは`cancel()`で取り消してください。同じIDの更新は未操作の旧投稿を無効にし、受信済みイベントは保持します。古い投稿への遅れた操作から新しいイベントを作ることはありません。
+
+Linuxでは更新中に新旧通知が一時的に並ぶ場合があります。OSへの投稿とローカル保存は一つの原子的な処理ではありません。AndroidのAPK更新ではOSが既存通知を削除する場合があり、自動再投稿はしません。同じアプリIDとデータを維持する更新では、保存済みの未受領イベントを取得できます。アンインストールやデータ消去は保持の対象外です。[Androidのパッケージ変更と通知削除](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010)
+
+CEFの起動対応条件、更新・削除の手順は[通知の配布登録](./package-install-location-advanced-topics.md#通知の配布登録)を参照してください。
+
+### Androidのシステムバーと安全領域
+
+| 関数 | 戻り値 | 動作 |
+| --- | --- | --- |
+| `configure(options)` | `Promise<void>` | 上下のバーの表示、アイコン色、コンテンツ配置を要求する |
+| `getState()` | `Promise<MuonAndroidSystemBarsState>` | 要求値`requested`とOSの報告値`actual`を取得する |
+| `getInsets()` | `Promise<MuonAndroidSystemBarsInsets>` | 初回の画面情報を待ち、現在の余白を取得する |
+| `watchInsets(listener)` | `Promise<MuonAndroidInsetsWatcher>` | 初回と以降の余白変化を購読する。`close()`で解除する |
+
+`configure()`は部分更新です。`statusBar`と`navigationBar`へ`visible`と`icons: "light" | "dark"`を指定し、省略した値は維持します。`contentLayout`は`safe-area`または`edge-to-edge`です。非対応項目や不正値は拒否し、要求全体を部分的には適用しません。API 24・25ではナビゲーションバーの濃色アイコンを指定できません。
+
+`requested`はアプリの要求値で、ユーザーのスワイプによる一時表示では変わりません。`actual`はAndroidの公開APIが報告する値です。初期化前は各バーの`visible`と`icons`が`null`になります。画面上の描画を測定した値ではなく、一時表示を「非表示」と報告する場合があります。API 29以前ではAndroidXのInsets情報に基づく近似も含まれます。[WindowInsets.isVisible](https://developer.android.com/reference/android/view/WindowInsets#isVisible(int))、[AndroidのInsetsController](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/view/InsetsController.java)
+
+`browser.enterFullscreen()`は上下を非表示、`exitFullscreen()`は上下を表示する要求として状態を共有します。これらの操作はアイコン色と配置方式を変更しません。`configure()`の完了は要求の適用であり、OSアニメーションの終了ではありません。
+
+Insetsは画面の端からの距離で、`top`、`right`、`bottom`、`left`をCSSピクセルで返します。`systemBars`は表示中のバー、`displayCutout`はノッチなどの欠けた領域、`systemGestures`はジェスチャー予約領域、`ime`はソフトウェアキーボードです。`safeArea`はバーとカットアウトの辺ごとの最大値です。キーボードとジェスチャー領域は自動では合算しません。
+
+`safe-area`ではネイティブ側が安全領域を確保し、Web側の追加余白`contentSafeArea`は0になります。`edge-to-edge`ではWeb側で配置します。CSS変数`--muon-safe-area-top`、`--muon-safe-area-right`、`--muon-safe-area-bottom`、`--muon-safe-area-left`は`contentSafeArea`に対応し、回転やズームで更新されます。Android版では、この変数と同じ余白をCSSの`env(safe-area-inset-*)`で重ねて加えないでください。
+
+```css
+.app-controls {
+  padding: var(--muon-safe-area-top, 0px)
+    var(--muon-safe-area-right, 0px)
+    var(--muon-safe-area-bottom, 0px)
+    var(--muon-safe-area-left, 0px);
+}
+```
+
+起動時の配置とバー設定は[Androidガイド](./android.md#システムバーと安全領域)を参照してください。
+
+### Androidの通知権限とチャンネル
+
+| 関数 | 動作 |
+| --- | --- |
+| `getPermissionState()` | 実行時権限とアプリ全体の通知設定を取得する |
+| `requestPermission()` | 前面のActivityから明示的に権限を要求する |
+| `getCapabilities()` | Android固有の`channels`の対応状況を取得する |
+| `ensureChannel(options)` | チャンネルを登録し、OSに保存された設定を返す |
+| `getChannel(id)` | 現在のチャンネル設定を返す。未登録なら`null` |
+
+`getPermissionState()`は`runtimePermission: "not-required" | "granted" | "denied"`、`notificationsEnabled`、`requestedBefore`、`shouldShowRationale`、`settingsSuggested`を返します。API 33未満の実行時権限は`not-required`ですが、OS設定で通知を無効にできます。`denied`には未要求も含みます。`requestedBefore`はMuonが要求APIを呼んだ履歴で、ダイアログが表示された証拠ではありません。`settingsSuggested`も永久拒否の判定ではありません。
+
+`requestPermission()`は最新の`state`と、`result: "granted" | "not-granted" | "interrupted" | "not-required"`を返します。`not-granted`から拒否、閉じる操作、ダイアログ抑止のすべてを区別することはできません。要求の重複、前面Activityの不在、要求元ページの破棄はエラーになります。起動時や投稿時に権限ダイアログを自動表示しません。[Androidの通知権限の結果](https://developer.android.com/develop/ui/views/notifications/notification-permission)
+
+チャンネルはAPI 26以降で利用できます。登録には`id`、`name`、`importance: "min" | "low" | "default" | "high"`を指定し、`description`は省略できます。既存チャンネルのユーザー設定は上書きしません。戻り値は`{ id, name, description, importance, enabled }`で、無効化された重要度は`none`です。API 24・25ではチャンネル操作を拒否し、ビルド時に宣言した用途分類だけに投稿できます。[Androidのチャンネル仕様](https://developer.android.com/develop/ui/views/notifications/channels)
+
+### AndroidのOS設定画面
+
+`isAvailable(target)`は画面そのものの利用可否を返します。`open(target, options?)`は前面Activityから画面を開き、`{ requestedTarget, target, fallbackUsed }`を返します。設定変更の有無を返すAPIではありません。復帰後に権限や状態を再取得してください。
+
+`target`には`"app-details"`、`"notifications"`、`{ type: "notification-channel", channelId }`を指定できます。チャンネル画面はAPI 26以降の登録済みIDが必要です。通知専用画面がない場合、`{ fallback: "app-details" }`を明示したときだけアプリ情報へ切り替えます。API 24・25の通知専用画面は非対応です。Activityが利用できない場合や遷移先がない場合はPromiseを拒否します。[Androidの設定画面アクション](https://developer.android.com/reference/android/provider/Settings)
 
 ## muon.browser名前空間
 

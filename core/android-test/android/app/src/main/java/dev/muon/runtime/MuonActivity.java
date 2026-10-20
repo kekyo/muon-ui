@@ -7,7 +7,9 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.content.res.Configuration;
 import android.net.Uri;
 import android.os.Bundle;
 import android.webkit.WebView;
@@ -17,6 +19,8 @@ import androidx.annotation.Nullable;
 import androidx.webkit.JavaScriptReplyProxy;
 import androidx.webkit.WebMessageCompat;
 import androidx.webkit.WebViewCompat;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.util.Collections;
 import java.util.concurrent.CountDownLatch;
@@ -29,10 +33,13 @@ public final class MuonActivity extends Activity {
     private static final String TEST_OBJECT_NAME = "muonAndroidTest";
 
     private final CountDownLatch pageReady = new CountDownLatch(1);
+    private final CountDownLatch resumed = new CountDownLatch(1);
     private final CountDownLatch startupFailureReady = new CountDownLatch(1);
     private final CountDownLatch destroyed = new CountDownLatch(1);
+    private final CountDownLatch fullWindow = new CountDownLatch(1);
     private final LinkedBlockingQueue<String> testMessages = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<String> finishedPageUrls = new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<Intent> notificationIntents = new LinkedBlockingQueue<>();
     private final LinkedBlockingQueue<Integer> mainFrameHttpStatuses =
             new LinkedBlockingQueue<>();
     private WebView webView;
@@ -44,6 +51,7 @@ public final class MuonActivity extends Activity {
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (!isInMultiWindowMode()) fullWindow.countDown();
 
         host = new MuonWebViewHost(this, new MuonWebViewHost.Listener() {
             @Override public void beforePageLoad(@NonNull WebView view, @NonNull MuonRpcBridge bridge) {
@@ -67,7 +75,56 @@ public final class MuonActivity extends Activity {
                 startupFailureReady.countDown();
             }
         });
-        host.start("");
+        try {
+            JSONObject config = new JSONObject(MuonAppConfig.readAsset(this, "muon/config.json"));
+            if (getIntent().hasExtra("notifications-enabled")) {
+                config.put("notifications", new JSONObject().put("enabled",
+                        getIntent().getBooleanExtra("notifications-enabled", false)));
+            }
+            host.start("", new MuonAppConfig(config));
+        } catch (JSONException error) {
+            throw new IllegalStateException("Invalid test host configuration", error);
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (host != null) { host.setResumed(true); }
+        resumed.countDown();
+    }
+
+    @Override public void onMultiWindowModeChanged(
+            boolean isInMultiWindowMode, @NonNull Configuration newConfig) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig);
+        if (!isInMultiWindowMode) fullWindow.countDown();
+    }
+
+    boolean awaitFullWindowForTest(long timeout, @NonNull TimeUnit unit)
+            throws InterruptedException {
+        return fullWindow.await(timeout, unit);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (host != null) { host.onNotificationIntent(intent); }
+        notificationIntents.add(intent);
+    }
+
+    @Nullable Intent awaitNotificationIntentForTest(long timeout, TimeUnit unit) throws InterruptedException {
+        return notificationIntents.poll(timeout, unit);
+    }
+
+    @Override protected void onPause() {
+        if (host != null) { host.setResumed(false); }
+        super.onPause();
+    }
+
+    @Override public void onRequestPermissionsResult(int code, @NonNull String[] permissions,
+            @NonNull int[] results) {
+        if (host == null || !host.onRequestPermissionsResult(code, permissions, results)) {
+            super.onRequestPermissionsResult(code, permissions, results);
+        }
     }
 
     private void receiveTestMessage(
@@ -94,6 +151,11 @@ public final class MuonActivity extends Activity {
     boolean awaitPageReadyForTest(long timeout, @NonNull TimeUnit unit)
             throws InterruptedException {
         return pageReady.await(timeout, unit);
+    }
+
+    boolean awaitResumedForTest(long timeout, @NonNull TimeUnit unit)
+            throws InterruptedException {
+        return resumed.await(timeout, unit);
     }
 
     boolean awaitStartupFailureForTest(long timeout, @NonNull TimeUnit unit)
@@ -208,6 +270,11 @@ public final class MuonActivity extends Activity {
     boolean awaitDestroyedForTest(long timeout, @NonNull TimeUnit unit)
             throws InterruptedException {
         return destroyed.await(timeout, unit);
+    }
+
+    @Override
+    @Nullable public Object onRetainNonConfigurationInstance() {
+        return host == null ? null : host.retainRequestedState();
     }
 
     @Override

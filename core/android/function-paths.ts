@@ -49,6 +49,37 @@ export const filesystemFunctionNames = [
   'watch',
 ] as const;
 
+/** Android system bar functions implemented by the runtime. */
+export const systemBarsFunctionNames = [
+  'configure',
+  'getState',
+  'getInsets',
+  'watchInsets',
+] as const;
+
+/** Android settings functions implemented by the runtime. */
+export const androidSettingsFunctionNames = ['isAvailable', 'open'] as const;
+
+/** Android notification permission functions implemented by the runtime. */
+export const androidNotificationFunctionNames = [
+  'getPermissionState',
+  'requestPermission',
+  'getCapabilities',
+  'ensureChannel',
+  'getChannel',
+] as const;
+
+/** Shared native notification functions implemented by Android. */
+export const notificationFunctionNames = [
+  'post',
+  'cancel',
+  'getStatus',
+  'getCapabilities',
+  'getPendingEvents',
+  'watchEvents',
+  'acknowledgeEvent',
+] as const;
+
 /** Fully-qualified built-in function paths implemented by the Android backend. */
 export const muonAndroidBuiltinFunctionPaths = [
   ...browserFunctionNames.map((name) => `muon.browser.${name}` as const),
@@ -56,7 +87,34 @@ export const muonAndroidBuiltinFunctionPaths = [
     (name) => `muon.environments.${name}` as const
   ),
   ...filesystemFunctionNames.map((name) => `muon.fs.${name}` as const),
+  ...systemBarsFunctionNames.map(
+    (name) => `muon.android.systemBars.${name}` as const
+  ),
+  ...androidSettingsFunctionNames.map(
+    (name) => `muon.android.settings.${name}` as const
+  ),
+  ...androidNotificationFunctionNames.map(
+    (name) => `muon.android.notifications.${name}` as const
+  ),
+  ...notificationFunctionNames.map(
+    (name) => `muon.notifications.${name}` as const
+  ),
 ] as const;
+
+/**
+ * Selects the implemented functions enabled by application configuration.
+ * @param notificationsEnabled - Whether the application enables notifications.
+ * @returns The effective built-in catalog, before per-page permission filters.
+ */
+export const getMuonAndroidBuiltinFunctionPaths = (
+  notificationsEnabled: boolean
+): readonly MuonAndroidBuiltinFunctionPath[] =>
+  muonAndroidBuiltinFunctionPaths.filter(
+    (path) =>
+      notificationsEnabled ||
+      (!path.startsWith('muon.android.notifications.') &&
+        !path.startsWith('muon.notifications.'))
+  );
 
 /** A built-in function path available on Android. */
 export type MuonAndroidBuiltinFunctionPath =

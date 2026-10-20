@@ -5,12 +5,13 @@
 
 import {
   expandMuonAndroidFunctionAllows,
-  muonAndroidBuiltinFunctionPaths,
+  getMuonAndroidBuiltinFunctionPaths,
 } from "../../core/android/function-paths.js";
 import { validateMuonAndroidConfig } from "../../core/android/renderer/android-config.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import { readMuonPluginAccessOptions } from "../common/plugin-access.js";
 import type { MuonAndroidPluginAccess } from "./build.js";
+import { resolveMuonNotificationConfig } from "../common/notification-config.js";
 
 /**
  * Connects common plugin policies to Android library definitions.
@@ -26,6 +27,9 @@ export const resolveMuonAndroidPluginAccess = (
   libraries: unknown,
   catalogs: ReadonlyMap<string, readonly string[]> = new Map(),
 ) => {
+  const builtinPaths = getMuonAndroidBuiltinFunctionPaths(
+    resolveMuonNotificationConfig(config.notifications).enabled,
+  );
   const merged =
     runtime === undefined
       ? config
@@ -47,9 +51,7 @@ export const resolveMuonAndroidPluginAccess = (
     );
   }
   validateMuonAndroidConfig(merged);
-  const entries = plugin.plugins ?? [
-    { name: "internal", allow: muonAndroidBuiltinFunctionPaths },
-  ];
+  const entries = plugin.plugins ?? [{ name: "internal", allow: builtinPaths }];
   const names = new Set<string>();
   for (const entry of entries) {
     if (entry.signature !== undefined || entry.salt !== undefined)
@@ -111,7 +113,10 @@ export const resolveMuonAndroidPluginAccess = (
   const internal = entries.find((entry) => entry.name === "internal");
   const base = {
     enabled: plugin.pages === undefined || plugin.pages.length > 0,
-    internalAllow: expandMuonAndroidFunctionAllows(internal?.allow ?? []),
+    internalAllow: expandMuonAndroidFunctionAllows(
+      internal?.allow ?? [],
+      builtinPaths,
+    ),
   };
   const ids = new Set<string>();
   const pluginAccess: MuonAndroidPluginAccess =
@@ -128,7 +133,7 @@ export const resolveMuonAndroidPluginAccess = (
             return {
               id: entry.id,
               allow: expandMuonAndroidFunctionAllows(entry.allow, [
-                ...muonAndroidBuiltinFunctionPaths,
+                ...builtinPaths,
                 ...[...catalogs.values()].flat(),
               ]),
             };

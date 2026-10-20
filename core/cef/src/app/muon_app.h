@@ -98,6 +98,15 @@ class MuonApp final : public CefApp,
   void OnContextInitialized() override;
 
   /**
+   * Keeps notification activation on the existing application instance.
+   * @param command_line Read-only arguments from the additional process.
+   * @param current_directory Working directory of that process.
+   * @return true for notification launches; ordinary launches keep CEF behavior.
+   */
+  bool OnAlreadyRunningAppRelaunch(CefRefPtr<CefCommandLine> command_line,
+                                  const CefString& current_directory) override;
+
+  /**
    * Receives renderer startup metadata for a newly created browser.
    *
    * @param browser Browser created in the renderer process.

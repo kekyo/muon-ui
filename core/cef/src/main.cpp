@@ -12,6 +12,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -32,6 +33,25 @@
 #include "config/muon_startup.h"
 #include "log/muon_log.h"
 #include "muon_filesystem.h"
+
+#if defined(__linux__)
+#include "notifications/muon_notification_linux.h"
+#include "notifications/muon_notification_maintenance.h"
+
+static cardio::promise<void> ClearNotificationHistory(
+    const MuonConfig& config, GMainLoop* loop, int& exit_code) {
+  try {
+    co_await muon_internal::ClearMuonNotificationHistory(
+        (config.browser.profile / "notifications.json").string(),
+        muon_internal::CreateMuonLinuxNotificationBackend(
+            config.app_id, config.desktop_id, config.app_id, config.launcher_path));
+    exit_code = 0;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "muon notification maintenance failed: %s\n", error.what());
+  }
+  g_main_loop_quit(loop);
+}
+#endif
 
 static CefMainArgs CreateMainArgs(int argc, char* argv[]) {
 #if defined(_WIN32)
@@ -100,6 +120,23 @@ NO_STACK_PROTECTOR static int RunMuon(int argc, char* argv[]) {
   cardio::dispatcher_group group;
   cardio::dispatcher_host_win32_auto d(group);
   dispatcher = &d;
+#endif
+
+#if defined(__linux__)
+  for (const auto& argument : GetMuonStartupCommandLine()) {
+    if (argument != "--muon-notification-clear-history") continue;
+    // Installer maintenance uses the same profile and verified registration as
+    // the app, including a disabled update, without starting CEF or a window.
+    cardio::set_current_dispatcher(dispatcher);
+    auto* loop = g_main_loop_new(nullptr, FALSE);
+    auto result = 1;
+    auto pending = ClearNotificationHistory(config, loop, result);
+    if (!pending.is_ready()) g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+    cardio::set_current_dispatcher(nullptr);
+    ShutdownMuonLogger();
+    return result;
+  }
 #endif
 
   auto main_args = CreateMainArgs(argc, argv);

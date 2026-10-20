@@ -25,6 +25,12 @@ import { pathToFileURL } from "node:url";
 import { runScriptOnceToText, type FunCityLogEntry } from "funcity";
 import { runAndroidCommand } from "./command.js";
 import { prepareAndroid } from "./toolchain.js";
+import type { MuonAndroidInitialSystemBars } from "../../core/android/system-bars-config.js";
+import type {
+  MuonAndroidNotificationConfig,
+  MuonAndroidNotificationIcon,
+} from "./notifications.js";
+import type { MuonNotificationConfig } from "../common/notification-config.js";
 
 /** ABI shipped by the Muon Android runtime. */
 export type MuonAndroidAbi = "arm64-v8a" | "x86_64";
@@ -74,6 +80,10 @@ export interface MuonAndroidApplicationInput {
   /** User-facing version. */ versionName: string;
   /** Selected runtime ABIs. */ abis: readonly MuonAndroidAbi[];
   /** Manifest permissions, already normalized by the public build boundary. */ permissions: readonly string[];
+  /** Initial layout and system bar appearance, applied before page startup. */ systemBars: MuonAndroidInitialSystemBars;
+  /** Shared notification enablement, separate from runtime permission. */ notifications: MuonNotificationConfig;
+  /** Static categories and the separately resolved icon source. */ androidNotifications: MuonAndroidNotificationConfig;
+  /** Validated density-specific icon resources; empty when disabled. */ notificationIcons: readonly MuonAndroidNotificationIcon[];
   /** Values returned by muon.environments.getConfigValues. */ values: Readonly<
     Record<string, string>
   >;
@@ -199,6 +209,14 @@ export const buildAndroidApplication = async (
     JSON.stringify({
       startPage: input.startPage,
       values: input.values,
+      systemBars: input.systemBars,
+      notifications: input.notifications,
+      androidNotifications: {
+        channels: input.androidNotifications.channels,
+        ...(input.notifications.enabled
+          ? { smallIcon: "muon_notification_small" }
+          : {}),
+      },
       plugin: input.pluginAccess,
     }),
   );
@@ -256,7 +274,10 @@ export const buildAndroidApplication = async (
     join(project, "app/src/main/AndroidManifest.xml"),
     await render(
       join(project, "AndroidManifest.xml.fc"),
-      new Map([["permissions", input.permissions.map(xml)]]),
+      new Map<string, unknown>([
+        ["permissions", input.permissions.map(xml)],
+        ["notificationsEnabled", input.notifications.enabled],
+      ]),
     ),
   );
   const resources = join(project, "app/src/main/res");
@@ -273,6 +294,11 @@ export const buildAndroidApplication = async (
       ]),
     ),
   );
+  for (const icon of input.notificationIcons) {
+    const directory = join(resources, `drawable-${icon.density}`);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "muon_notification_small.png"), icon.png);
+  }
   if (input.icon !== undefined) {
     await rm(join(resources, "mipmap/ic_launcher.xml"));
     await copyFile(input.icon, join(resources, "mipmap/ic_launcher.png"));

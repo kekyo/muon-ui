@@ -3,6 +3,54 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+declare module "muon:notifications" {
+  /** Post or update a native notification without implicitly requesting permission. */
+  export const post: MuonNotificationsApi["post"];
+  /** Cancel one app-scoped stable notification ID. */
+  export const cancel: MuonNotificationsApi["cancel"];
+  /** Read app-wide and optionally category-specific posting state. */
+  export const getStatus: MuonNotificationsApi["getStatus"];
+  /** Read feature support independently of user permission. */
+  export const getCapabilities: MuonNotificationsApi["getCapabilities"];
+  /** Read persisted unacknowledged events without consuming them. */
+  export const getPendingEvents: MuonNotificationsApi["getPendingEvents"];
+  /** Subscribe to new operations in this page context. */
+  export const watchEvents: MuonNotificationsApi["watchEvents"];
+  /** Acknowledge one event for the application after processing it. */
+  export const acknowledgeEvent: MuonNotificationsApi["acknowledgeEvent"];
+}
+
+declare module "muon:android.settings" {
+  /** Check whether this app's requested Android settings screen is available. */
+  export const isAvailable: MuonAndroidSettingsApi["isAvailable"];
+  /** Open the requested screen, with an explicitly permitted fallback. */
+  export const open: MuonAndroidSettingsApi["open"];
+}
+
+declare module "muon:android.notifications" {
+  /** Read Android-only feature support. */
+  export const getCapabilities: MuonAndroidNotificationsApi["getCapabilities"];
+  /** Register a channel without replacing existing user settings. */
+  export const ensureChannel: MuonAndroidNotificationsApi["ensureChannel"];
+  /** Read effective settings for an OS channel, or null when absent. */
+  export const getChannel: MuonAndroidNotificationsApi["getChannel"];
+  /** Read current runtime permission and app-wide notification state. */
+  export const getPermissionState: MuonAndroidNotificationsApi["getPermissionState"];
+  /** Explicitly request notification permission from the foreground Activity. */
+  export const requestPermission: MuonAndroidNotificationsApi["requestPermission"];
+}
+
+declare module "muon:android.systemBars" {
+  /** Update the requested visibility of either Android system bar. */
+  export const configure: MuonAndroidSystemBarsApi["configure"];
+  /** Read requested and observed Android system bar visibility. */
+  export const getState: MuonAndroidSystemBarsApi["getState"];
+  /** Read system, cutout, gesture, keyboard and remaining content insets in CSS pixels. */
+  export const getInsets: MuonAndroidSystemBarsApi["getInsets"];
+  /** Subscribe to initial insets and changes until the returned handle is closed. */
+  export const watchInsets: MuonAndroidSystemBarsApi["watchInsets"];
+}
+
 declare module "muon:environments" {
   /** Return the merged application configuration from muon config files. */
   export const getConfigValues: () => Promise<Record<string, string>>;

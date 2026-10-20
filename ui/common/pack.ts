@@ -14,7 +14,10 @@ import {
 import { allMuonTargets } from "./targets.js";
 
 import type { MuonPackOptions, MuonPackResult } from "./pack-types.js";
-import { packDesktopMuonApp } from "../cef/pack.js";
+import {
+  normalizePackTargetSelectors,
+  packDesktopMuonApp,
+} from "../cef/pack.js";
 import { packAndroidMuonApp } from "../android/pack.js";
 export type * from "./pack-types.js";
 
@@ -30,7 +33,21 @@ export const packMuonApp = async (
   options: MuonPackOptions,
 ): Promise<MuonPackResult> => {
   const cwd = resolve(options.root ?? process.cwd());
-  const project = await loadMuonBuildSequenceProject(cwd, options.targets);
+  const viteTargets =
+    options.allTargets === true
+      ? allMuonTargets
+      : options.targets?.flatMap((selector) =>
+          selector
+            .split(",")
+            .map((target) => target.trim().toLowerCase())
+            .filter((target) => target.length > 0)
+            .flatMap((target) =>
+              target === "android"
+                ? [target]
+                : normalizePackTargetSelectors([target]),
+            ),
+        );
+  const project = await loadMuonBuildSequenceProject(cwd, viteTargets);
   const plugin = resolveMuonViteBuildOptions(project.pluginOptions);
   const targets = [
     ...new Set(

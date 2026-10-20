@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.webkit.WebView;
 import androidx.annotation.NonNull;
@@ -26,11 +27,41 @@ public final class MuonAppActivity extends Activity {
             @Override public void startupFailed(@NonNull String diagnostic) {}
         });
         try {
-            host.start(MuonAppConfig.readAsset(this, "muon/renderer.js"));
+            host.start(MuonAppConfig.readAsset(this, "muon/renderer.js"), MuonAppConfig.load(this));
         } catch (RuntimeException error) {
             host.showFailure(error.getMessage() == null
                     ? "Muon renderer is unavailable" : error.getMessage());
         }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (host != null) { host.setResumed(true); }
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (host != null) { host.onNotificationIntent(intent); }
+    }
+
+    @Override protected void onPause() {
+        if (host != null) { host.setResumed(false); }
+        super.onPause();
+    }
+
+    @Override public void onRequestPermissionsResult(int code, @NonNull String[] permissions,
+            @NonNull int[] results) {
+        if (host == null || !host.onRequestPermissionsResult(code, permissions, results)) {
+            super.onRequestPermissionsResult(code, permissions, results);
+        }
+    }
+
+    @Override
+    @Nullable public Object onRetainNonConfigurationInstance() {
+        // Only immutable requested settings survive a configuration change; a fresh
+        // process always starts from the packaged configuration.
+        return host == null ? null : host.retainRequestedState();
     }
 
     @Override

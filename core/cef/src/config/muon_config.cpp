@@ -11,6 +11,8 @@
 #include "muon_json_helpers.h"
 #include "muon_string_helpers.h"
 #include "muon_filesystem.h"
+#include "notifications/muon_notification_model.h"
+#include <cstring>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -244,6 +246,8 @@ struct MuonConfigPathBases final {
   bool has_node_project = false;
   std::filesystem::path asset_from;
   bool has_asset_from = false;
+  std::filesystem::path notification_icon;
+  bool has_notification_icon = false;
 };
 
 struct MuonEmbeddedConfigSlotState final {
@@ -887,6 +891,12 @@ static bool HasLogOutputPath(yyjson_val* root) {
   return GetObjectValue(output, kMuonConfigLogOutputPathKey) != nullptr;
 }
 
+static bool HasNotificationIconPath(yyjson_val* root) {
+  const auto launcher = GetObjectValue(root, kMuonConfigLauncherKey);
+  const auto registration = GetObjectValue(launcher, "notificationRegistration");
+  return GetObjectValue(registration, "iconPath") != nullptr;
+}
+
 static void UpdateConfigPathBases(
     yyjson_val* root,
     const std::filesystem::path& base_directory,
@@ -913,6 +923,10 @@ static void UpdateConfigPathBases(
   if (HasAssetFromPath(root)) {
     path_bases->asset_from = base_directory;
     path_bases->has_asset_from = true;
+  }
+  if (HasNotificationIconPath(root)) {
+    path_bases->notification_icon = base_directory;
+    path_bases->has_notification_icon = true;
   }
 }
 
@@ -941,6 +955,10 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
   if (HasAssetFromPath(root) && path_bases.has_asset_from) {
     config->asset.from =
         ResolveFilesystemPath(path_bases.asset_from, config->asset.from);
+  }
+  if (HasNotificationIconPath(root) && path_bases.has_notification_icon) {
+    config->notifications.windows_icon_path = ResolveFilesystemPath(
+        path_bases.notification_icon, config->notifications.windows_icon_path);
   }
 }
 
@@ -2862,6 +2880,8 @@ static bool ReadLauncherConfig(yyjson_val* root,
   config->default_version_policy = "tested";
   config->desktop_id = "muon";
   config->app_id = SanitizeAppId(GetStartupAppId());
+  config->launcher_path.clear();
+  GetEnvironmentPath("MUON_LAUNCHER_PATH", &config->launcher_path);
   const auto launcher = yyjson_obj_get(root, kMuonConfigLauncherKey);
   if (launcher == nullptr) {
     return true;
@@ -2869,6 +2889,29 @@ static bool ReadLauncherConfig(yyjson_val* root,
   if (!yyjson_is_obj(launcher)) {
     *error_message = "muon.json launcher must be an object";
     return false;
+  }
+  const auto registration = yyjson_obj_get(launcher, "notificationRegistration");
+  if (registration != nullptr) {
+    if (!yyjson_is_obj(registration)) {
+      *error_message = "muon.json launcher.notificationRegistration must be an object";
+      return false;
+    }
+    for (const auto key : {"displayName", "iconPath", "activatorClsid"}) {
+      const auto field = yyjson_obj_get(registration, key);
+      if (!yyjson_is_str(field) || yyjson_get_len(field) == 0 ||
+          std::strlen(yyjson_get_str(field)) != yyjson_get_len(field) ||
+          TrimAscii(yyjson_get_str(field)).empty()) {
+        *error_message = std::string("muon.json launcher.notificationRegistration.") +
+            key + " must be a nonempty string without NUL";
+        return false;
+      }
+    }
+    config->notifications.windows_display_name =
+        yyjson_get_str(yyjson_obj_get(registration, "displayName"));
+    config->notifications.windows_icon_path = FilesystemPathFromUtf8(
+        yyjson_get_str(yyjson_obj_get(registration, "iconPath")));
+    config->notifications.windows_activator_clsid =
+        yyjson_get_str(yyjson_obj_get(registration, "activatorClsid"));
   }
   const auto desktop_id_value =
       yyjson_obj_get(launcher, kMuonConfigDesktopIdKey);
@@ -2918,6 +2961,52 @@ static bool ReadLauncherConfig(yyjson_val* root,
   return true;
 }
 
+static bool ReadNotificationsConfig(yyjson_val* root,
+                                    MuonConfig* config,
+                                    std::string* error_message) {
+  const auto value = yyjson_obj_get(root, "notifications");
+  if (value == nullptr) {
+    return true;
+  }
+  if (!yyjson_is_obj(value)) {
+    *error_message = "muon.json notifications must be an object";
+    return false;
+  }
+  size_t index = 0;
+  size_t count = 0;
+  yyjson_val* key = nullptr;
+  yyjson_val* field = nullptr;
+  yyjson_obj_foreach(value, index, count, key, field) {
+    const auto name = std::string(yyjson_get_str(key), yyjson_get_len(key));
+    if (name == "enabled") {
+      if (!yyjson_is_bool(field)) {
+        *error_message = "muon.json notifications.enabled must be a boolean";
+        return false;
+      }
+      config->notifications.enabled = yyjson_get_bool(field);
+    } else if (name == "defaultCategory") {
+      if (!yyjson_is_str(field)) {
+        *error_message =
+            "muon.json notifications.defaultCategory must be a string";
+        return false;
+      }
+      const auto category =
+          std::string(yyjson_get_str(field), yyjson_get_len(field));
+      try {
+        muon_internal::ValidateMuonNotificationIdentifier(category);
+      } catch (const std::exception&) {
+        *error_message = "muon.json notifications.defaultCategory is invalid";
+        return false;
+      }
+      config->notifications.default_category = category;
+    } else {
+      *error_message = "Unknown muon.json notifications option: " + name;
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool ReadMuonConfigRoot(yyjson_val* root,
                                MuonConfig* config,
                                std::string* error_message) {
@@ -2926,6 +3015,7 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
     return false;
   }
   return ReadLauncherConfig(root, config, error_message) &&
+         ReadNotificationsConfig(root, config, error_message) &&
          ReadApplicationConfig(root, config, error_message) &&
          ReadNodeConfig(root, config, error_message) &&
          ReadAssetConfig(root, config, error_message) &&

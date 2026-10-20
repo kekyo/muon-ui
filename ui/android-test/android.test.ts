@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { buildMuonApp, normalizeMuonBuildTarget } from "../common/build.js";
 import { allMuonTargets } from "../common/targets.js";
 
@@ -46,10 +47,158 @@ const project = async (config: unknown): Promise<string> => {
     JSON.stringify({ name: "my-application", version: "2.3.4" }),
   );
   await writeFile(join(root, "muon.json"), JSON.stringify(config));
+  await writeFile(
+    join(root, "notification.png"),
+    await sharp(
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="8" fill="white"/></svg>',
+      ),
+    )
+      .png()
+      .toBuffer(),
+  );
   return root;
 };
 
 describe("public Android builds", () => {
+  it("packages static notification categories and a separately validated small icon", async () => {
+    const root = await project({
+      notifications: { enabled: true, defaultCategory: "orders" },
+      android: {
+        notifications: {
+          smallIcon: "notification.png",
+          channels: [{ id: "orders", name: "Orders", importance: "default" }],
+        },
+      },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    const input = buildAndroid.mock.calls[0]![0];
+    expect(input.androidNotifications).toEqual({
+      channels: [
+        {
+          id: "orders",
+          name: "Orders",
+          description: "",
+          importance: "default",
+        },
+      ],
+      smallIcon: join(root, "notification.png"),
+    });
+    expect(input.notifications).toEqual({
+      enabled: true,
+      defaultCategory: "orders",
+    });
+    expect(input.pluginAccess.internalAllow).toContain(
+      "muon.notifications.post",
+    );
+    expect(input.notificationIcons).toHaveLength(5);
+  });
+  it("rejects a missing small icon or unresolved default category before packaging", async () => {
+    for (const android of [
+      { notifications: {} },
+      { notifications: { smallIcon: "notification.png", channels: [] } },
+    ]) {
+      const root = await project({
+        notifications: { enabled: true, defaultCategory: "missing" },
+        android,
+      });
+      await expect(
+        buildMuonApp({ root, targets: ["android"] }),
+      ).rejects.toThrow(/smallIcon|defaultCategory/);
+    }
+    expect(buildAndroid).not.toHaveBeenCalled();
+  });
+  it.each([true, false, undefined])(
+    "enables notification permissions and functions only when configured: %s",
+    async (enabled) => {
+      const root = await project(
+        enabled === undefined
+          ? {}
+          : {
+              notifications: { enabled },
+              android: { notifications: { smallIcon: "notification.png" } },
+            },
+      );
+      await buildMuonApp({ root, targets: ["android"] });
+      const input = buildAndroid.mock.calls[0]![0];
+      expect(input.notifications).toEqual({ enabled: enabled === true });
+      expect(
+        input.permissions.includes("android.permission.POST_NOTIFICATIONS"),
+      ).toBe(enabled === true);
+      expect(
+        input.pluginAccess.internalAllow.includes(
+          "muon.android.notifications.requestPermission",
+        ),
+      ).toBe(enabled === true);
+      expect(input.pluginAccess.internalAllow).toContain(
+        "muon.android.settings.open",
+      );
+    },
+  );
+  it.each([null, true, { enabled: "true" }, { enabled: 1 }, { enable: true }])(
+    "rejects malformed notification configuration: %j",
+    async (notifications) => {
+      const root = await project({ notifications });
+      await expect(
+        buildMuonApp({ root, targets: ["android"] }),
+      ).rejects.toThrow(/notifications/);
+      expect(buildAndroid).not.toHaveBeenCalled();
+    },
+  );
+  it("normalizes initial system bars without treating an omitted window state as normal", async () => {
+    const root = await project({
+      android: {
+        systemBars: {
+          statusBar: { visible: false, icons: "light" },
+          contentLayout: "edge-to-edge",
+        },
+      },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].systemBars).toEqual({
+      statusBar: { visible: false, icons: "light" },
+      navigationBar: { visible: true },
+      contentLayout: "edge-to-edge",
+    });
+  });
+  it("applies fullscreen to both initial bars while retaining the requested layout and icon appearance", async () => {
+    const root = await project({
+      browser: { initialWindowState: "fullscreen" },
+      android: { systemBars: { navigationBar: { icons: "dark" } } },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].systemBars).toEqual({
+      statusBar: { visible: false },
+      navigationBar: { visible: false, icons: "dark" },
+      contentLayout: "safe-area",
+    });
+  });
+  it.each([
+    {
+      browser: { initialWindowState: "normal" },
+      android: { systemBars: { statusBar: { visible: false } } },
+    },
+    {
+      browser: { initialWindowState: "fullscreen" },
+      android: { systemBars: { navigationBar: { visible: true } } },
+    },
+    { android: { systemBars: { contentLayout: "fit" } } },
+    { android: { systemBars: { statusBar: { visible: "false" } } } },
+    { android: { systemBars: { statusBar: { icons: "automatic" } } } },
+    { android: { systemBars: { navigationBar: { color: "black" } } } },
+    { android: { systemBars: null } },
+  ])(
+    "rejects invalid or conflicting initial system bar settings before packaging: %j",
+    async (config) => {
+      const root = await project(config);
+      await expect(
+        buildMuonApp({ root, targets: ["android"] }),
+      ).rejects.toThrow(
+        /system.?bar|contentLayout|statusBar|navigationBar|icons/i,
+      );
+      expect(buildAndroid).not.toHaveBeenCalled();
+    },
+  );
   it("accepts an explicit Android target without changing desktop defaults", () => {
     expect(normalizeMuonBuildTarget("android")).toBe("android");
     expect(allMuonTargets).not.toContain("android");

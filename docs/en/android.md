@@ -10,20 +10,20 @@ This release supports debug APKs and signed release APKs. FCM, QuickJS, the Node
 | --- | --- |
 | Build host | Linux x64 |
 | Node.js/npm | Tested with Node.js 24. Meet the runtime requirements of your dependencies, including Vite |
-| JDK | 17–25; execution tested with 25.0.3 |
+| JDK | 17–25; execution tested with 21.0.12.1 and 25.0.3 |
 | Android SDK | Platform `platforms/android-37.0`, Build Tools `build-tools/36.0.0` |
 | Gradle/AGP | The included Wrapper uses Gradle 9.4.1 and AGP 9.2.1 |
 | Application ABIs | `arm64-v8a` and `x86_64`; both included by default |
-| Devices | Tested on API 37: Pixel 6 and an x86_64 emulator with 16 KiB pages |
+| Devices | Pixel 6 on API 37; x86_64 emulators on API 33, 35, 36, and 37. 16 KiB pages were tested on API 36 and 37 |
 
 Ordinary application builds need neither NDK/CMake nor a Muon source checkout. The npm package includes prebuilt Java and native components in an AAR. Initial Gradle and AndroidX downloads need a network connection. Android Studio and a connected device are optional for building.
 
-The APK declares minimum installation API 24; older OS versions remain unverified. WebView must provide `WEB_MESSAGE_LISTENER`, `WEB_MESSAGE_ARRAY_BUFFER`, and `DOCUMENT_START_SCRIPT`. Missing features produce an on-screen startup diagnostic. Tested WebView versions are 153.0.8010.36 on Pixel 6 and 149.0.7827.5 on the emulator. arm64 alignment has been inspected for 16 KiB compatibility; runtime testing covers Pixel 6 with 4 KiB pages and x86_64 with 16 KiB pages. See [WebView feature detection](https://developer.android.com/reference/androidx/webkit/WebViewFeature) and [16 KiB page support](https://developer.android.com/guide/practices/page-sizes).
+The APK declares minimum installation API 24. The WebView features below are required in addition to the OS version. WebView must provide `WEB_MESSAGE_LISTENER`, `WEB_MESSAGE_ARRAY_BUFFER`, and `DOCUMENT_START_SCRIPT`. Missing features produce an on-screen startup diagnostic. Tested WebView versions are 153.0.8010.36 on Pixel 6 and 149.0.7827.5 on the emulator. arm64 alignment has been inspected for 16 KiB compatibility. Runtime testing covers arm64 on Pixel 6 with 4 KiB pages and x86_64 emulators with both 4 KiB and 16 KiB pages. See [WebView feature detection](https://developer.android.com/reference/androidx/webkit/WebViewFeature) and [16 KiB page support](https://developer.android.com/guide/practices/page-sizes).
 
 Install a JDK and [Android CLI](https://developer.android.com/tools/agents/android-cli), review the SDK licenses, and install the required packages:
 
 ```bash
-export JAVA_HOME=/path/to/jdk-25
+export JAVA_HOME=/path/to/jdk-21
 export ANDROID_HOME="$HOME/Android/Sdk"
 export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$PATH"
 android --sdk="$ANDROID_HOME" sdk install platforms/android-37.0 build-tools/36.0.0 platform-tools
@@ -112,6 +112,8 @@ You can also provide Android settings through Vite's `build.android`. Precedence
 | `permissions` | Array of `android.permission.…` manifest entries; empty by default |
 | `sdkPath` | SDK directory; otherwise detected from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or adb on PATH |
 | `plugins` | Prebuilt plugins described below; empty by default |
+| `systemBars` | Initial system bar and content layout settings |
+| `notifications` | Notification small icon and static channels |
 | `signing` | Release signing configuration described below |
 | `fcm`, `quickjs` | Unavailable; must be omitted or false |
 
@@ -130,7 +132,7 @@ await window.muon.fs.writeTextFile('note.txt', 'Saved on Android', 'utf8');
 const note = await window.muon.fs.readTextFile('note.txt', 'utf8');
 ```
 
-In simple mode, omitting `plugin.plugins` exposes the 34 supported builtin functions. An explicit list loads only its entries: an empty list or a list without `internal` exposes no builtins. Each entry's `allow` restricts functions. Native policy checks also apply to directly constructed RPC calls.
+In simple mode, omitting `plugin.plugins` exposes supported builtin functions. Notification functions additionally require `notifications.enabled: true`. An explicit list loads only its entries: an empty list or a list without `internal` exposes no builtins. Each entry's `allow` restricts functions. Native policy checks also apply to directly constructed RPC calls.
 
 ### Import with validate mode
 
@@ -167,9 +169,84 @@ Omitting `plugin.pages` accepts RPC from the trusted asset origin's main frame. 
 
 `sources` and `packages` are build-time import checks. Code in the same page that obtains a valid capability can use its allowed functions. Runtime authentication of individual JavaScript files and isolation from same-origin iframes accessing the parent page are not guaranteed. WebMessage supplies origin and main-frame status, without the caller's JavaScript file or full document URL. See [WebMessageListener](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener) and [Android limitations](./limitation.md#android-webview-backend).
 
-Relative `muon.fs` paths refer to the application's private files directory. Data survives updates with the same application ID and signing key, and is removed by uninstalling. `content://` URIs and file dialogs are unavailable. See the [Android API compatibility policy](../../android-api-compatibility.md) for browser, environments, and fs support. Its QuickJS entries apply only to the prototype.
+Relative `muon.fs` paths refer to the application's private files directory. Data survives updates with the same application ID and signing key, and is removed by uninstalling. `content://` URIs and file dialogs are unavailable. See the [builtin reference](./muon-built-in-plugin-reference.md) for API usage. Unsupported Android functions are not exposed and are not replaced with no-ops.
 
 For external networking, add `android.permission.INTERNET` to `permissions`. Android does not enforce CEF's destination policies such as `network.allow`. Cleartext HTTP is disabled. Manifest permissions alone do not request runtime permissions from the user. Features requiring permission dialogs, including local network access, are not available through the public build path. See [Android limitations](./limitation.md#android-webview-backend) and [Android local network permission](https://developer.android.com/privacy-and-security/local-network-permission).
+
+## System bars and safe areas
+
+Control Android status and navigation bars independently through `muon.android.systemBars`. Initial settings belong in `android.systemBars` in `muon.json`, or `build.android.systemBars` in Vite.
+
+```json
+{
+  "android": {
+    "systemBars": {
+      "statusBar": { "visible": true, "icons": "dark" },
+      "navigationBar": { "visible": true },
+      "contentLayout": "safe-area"
+    }
+  }
+}
+```
+
+The default layout is `safe-area`. Muon reserves bar and cutout clearance outside the WebView, including on OS versions that draw behind system bars. In `edge-to-edge` mode, the WebView fills the window and the page positions controls using variables such as `--muon-safe-area-top`. These variables describe clearance still needed by web content, so they are zero in `safe-area` mode. Do not add the same space in both native layout and CSS.
+
+At runtime, `configure()` changes only specified fields. It shares requested state with the existing fullscreen API and restores runtime requests after Activity recreation. A new process starts from build-time settings. Users can reveal hidden bars temporarily with an OS swipe gesture. `getState().actual` contains OS-reported values and cannot guarantee detection of that transient reveal.
+
+Android versions and window modes, including multiwindow, may adjust visibility requests. Handle requested and observed values separately. Dark navigation icons are unsupported on API 24 and 25. See the [builtin reference](./muon-built-in-plugin-reference.md#android-system-bars-and-safe-areas) for APIs and CSS variables, and [Android edge-to-edge](https://developer.android.com/develop/ui/views/layout/edge-to-edge) for OS conditions.
+
+## Local notifications and OS settings
+
+Enable notifications through the shared `notifications` configuration, and specify Android's small icon and purpose categories through `android.notifications`. A category ID is also its OS channel ID on API 26 and later.
+
+```json
+{
+  "notifications": { "enabled": true, "defaultCategory": "orders" },
+  "android": {
+    "notifications": {
+      "smallIcon": "icons/notification.png",
+      "channels": [
+        {
+          "id": "orders",
+          "name": "Orders",
+          "description": "Order progress and collection",
+          "importance": "default"
+        }
+      ]
+    }
+  }
+}
+```
+
+`smallIcon` must be a square PNG, 24–1024 pixels, containing a white silhouette on a transparent background. Colored images, fully opaque images, and reuse of a launcher icon are rejected. The build generates 24 dp icons for each density. Configure the ordinary application icon separately, for example through `android.icon`.
+
+Notification-enabled builds add `POST_NOTIFICATIONS` to the Manifest. On API 33 and later, explain the request and call `muon.android.notifications.requestPermission()` explicitly. Startup and posting do not request it. Disabled builds expose no notification APIs and do not automatically request the permission even if it appears in user-supplied `permissions`. See [Android notification permissions](https://developer.android.com/develop/ui/views/notifications/notification-permission).
+
+In validate mode, import from `muon:notifications` and `muon:android.notifications`. Allow the functions actually used, such as `muon.notifications.post` and `muon.android.notifications.requestPermission`.
+
+```ts
+import { post } from "muon:notifications";
+import { requestPermission } from "muon:android.notifications";
+
+const permission = await requestPermission();
+if (permission.state.notificationsEnabled) {
+  await post({
+    id: "order-42",
+    title: "Order ready",
+    body: "Your order is ready to collect.",
+    data: { orderId: 42 },
+  });
+}
+```
+
+Static channels are registered at startup. To add channels dynamically, call `ensureChannel()` before posting. Existing importance and user settings are preserved. API 24 and 25 have no channel feature: use statically declared categories; `ensureChannel()` and `getChannel()` are unsupported. `defaultCategory` must reference a statically declared ID. See [Android channels](https://developer.android.com/develop/ui/views/notifications/channels).
+
+Use `muon.android.settings.open()` for application details, application notification settings, or a registered channel's settings. Read `getPermissionState()` or `getStatus()` again after resuming. Opening a screen does not reveal whether the user changed a setting.
+
+Notification operations can start an exited application. Events received before page initialization are also saved. Combine a subscription with pending-event retrieval, deduplicate by `eventId`, and acknowledge processed events. APK replacement may remove OS notifications, but updates preserving application ID and data retain saved pending events. Muon does not repost automatically. See [events and storage limits](./muon-built-in-plugin-reference.md#notification-events-and-acknowledgement) and [Android update behavior](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010).
+
+Scheduled notifications, FCM, persistent services, and background actions that complete work directly are unavailable. Notification buttons open this application and deliver an action ID.
+
 
 ## Sign a release APK
 
@@ -274,4 +351,4 @@ The builder also validates registration names, SONAME, ABI, `muon_init_plugin`, 
 
 FCM notification delivery and background processing remain follow-up work. Current APKs run without Firebase configuration.
 
-The intended QuickJS deployment model bundles JavaScript into a single ESM file on the build host, keeping builtin modules external. Code, its hash, and required feature metadata will be included in APK assets and updated with the application. Persistent data stays separate. Arbitrary npm packages, full Node.js compatibility, and independent JavaScript updates are outside this initial model. See the [plan6 deployment policy](../ja/plans/plan6.md#8-quickjsのjavascriptデプロイメント方針).
+The intended QuickJS deployment model bundles JavaScript into a single ESM file on the build host, keeping builtin modules external. Code, its hash, and required feature metadata will be included in APK assets and updated with the application. Persistent data stays separate. Arbitrary npm packages, full Node.js compatibility, and independent JavaScript updates are outside this initial model.

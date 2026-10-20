@@ -2886,12 +2886,22 @@ static bool RegisterMuonInternalPlugins(
     impl->cancel_owner_operations.push_back(std::move(cancel_owner));
   }
   for (const auto& platform_plugin : initialization.plugins) {
+    const auto initial_function_count = impl->registered_functions.size();
     if (platform_plugin.metadata == nullptr ||
         !RegisterMuonPluginMetadata(
             impl, *platform_plugin.metadata, platform_plugin.source,
             plugin_policy, true)) {
       ShutdownMuonPlatformAdapter(impl);
       return false;
+    }
+    if (platform_plugin.metadata->stop != nullptr ||
+        platform_plugin.metadata->renderer_context_released != nullptr) {
+      // Builtins have no library handle, but own the same asynchronous stop
+      // and renderer-context lifetimes as dynamically loaded native plugins.
+      KeepOrCloseMuonPluginLibrary(
+          impl, platform_plugin.source, nullptr, initial_function_count,
+          platform_plugin.metadata->stop,
+          platform_plugin.metadata->renderer_context_released);
     }
   }
   if (!RegisterMuonPlatformFunctions(

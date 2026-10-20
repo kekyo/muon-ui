@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 
 import android.net.Uri;
 import android.os.Handler;
@@ -193,14 +194,14 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     MuonRpcBridge(
             @NonNull Activity activity,
             @NonNull WebView webView,
-            @NonNull Listener listener) {
+            @NonNull Listener listener,
+            @NonNull MuonAppConfig config) {
         this.listener = listener;
-        MuonAppConfig config = MuonAppConfig.load(activity);
         pluginEnabled = config.pluginEnabled;
-        platformService = new MuonAndroidPlatformService(activity, webView);
+        platformService = new MuonAndroidPlatformService(activity, webView, config);
         try {
             nativeHandle = nativeCreateHost(this, MuonPackagedPlugin.load(activity), config.internalAllow,
-                    config.validateMode, config.capabilityIds, config.capabilityAllows);
+                    config.validateMode, config.capabilityIds, config.capabilityAllows, config.notificationsEnabled);
         } catch (RuntimeException error) {
             platformService.close();
             throw error;
@@ -260,9 +261,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
                     nativeCancelCall(nativeHandle, callId);
                 }
             } else if ("release".equals(type) && nativeHandle != 0) {
-                pendingBinaryCalls.clear();
-                pendingBinaryRendererResults.clear();
-                nativeReleaseContext(nativeHandle);
+                releasePageContext();
             }
         } catch (JSONException ignored) {
             // Malformed transport messages do not cross the native RPC boundary.
@@ -843,6 +842,25 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
         return platformService.isFullscreen();
     }
 
+    MuonAndroidSystemBarsService getSystemBarsService() {
+        return platformService.getSystemBarsService();
+    }
+
+    void setResumed(boolean value) { platformService.setResumed(value); }
+    void onNotificationIntent(Intent intent) { platformService.onNotificationIntent(intent); }
+    int getActiveNotificationWatchCountForTest() { return platformService.getActiveNotificationWatchCount(); }
+
+    boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
+        return platformService.onRequestPermissionsResult(code, permissions, results);
+    }
+
+    void releasePageContext() {
+        pendingBinaryCalls.clear();
+        pendingBinaryRendererResults.clear();
+        if (nativeHandle != 0) { nativeReleaseContext(nativeHandle); }
+        replyProxy = null;
+    }
+
     float getManagedZoomFactorForTest() {
         return platformService.getManagedZoomFactor();
     }
@@ -989,7 +1007,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
     private static native long nativeCreateHost(
             @NonNull MuonRpcBridge bridge, @NonNull MuonPackagedPlugin[] plugins,
             @NonNull String[] internalAllow, boolean validateMode,
-            @NonNull String[] capabilityIds, @NonNull String[][] capabilityAllows);
+            @NonNull String[] capabilityIds, @NonNull String[][] capabilityAllows, boolean notificationsEnabled);
 
     private static native boolean nativeIsHostReady(long handle);
 

@@ -15,6 +15,7 @@ out/
 *.tsbuildinfo
 
 # Test results
+.run/
 coverage/
 test-results/
 *.coverage

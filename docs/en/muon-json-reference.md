@@ -93,6 +93,8 @@ The following is an example of `muon.json`:
 | :-- | :--- | :------ | :------ |
 | `iconPath` | `string` | muon default icon | PNG file used as the static application icon. |
 | `config` | `readonly object` | `{}` | Application string key-value settings available to renderer code. |
+| `notifications` | `object` | `{ "enabled": false }` | Shared local notification settings for Android and CEF. |
+| `android` | `object` | None | [Android build and display settings](./android.md). |
 | `node` | `object` | none | Optional Node.js sidecar project. |
 
 - `iconPath` accepts only `.png`. Relative paths are resolved from the directory where `muon.json` is located.
@@ -122,6 +124,31 @@ There is no deletion syntax, so a later configuration cannot remove an earlier k
 
 Because all values are available to renderer code, do not store passwords, tokens, or other secrets in `config`.
 `plugin.plugins[].config` is a separate setting table passed only to the corresponding native plugin during initialization.
+
+## notifications key
+
+`notifications` configures local notifications on Android, Windows, and Linux.
+
+| Key | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `enabled` | `boolean` | `false` | Include notification APIs and deployment metadata in the build |
+| `defaultCategory` | `string` | None | Category ID used when `post()` omits it |
+
+```json
+{
+  "notifications": {
+    "enabled": true,
+    "defaultCategory": "orders"
+  }
+}
+```
+
+Enabling notifications does not request OS permission implicitly. Also allow the required functions through `plugin.plugins`. Disabled builds expose no notification API, so remove notification imports and permission entries as well.
+
+`defaultCategory` must be a nonempty string of at most 128 UTF-16 code units. On Android, it must identify an entry in `android.notifications.channels`. CEF treats it as an arbitrary purpose category and does not require Android settings. See the [Android guide](./android.md#local-notifications-and-os-settings) for small icons, channels, and initial system bar settings.
+
+Starting an application from a notification also requires OS support and deployment registration. `enabled: true` alone does not guarantee launch support. See the [shared notification API](./muon-built-in-plugin-reference.md#shared-notification-api) and [notification deployment registration](./package-install-location-advanced-topics.md#notification-deployment-registration).
+
 
 ## node key
 
@@ -223,7 +250,7 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
-| `desktop.desktopId` | `string` | `appId` | `.desktop` filename, `StartupWMClass`, Wayland app ID, and X11 WM_CLASS. |
+| `desktop.desktopId` | `string` | Derived from `appId` | `.desktop` filename, `StartupWMClass`, Wayland app ID, and X11 WM_CLASS. |
 | `desktop.name` | `string` | `package.json` name | Application name displayed in the launcher. |
 | `desktop.comment` | `string` | `package.json.description` | `Comment` in the desktop entry. |
 | `desktop.iconPath` | `string` | `iconPath` or muon default icon | PNG icon override used only for Linux targets. |
@@ -231,13 +258,14 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 | `desktop.startupNotify` | `boolean` | `true` | `StartupNotify` in the desktop entry. |
 
 - `desktop.iconPath` accepts only `.png`. The input PNG is normalized during the build and placed as `muon-desktop-icon.png` in the Linux distribution directory.
+- When `desktopId` is omitted, a valid D-Bus `appId` is used unchanged; otherwise a stable ID is generated from its hash. An explicitly configured `desktopId` must be a valid D-Bus application ID when notifications are enabled.
 - When launched from a portable distribution (`.tar.gz`), `muon-launcher` prepares CEF directly under the extracted `<packageName>/<target>` directory, places the CEF profile in `profile/` under the same directory, and creates or updates `~/.local/share/applications/<desktopId>.desktop`.
-  The `Exec`, `TryExec`, and `Icon` values in this desktop entry point to absolute paths under the extracted directory.
+  `Exec` and `TryExec` point to absolute paths in the extracted directory. `Icon` normally points to an image there. With notifications enabled, the image is registered in the user icon theme and `Icon` uses `desktopId`.
 - When restarted from the same extracted location, the prepared CEF is reused. When launched from a distribution extracted to another directory, CEF preparation and desktop entry update are performed for that location.
 - AppImage prepares its runtime in the user's state directory and registers the original AppImage for menu and enabled autostart entries. Launch it directly after moving or renaming it to update these entries. See [creating and running AppImages](./muon-cli-advanced-topics.md#creating-and-running-appimages).
 - `muon pack --type deb` generates `/usr/share/applications/<desktopId>.desktop` and `/usr/share/icons/hicolor/256x256/apps/<desktopId>.png`.
   Runtimes installed by deb contain `muon-install.json`, and `muon-launcher` does not create a new desktop entry in the user's home directory.
-  Only when an existing muon-managed user desktop entry exists, it is updated to a deb-aware entry with `TryExec=/usr/bin/<packageName>`.
+  An existing muon-managed user desktop entry is updated to the deb installation. Its destination is `/usr/bin/<packageName>` with notifications disabled, or `/usr/lib/<packageName>/<target>/<launcher>` when enabled. Notification-enabled packages also install D-Bus activation registration. See [notification deployment registration](./package-install-location-advanced-topics.md#notification-deployment-registration).
 - Relative paths are resolved from the directory of the file where the value is defined.
   CLI/Vite options use the project root, and `muon.json` uses the configuration file directory.
 - Linux icon resolution order is CLI/Vite option `linuxDesktop.iconPath` or `--linux-icon`, `linux.desktop.iconPath` in `muon.json`, unified `iconPath`, `project.json.iconPath`, then the muon default icon.

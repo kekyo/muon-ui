@@ -608,6 +608,39 @@ int muon_launcher_get_embedded_app_id(char **app_id) {
   return 0;
 }
 
+int muon_launcher_get_embedded_notification_clsid(char **clsid) {
+  if (clsid == NULL) return -1;
+  *clsid = NULL;
+  if (embedded_slot_is_empty()) return 0;
+  MuonLauncherTlvReader reader = {
+      kMuonLauncherEmbeddedConfigSlot, MUON_LAUNCHER_EMBEDDED_CONFIG_SLOT_SIZE, 0};
+  static const char *const keys[] = {
+      "launcher", "notificationRegistration", "activatorClsid"};
+  for (size_t depth = 0; depth < sizeof(keys) / sizeof(keys[0]); depth += 1) {
+    size_t count = 0;
+    if (tlv_read_object_value_count(&reader, &count) != 0) return -1;
+    int found = 0;
+    for (size_t index = 0; index < count; index += 1) {
+      const char *key = NULL;
+      size_t key_length = 0;
+      if (tlv_read_raw_key(&reader, &key, &key_length) != 0) return -1;
+      if (tlv_key_equals(key, key_length, keys[depth])) {
+        found = 1;
+        break;
+      }
+      if (tlv_skip_value(&reader) != 0) return -1;
+    }
+    if (!found) return 0;
+  }
+  if (tlv_read_string_value(&reader, clsid) != 0) return -1;
+  if ((*clsid)[0] == '\0') {
+    free(*clsid);
+    *clsid = NULL;
+    return -1;
+  }
+  return 0;
+}
+
 int muon_launcher_get_embedded_node_runtime_requirement(
     MuonNodeRuntimeRequirement *requirement, int *present) {
   if (requirement == NULL) {

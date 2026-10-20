@@ -3,7 +3,27 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import {
+  createMuonNotificationsApi,
+  type MuonNotificationsApi,
+} from '../../common/renderer/notifications.js';
+
 import type { MuonWebViewRpcClient } from './webview-rpc.js';
+import {
+  createMuonAndroidSystemBarsApi,
+  type MuonAndroidSystemBarsApi,
+} from './system-bars-api.js';
+export * from './system-bars-api.js';
+import {
+  createMuonAndroidSettingsApi,
+  type MuonAndroidSettingsApi,
+} from './settings-api.js';
+import {
+  createMuonAndroidNotificationsApi,
+  type MuonAndroidNotificationsApi,
+} from './notification-permission-api.js';
+export * from './settings-api.js';
+export * from './notification-permission-api.js';
 
 import {
   browserFunctionNames,
@@ -26,6 +46,15 @@ export interface MuonAndroidCapabilityIds {
 
   /** Capability for sandboxed filesystem operations. */
   readonly 'muon.fs': string;
+
+  /** Capability for Android system bar operations. */
+  readonly 'muon.android.systemBars': string;
+  /** Capability for app-scoped Android settings screens. */
+  readonly 'muon.android.settings': string;
+  /** Capability for Android notification permission operations. */
+  readonly 'muon.android.notifications': string;
+  /** Capability for shared notification operations. */
+  readonly 'muon.notifications': string;
 }
 
 /** Android browser functions available in simple mode. */
@@ -352,6 +381,17 @@ export interface MuonAndroidFsApi {
 
 /** Built-in API object exposed by Android simple mode. */
 export interface MuonAndroidSimpleApi {
+  /** Shared notification operations, filtered when disabled by application settings. */
+  readonly notifications: MuonNotificationsApi;
+  /** Android-specific operations available in this runtime. */
+  readonly android: {
+    /** System bar visibility and state. */
+    readonly systemBars: MuonAndroidSystemBarsApi;
+    /** App-scoped operating-system settings. */
+    readonly settings: MuonAndroidSettingsApi;
+    /** Android notification permission operations. */
+    readonly notifications: MuonAndroidNotificationsApi;
+  };
   /** Operations for the owning Activity and WebView. */
   readonly browser: MuonAndroidBrowserApi;
 
@@ -1084,4 +1124,27 @@ export const createMuonAndroidSimpleApi = (
         ),
     }),
     fs: createMuonAndroidFsApi(client, capabilityIds['muon.fs']),
+    notifications: createMuonNotificationsApi(
+      async (name, args, options) =>
+        await client.call(
+          capabilityIds['muon.notifications'],
+          `muon.notifications.${name}`,
+          args,
+          options
+        )
+    ),
+    android: Object.freeze({
+      settings: createMuonAndroidSettingsApi(
+        client,
+        capabilityIds['muon.android.settings']
+      ),
+      notifications: createMuonAndroidNotificationsApi(
+        client,
+        capabilityIds['muon.android.notifications']
+      ),
+      systemBars: createMuonAndroidSystemBarsApi(
+        client,
+        capabilityIds['muon.android.systemBars']
+      ),
+    }),
   });

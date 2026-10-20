@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon-ui
 
 import { constants } from "node:fs";
+import { createHash } from "node:crypto";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +70,8 @@ export interface ResolvedMuonLinuxDesktop {
   categories: readonly string[];
   /** Whether desktop startup notification is requested. */
   startupNotify: boolean;
+  /** Whether OS notification activation is registered by the launcher. */
+  notificationsEnabled: boolean;
   /** Resolved PNG icon file path. */
   iconPath: string;
   /** File name written into target distributions for the normalized icon. */
@@ -170,9 +173,30 @@ export const resolveMuonLinuxDesktop = async (
     readProjectAppIconSource(projectJson, input.root),
   ].filter((source): source is MuonAppIconSource => source !== undefined);
 
-  const desktopId = sanitizeDesktopId(
+  const requestedDesktopId = sanitizeDesktopId(
     resolveStringField(sources, "desktopId", input.defaults.desktopId),
   );
+  const notificationsEnabled =
+    isJsonObject(input.muonConfig.notifications) &&
+    input.muonConfig.notifications.enabled === true;
+  const explicitDesktopId = sources.some(
+    (source) => source.options.desktopId !== undefined,
+  );
+  if (
+    notificationsEnabled &&
+    explicitDesktopId &&
+    !isDbusApplicationId(requestedDesktopId)
+  ) {
+    throw new Error(
+      "Linux notification desktopId must be a valid D-Bus application ID.",
+    );
+  }
+  // A disabled replacement still needs the same identity to unregister an
+  // earlier enabled build. Default identities therefore do not depend on enabled.
+  const desktopId =
+    explicitDesktopId || isDbusApplicationId(requestedDesktopId)
+      ? requestedDesktopId
+      : `dev.muon.app_${createHash("sha256").update(requestedDesktopId).digest("hex")}`;
   const name = resolveStringField(sources, "name", input.defaults.name);
   const comment = resolveStringField(
     sources,
@@ -197,6 +221,7 @@ export const resolveMuonLinuxDesktop = async (
     comment,
     categories,
     startupNotify,
+    notificationsEnabled,
     iconPath,
     iconFileName: defaultIconFileName,
     configFileName: defaultDesktopConfigFileName,
@@ -255,6 +280,7 @@ export const writeLinuxDesktopDistributionFiles = async (
         comment: desktop.comment,
         categories: desktop.categories,
         startupNotify: desktop.startupNotify,
+        notificationsEnabled: desktop.notificationsEnabled,
         iconFileName: desktop.iconFileName,
       },
       undefined,
@@ -271,6 +297,8 @@ export const createLinuxDesktopEntry = (input: {
   exec: string;
   tryExec: string;
   icon: string;
+  appId: string | undefined;
+  launcherPath: string | undefined;
 }): string => {
   const lines = [
     "[Desktop Entry]",
@@ -290,9 +318,38 @@ export const createLinuxDesktopEntry = (input: {
   lines.push(`StartupNotify=${input.desktop.startupNotify ? "true" : "false"}`);
   lines.push(`StartupWMClass=${escapeDesktopString(input.desktop.desktopId)}`);
   lines.push("X-muon-Managed=true");
+  if (
+    input.desktop.notificationsEnabled &&
+    input.appId !== undefined &&
+    input.launcherPath !== undefined
+  ) {
+    lines.push("DBusActivatable=true");
+    lines.push(`X-muon-AppId=${escapeDesktopString(input.appId)}`);
+    lines.push(`X-muon-Launcher=${escapeDesktopString(input.launcherPath)}`);
+  }
   lines.push("");
   return lines.join("\n");
 };
+
+/**
+ * Creates a per-application D-Bus activation service file.
+ * @param desktopId - Well-known bus name matching the desktop entry file.
+ * @param appId - Runtime identity used to verify registration ownership.
+ * @param launcherPath - Absolute installed launcher path.
+ * @returns Service metadata for notification activation through the launcher.
+ */
+export const createLinuxNotificationService = (
+  desktopId: string,
+  appId: string,
+  launcherPath: string,
+): string =>
+  [
+    "[D-BUS Service]",
+    `Name=${escapeDesktopString(desktopId)}`,
+    `Exec=${escapeDesktopString(quoteDesktopExecArgument(launcherPath))} --muon-notification-activation`,
+    `X-muon-AppId=${escapeDesktopString(appId)}`,
+    "",
+  ].join("\n");
 
 /**
  * Quotes one Desktop Entry Exec argument.
@@ -580,6 +637,10 @@ const sanitizeDesktopId = (value: string): string => {
     .replace(/[.-]+$/g, "");
   return sanitized.length > 0 ? sanitized : "muon-app";
 };
+
+const isDbusApplicationId = (value: string): boolean =>
+  value.length <= 255 &&
+  /^[A-Za-z_-][A-Za-z0-9_-]*(?:\.[A-Za-z_-][A-Za-z0-9_-]*)+$/u.test(value);
 
 const escapeDesktopString = (value: string): string =>
   value

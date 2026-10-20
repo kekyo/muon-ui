@@ -1467,6 +1467,68 @@ printf 'deb\\n' > "$output_path"
     );
   });
 
+  it("packages notification D-Bus activation against the installed deb launcher", async () => {
+    const root = await createTemporaryDirectory("muon-pack-notification-deb-");
+    const packageDirectory = await createFakeMuonPackageDist(root, [
+      "linux-amd64",
+    ]);
+    const binDirectory = join(root, "bin");
+    await mkdir(binDirectory, { recursive: true });
+    await writeFakeTool(
+      binDirectory,
+      "dpkg-deb",
+      '#!/bin/sh\nif [ "$1" = --version ]; then exit 0; fi\nfor path do :; done\nprintf deb > "$path"\n',
+    );
+    await writeViteProject(root, packageDirectory, ["linux-amd64"], undefined, {
+      muonConfig: { notifications: { enabled: true } },
+    });
+    const result = await packMuonApp({
+      root,
+      types: ["deb"],
+      environment: {
+        ...process.env,
+        PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+      },
+    });
+    expect(result.artifacts).toHaveLength(1);
+    const packageRoot = join(root, ".muon/pack/deb/packed-sample-linux-amd64");
+    const launcher =
+      "/usr/lib/packed-sample/dist-muon/linux-amd64/packed-sample";
+    const desktop = await readFile(
+      join(packageRoot, "usr/share/applications/scope.packed-sample.desktop"),
+      "utf8",
+    );
+    expect(desktop).toContain(`Exec="${launcher}" --muon-launch-from=normal\n`);
+    expect(desktop).toContain(`X-muon-Launcher=${launcher}\n`);
+    expect(desktop).toContain("DBusActivatable=true\n");
+    const service = await readFile(
+      join(
+        packageRoot,
+        "usr/share/dbus-1/services/scope.packed-sample.service",
+      ),
+      "utf8",
+    );
+    expect(service).toContain(
+      `Exec="${launcher}" --muon-notification-activation\n`,
+    );
+    expect(service).toContain("Name=scope.packed-sample\n");
+    expect(service).toContain("X-muon-AppId=scope.packed-sample\n");
+    const postinst = await readFile(
+      join(packageRoot, "DEBIAN/postinst"),
+      "utf8",
+    );
+    const postrm = await readFile(join(packageRoot, "DEBIAN/postrm"), "utf8");
+    expect(postinst).toContain(
+      "gtk-update-icon-cache --force --ignore-theme-index /usr/share/icons/hicolor",
+    );
+    expect(postrm).toContain(
+      "gtk-update-icon-cache --force --ignore-theme-index /usr/share/icons/hicolor",
+    );
+    expect(postinst + postrm).not.toContain(
+      "--muon-notification-clear-history",
+    );
+  });
+
   it("keeps deb metadata separate from portable tar.gz metadata in mixed Linux packaging", async () => {
     const root = await createTemporaryDirectory("muon-pack-mixed-linux-");
     const packageDirectory = await createFakeMuonPackageDist(root, [

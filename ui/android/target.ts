@@ -14,6 +14,12 @@ import {
 } from "./build.js";
 import { prepareAndroid } from "./toolchain.js";
 import { validateMuonAndroidConfig } from "../../core/android/renderer/android-config.js";
+import { resolveMuonAndroidInitialSystemBars } from "../../core/android/system-bars-config.js";
+import { resolveMuonNotificationConfig } from "../common/notification-config.js";
+import {
+  resolveAndroidNotificationConfig,
+  createAndroidNotificationIcon,
+} from "./notifications.js";
 import type { MuonAndroidOptions } from "../android.js";
 import type { MuonBuildOptions } from "../common/build.js";
 import type { MuonProgressCallback } from "../common/progress.js";
@@ -195,13 +201,22 @@ export const buildMuonAndroidTarget = async (input: {
   )
     throw new Error("node is unavailable in Android application builds.");
   const browser = object(config.browser, "browser");
-  if (
-    browser.initialWindowState !== undefined &&
-    browser.initialWindowState !== "normal"
-  )
-    throw new Error(
-      "Android browser.initialWindowState currently supports normal only; use the runtime fullscreen API.",
-    );
+  const notifications = resolveMuonNotificationConfig(config.notifications);
+  const androidNotifications = resolveAndroidNotificationConfig(
+    android.notifications,
+    notifications,
+    options.android?.notifications === undefined ? input.configDirectory : root,
+  );
+  const notificationIcons =
+    androidNotifications.smallIcon === undefined
+      ? []
+      : await createAndroidNotificationIcon(
+          await readFile(androidNotifications.smallIcon),
+        );
+  const systemBars = resolveMuonAndroidInitialSystemBars(
+    android.systemBars,
+    browser.initialWindowState,
+  );
   if (
     browser.contextMenu !== undefined &&
     object(browser.contextMenu, "browser.contextMenu").mode !== "standard"
@@ -312,6 +327,11 @@ export const buildMuonAndroidTarget = async (input: {
   );
   const permissions = strings(android.permissions ?? [], "android.permissions");
   if (
+    notifications.enabled &&
+    !permissions.includes("android.permission.POST_NOTIFICATIONS")
+  )
+    permissions.push("android.permission.POST_NOTIFICATIONS");
+  if (
     permissions.some(
       (permission) =>
         !/^android\.permission\.[A-Z][A-Z0-9_]*$/u.test(permission),
@@ -395,6 +415,10 @@ export const buildMuonAndroidTarget = async (input: {
     ),
     abis,
     permissions,
+    systemBars,
+    notifications,
+    androidNotifications,
+    notificationIcons,
     values,
     pluginAccess: pluginConfiguration.pluginAccess,
     plugins,

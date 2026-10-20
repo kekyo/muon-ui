@@ -7,6 +7,7 @@
 package dev.muon.runtime;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -16,9 +17,6 @@ import android.os.Process;
 import android.webkit.WebView;
 
 import androidx.annotation.NonNull;
-import androidx.core.view.WindowCompat;
-import androidx.core.view.WindowInsetsCompat;
-import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.webkit.WebViewCompat;
 
 import org.json.JSONArray;
@@ -52,17 +50,29 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     private Activity activity;
     private WebView webView;
     private final MuonAndroidFilesystemService filesystemService;
-    private boolean fullscreen;
+    private final MuonAndroidSystemBarsService systemBarsService;
+    private final MuonAndroidSettingsService settingsService;
+    private final MuonAndroidNotificationPermissionService notificationPermissionService;
+    private final MuonAndroidNotificationService notificationService;
     private float managedZoomFactor = 1.0f;
 
     MuonAndroidPlatformService(
             @NonNull Activity activity,
-            @NonNull WebView webView) {
+            @NonNull WebView webView,
+            @NonNull MuonAppConfig config) {
         this.activity = activity;
-        configValues = MuonAppConfig.load(activity).values;
+        configValues = config.values;
         this.webView = webView;
         filesystemService = new MuonAndroidFilesystemService(
                 new Handler(Looper.getMainLooper()), activity.getFilesDir());
+        Object retained = activity.getLastNonConfigurationInstance();
+        systemBarsService = new MuonAndroidSystemBarsService(activity.getWindow(),
+                activity.getResources().getDisplayMetrics().density,
+                config.systemBars,
+                retained instanceof String ? (String) retained : null);
+        notificationService = new MuonAndroidNotificationService(activity, config);
+        settingsService = new MuonAndroidSettingsService(activity, notificationService::hasChannel);
+        notificationPermissionService = new MuonAndroidNotificationPermissionService(activity, config.notificationsEnabled);
     }
 
     void invoke(
@@ -78,6 +88,23 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         if (functionPath.startsWith("muon.fs.")) {
             filesystemService.invoke(
                     callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.android.systemBars.")) {
+            systemBarsService.invoke(callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.android.settings.")) {
+            settingsService.invoke(functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.equals("muon.android.notifications.getPermissionState")
+                || functionPath.equals("muon.android.notifications.requestPermission")) {
+            notificationPermissionService.invoke(callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.notifications.") || functionPath.startsWith("muon.android.notifications.")) {
+            notificationService.invoke(callId, functionPath, arguments, attachments, completion);
             return;
         }
         if (arguments.length() != 0 || attachments.length != 0) {
@@ -104,15 +131,15 @@ final class MuonAndroidPlatformService implements AutoCloseable {
                     completion.completeVoid();
                     return;
                 case "muon.browser.toggleFullscreen":
-                    setFullscreen(!fullscreen);
+                    systemBarsService.setFullscreen(!systemBarsService.isFullscreen());
                     completion.completeVoid();
                     return;
                 case "muon.browser.enterFullscreen":
-                    setFullscreen(true);
+                    systemBarsService.setFullscreen(true);
                     completion.completeVoid();
                     return;
                 case "muon.browser.exitFullscreen":
-                    setFullscreen(false);
+                    systemBarsService.setFullscreen(false);
                     completion.completeVoid();
                     return;
                 case "muon.browser.zoomIn":
@@ -142,14 +169,34 @@ final class MuonAndroidPlatformService implements AutoCloseable {
 
     void cancel(int callId) {
         filesystemService.cancel(callId);
+        systemBarsService.cancel(callId);
+        notificationPermissionService.cancel(callId);
+        notificationService.cancel(callId);
     }
 
     void cancelAll() {
         filesystemService.cancelAll();
+        systemBarsService.cancelAll();
+        notificationPermissionService.cancelAll();
+        notificationService.cancelAll();
     }
 
+    void setResumed(boolean value) {
+        settingsService.setResumed(value);
+        notificationPermissionService.setResumed(value);
+    }
+
+    void onNotificationIntent(Intent intent) { notificationService.onNotificationIntent(intent); }
+    int getActiveNotificationWatchCount() { return notificationService.getActiveWatchCount(); }
+
+    boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
+        return notificationPermissionService.onRequestPermissionsResult(code, permissions, results);
+    }
+
+    MuonAndroidSystemBarsService getSystemBarsService() { return systemBarsService; }
+
     boolean isFullscreen() {
-        return fullscreen;
+        return systemBarsService.isFullscreen();
     }
 
     float getManagedZoomFactor() {
@@ -163,6 +210,10 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     @Override
     public void close() {
         filesystemService.close();
+        systemBarsService.close();
+        settingsService.close();
+        notificationPermissionService.close();
+        notificationService.close();
         activity = null;
         webView = null;
     }
@@ -203,19 +254,6 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         result.put("webViewPackage", packageName == null ? "" : packageName);
         result.put("webViewVersion", versionName == null ? "" : versionName);
         return result;
-    }
-
-    private void setFullscreen(boolean value) {
-        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(
-                activity.getWindow(), activity.getWindow().getDecorView());
-        controller.setSystemBarsBehavior(
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-        if (value) {
-            controller.hide(WindowInsetsCompat.Type.systemBars());
-        } else {
-            controller.show(WindowInsetsCompat.Type.systemBars());
-        }
-        fullscreen = value;
     }
 
     private void setManagedZoom(float value) {

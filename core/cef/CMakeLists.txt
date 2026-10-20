@@ -2132,9 +2132,9 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     add_test(NAME notification_portal COMMAND dbus-run-session --
       $<TARGET_FILE:muon_notification_portal_test>)
     set_tests_properties(notification_portal PROPERTIES TIMEOUT 30)
-    add_test(NAME notification_portal_legacy COMMAND dbus-run-session --
-      $<TARGET_FILE:muon_notification_portal_test> --legacy)
-    set_tests_properties(notification_portal_legacy PROPERTIES TIMEOUT 30)
+    add_test(NAME notification_portal_unregistered COMMAND dbus-run-session --
+      $<TARGET_FILE:muon_notification_portal_test> --unregistered)
+    set_tests_properties(notification_portal_unregistered PROPERTIES TIMEOUT 30)
     add_test(NAME notification_portal_route COMMAND dbus-run-session --
       $<TARGET_FILE:muon_notification_portal_test> --route)
     set_tests_properties(notification_portal_route PROPERTIES TIMEOUT 30)

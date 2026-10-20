@@ -30,26 +30,14 @@ static constexpr char kXml[] = R"xml(<node>
  <method name="AddNotification"><arg type="s" direction="in"/><arg type="a{sv}" direction="in"/></method>
  <method name="RemoveNotification"><arg type="s" direction="in"/></method>
 </interface></node>)xml";
-static constexpr char kSystemdXml[] = R"xml(<node>
-<interface name="org.freedesktop.systemd1.Manager">
- <method name="StartTransientUnit"><arg type="s" direction="in"/>
- <arg type="s" direction="in"/><arg type="a(sv)" direction="in"/>
- <arg type="a(sa(sv))" direction="in"/><arg type="o" direction="out"/></method>
- <signal name="JobRemoved"><arg type="u"/><arg type="o"/><arg type="s"/><arg type="s"/></signal>
-</interface></node>)xml";
 
 struct PortalFixture {
   std::map<std::string, std::string> registrations;
   std::string posted_id;
   std::string removed_id;
   GVariant* notification = nullptr;
-  bool legacy = false;
-  bool scoped = false;
-  unsigned scope_requests = 0;
-  bool hold_scope = false;
   bool hold_registration = false;
   GDBusMethodInvocation* pending_registration = nullptr;
-  cardio::promise_source<void> scope_started;
   cardio::promise_source<void> registered;
   ~PortalFixture() {
     if (notification) g_variant_unref(notification);
@@ -70,36 +58,7 @@ static void Invoked(GDBusConnection* connection, const gchar* sender, const gcha
   auto& fixture = *static_cast<PortalFixture*>(data);
   auto value = Variant(g_variant_get_child_value(args, 0), g_variant_unref);
   const auto text = std::string(g_variant_get_string(value.get(), nullptr));
-  if (std::string_view(method) == "StartTransientUnit") {
-    ++fixture.scope_requests;
-    auto properties = Variant(g_variant_get_child_value(args, 2), g_variant_unref);
-    auto property = Variant(g_variant_get_child_value(properties.get(), 0), g_variant_unref);
-    auto wrapped = Variant(g_variant_get_child_value(property.get(), 1), g_variant_unref);
-    auto pids = Variant(g_variant_get_variant(wrapped.get()), g_variant_unref);
-    auto pid = Variant(g_variant_get_child_value(pids.get(), 0), g_variant_unref);
-    if (!text.starts_with("app-" + std::string(kDesktop) + "-") ||
-        !text.ends_with(".scope") || g_variant_get_uint32(pid.get()) != guint32(getpid())) {
-      g_dbus_method_invocation_return_dbus_error(invocation,
-          "org.freedesktop.DBus.Error.InvalidArgs", "Wrong application scope");
-      return;
-    }
-    fixture.scoped = true;
-    if (fixture.hold_scope) {
-      g_dbus_method_invocation_return_value(invocation,
-          g_variant_new("(o)", "/org/freedesktop/systemd1/job/1"));
-      fixture.scope_started.try_resolve();
-      return;
-    }
-    // A fast job can complete before the method reply. Subscribers must
-    // already be listening instead of relying on the reply's arrival order.
-    g_dbus_connection_emit_signal(connection, sender, "/org/freedesktop/systemd1",
-        "org.freedesktop.systemd1.Manager", "JobRemoved",
-        g_variant_new("(uoss)", guint32{1}, "/org/freedesktop/systemd1/job/1",
-                      text.c_str(), "done"), nullptr);
-    g_dbus_method_invocation_return_value(invocation,
-        g_variant_new("(o)", "/org/freedesktop/systemd1/job/1"));
-    return;
-  } else if (std::string_view(method) == "Register") {
+  if (std::string_view(method) == "Register") {
     if (fixture.hold_registration) {
       fixture.pending_registration =
           G_DBUS_METHOD_INVOCATION(g_object_ref(invocation));
@@ -113,7 +72,7 @@ static void Invoked(GDBusConnection* connection, const gchar* sender, const gcha
     }
     fixture.registrations[sender] = text;
     fixture.registered.try_resolve();
-  } else if (!(fixture.legacy ? fixture.scoped : fixture.registrations.contains(sender))) {
+  } else if (!(fixture.registrations.contains(sender))) {
     g_dbus_method_invocation_return_dbus_error(invocation,
         "org.freedesktop.portal.Error.Failed", "Portal used before registration");
     return;
@@ -129,7 +88,7 @@ static void Invoked(GDBusConnection* connection, const gchar* sender, const gcha
 static GVariant* Property(GDBusConnection*, const gchar* sender, const gchar*,
     const gchar*, const gchar*, GError** error, gpointer data) {
   auto& fixture = *static_cast<PortalFixture*>(data);
-  if (!(fixture.legacy ? fixture.scoped : fixture.registrations.contains(sender))) {
+  if (!(fixture.registrations.contains(sender))) {
     g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Portal used before registration");
     return nullptr;
   }
@@ -210,7 +169,7 @@ static cardio::promise<void> RestartPortal(GDBusConnection* original,
   g_dbus_connection_unregister_object(connection, notification);
   g_dbus_connection_close(connection, nullptr, nullptr, nullptr);
 }
-static cardio::promise<void> RunTests(const std::filesystem::path& directory, bool legacy, bool routed, bool stop_pending) {
+static cardio::promise<void> RunTests(const std::filesystem::path& directory, bool missing_registry, bool routed, bool stop_pending) {
   auto* connection = co_await cardio::gio::submit<GDBusConnection*>(
       [](GCancellable* cancel, GAsyncReadyCallback ready, gpointer data) {
         g_bus_get(G_BUS_TYPE_SESSION, cancel, ready, data);
@@ -219,27 +178,17 @@ static cardio::promise<void> RunTests(const std::filesystem::path& directory, bo
       });
   auto bus = std::unique_ptr<GDBusConnection, decltype(&g_object_unref)>(connection, g_object_unref);
   auto fixture = PortalFixture{};
-  fixture.legacy = legacy;
   fixture.hold_registration = stop_pending;
-  auto scope_started = fixture.scope_started.get_promise();
   auto registration_started = fixture.registered.get_promise();
   auto* info = g_dbus_node_info_new_for_xml(kXml, nullptr);
   const auto table = GDBusInterfaceVTable{Invoked, Property, nullptr, {nullptr}};
-  const auto registry = legacy ? 0 : g_dbus_connection_register_object(connection, kPortalPath,
+  const auto registry = missing_registry ? 0 : g_dbus_connection_register_object(connection, kPortalPath,
       info->interfaces[0], &table, &fixture, nullptr, nullptr);
   const auto notification = g_dbus_connection_register_object(connection, kPortalPath,
       info->interfaces[1], &table, &fixture, nullptr, nullptr);
   g_dbus_node_info_unref(info);
   auto owned = Variant(co_await Call(connection, "org.freedesktop.DBus", "/org/freedesktop/DBus",
       "org.freedesktop.DBus", "RequestName", g_variant_new("(su)", kPortal, guint32{4}),
-      G_VARIANT_TYPE("(u)")), g_variant_unref);
-  auto* systemd_info = g_dbus_node_info_new_for_xml(kSystemdXml, nullptr);
-  const auto systemd = g_dbus_connection_register_object(connection, "/org/freedesktop/systemd1",
-      systemd_info->interfaces[0], &table, &fixture, nullptr, nullptr);
-  g_dbus_node_info_unref(systemd_info);
-  auto systemd_owned = Variant(co_await Call(connection, "org.freedesktop.DBus", "/org/freedesktop/DBus",
-      "org.freedesktop.DBus", "RequestName",
-      g_variant_new("(su)", "org.freedesktop.systemd1", guint32{4}),
       G_VARIANT_TYPE("(u)")), g_variant_unref);
   auto backend = routed
       ? CreateMuonLinuxNotificationBackend("Portal Test", kDesktop, "portal-test", (directory / "launcher").string())
@@ -259,19 +208,15 @@ static cardio::promise<void> RunTests(const std::filesystem::path& directory, bo
       Expect(!stopped.available, "Stopped Portal still advertised support");
       g_dbus_connection_unregister_object(connection, registry);
       g_dbus_connection_unregister_object(connection, notification);
-      g_dbus_connection_unregister_object(connection, systemd);
       co_return;
     }
     const auto caps = co_await backend.capabilities();
-    if (legacy) {
-      Expect(fixture.scope_requests == 0,
-             "Portal without host registration changed the process scope");
+    if (missing_registry) {
       Expect(!caps.available && caps.launch == false &&
                  caps.launch_reason == "portal-host-registration-unavailable",
              "Portal without host registration advertised notification launch");
       backend.stop();
       g_dbus_connection_unregister_object(connection, notification);
-      g_dbus_connection_unregister_object(connection, systemd);
       co_return;
     }
     Expect(caps.available && caps.actions && caps.persistence == true && caps.launch == true,
@@ -314,7 +259,7 @@ static cardio::promise<void> RunTests(const std::filesystem::path& directory, bo
     Expect(fixture.removed_id.empty(), "Portal canceled another application's notification");
     co_await backend.cancel(handle);
     Expect(fixture.removed_id == token, "Portal cancellation lost its durable revision identifier");
-    if (!legacy) co_await RestartPortal(connection, backend, handle);
+    if (!missing_registry) co_await RestartPortal(connection, backend, handle);
     // Re-check the effective installation, including an update that moves its
     // launcher. Cached support must not outlive that ownership change.
     std::ofstream(directory / "applications" / (std::string(kDesktop) + ".desktop"))
@@ -324,22 +269,18 @@ static cardio::promise<void> RunTests(const std::filesystem::path& directory, bo
     Expect(!changed.available && changed.launch == false,
            "Portal advertised launch after installation ownership changed");
     backend.stop();
-    fixture.scope_started.try_resolve();
   } catch (...) {
     backend.stop();
-    fixture.scope_started.try_resolve();
     if (registry) g_dbus_connection_unregister_object(connection, registry);
     g_dbus_connection_unregister_object(connection, notification);
-    g_dbus_connection_unregister_object(connection, systemd);
     throw;
   }
   if (registry) g_dbus_connection_unregister_object(connection, registry);
   g_dbus_connection_unregister_object(connection, notification);
-  g_dbus_connection_unregister_object(connection, systemd);
 }
 static cardio::promise<void> RunAndQuit(const std::filesystem::path& directory,
-    GMainLoop* loop, bool& passed, bool legacy, bool routed, bool stop_pending) {
-  try { co_await RunTests(directory, legacy, routed, stop_pending); passed = true; }
+    GMainLoop* loop, bool& passed, bool missing_registry, bool routed, bool stop_pending) {
+  try { co_await RunTests(directory, missing_registry, routed, stop_pending); passed = true; }
   catch (const std::exception& error) { std::cerr << error.what() << '\n'; }
   g_main_loop_quit(loop);
 }
@@ -366,7 +307,7 @@ int main(int argc, char** argv) {
   auto passed = false;
   const auto option = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
   auto pending = RunAndQuit(directory, loop, passed,
-      option == "--legacy", option == "--route", option == "--stop");
+      option == "--unregistered", option == "--route", option == "--stop");
   if (!pending.is_ready()) g_main_loop_run(loop);
   g_main_loop_unref(loop);
   group.shutdown();

@@ -289,7 +289,9 @@ Windowsのアプリ通知へ接続し、アプリ名とアイコン、同一ID�
 
 段階8では、通知起動を有効にした配布物に、D-Busのアプリ名として使えるdesktop IDと、その名前から定まる受信先を持たせる。`.desktop`とD-Busの`.service`は同じ配布ランチャーを指す。更新時にはこの登録を新しい起動位置へ更新し、古い配置の削除では新しい配置の登録を消さない。ランタイムは、実際の登録と自アプリの起動パスが一致することを確認してから、クリック起動を対応済みと返す。
 
-Portalがホストアプリの登録APIを備える場合は、そのAPIでアプリ識別子を登録する。登録APIがない環境では、systemdが定めるアプリ用scopeへ自プロセスを所属させる方法を使う。scopeは、同じアプリに属するプロセスをsystemdが識別する単位である。この処理と通知の送受信には非同期D-Bus APIを使う。必要な識別・起動登録が成立しない場合は、実行中の通知機能を維持し、クリック起動の非対応理由を返す。[Portalのホストアプリ登録](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html)、[systemdのデスクトップアプリ識別](https://systemd.io/DESKTOP_ENVIRONMENTS/)、[StartTransientUnit](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.systemd1.html)
+Linuxの通知クリックによる起動は、ホストアプリの登録APIを備える`xdg-desktop-portal 1.20`以降を対応条件とする。専用のD-Bus接続でアプリ識別子を登録し、通知の送受信には非同期D-Bus APIを使う。旧版や必要な識別・起動登録が成立しない環境では、通知表示と実行中の操作を提供し、クリック起動の非対応理由を返す。[Portalのホストアプリ登録](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.host.portal.Registry.html)
+
+旧版向けに検討したsystemdのscope方式は採用しない。scopeは、同じアプリに属するプロセスをsystemdが識別する単位である。CEF 147に含まれるChromiumは、自身のPortal初期化で同じプロセスを`org.chromium.Chromium`のscopeへ移すため、通知用の識別子が起動順によって上書きされる。外部コードを変更せず、この競合を避けられるホスト登録APIを使用する。[Chromium 147のscope登録](https://github.com/chromium/chromium/blob/147.0.7727.138/components/dbus/xdg/systemd.cc)、[Chromium 147のアプリ識別子](https://github.com/chromium/chromium/blob/147.0.7727.138/base/version_info/nix/version_extra_utils.cc)
 
 通知操作を受けるD-Busオブジェクトは、アプリ名の所有を開始する前に登録する。起動直後の操作も共通の永続化処理へ渡し、受信したトークンに対応する保存済み投稿だけをイベントに変換する。OSの起動用識別子はウインドウ表示に使用し、アプリが保存した`data`と混同しない。[GIOのアプリ名所有とオブジェクト登録の順序](https://docs.gtk.org/gio/func.bus_own_name.html)、[D-Bus起動のplatform_data](https://specifications.freedesktop.org/desktop-entry/latest/dbus.html)
 
@@ -397,7 +399,7 @@ Windowsの通知起動登録とNSIS、LinuxのD-Bus起動とdesktop連携を完�
 
 完了条件はWindowsのNSIS導入環境とLinuxのD-Bus起動に対応する導入環境で、プロセスを終了した後の通知クリックから配布アプリが起動し、正しいデータを受け取ることとする。実行中のクリックで二重起動せず、ページ初期化前のイベント、受領前の終了、再配送、複数ウインドウを検証する。更新後の古い通知、起動パスの変更、アンインストール後の残存通知、通知サービスの再起動も確認する。
 
-未登録の展開実行と非対応のデスクトップ環境では、理由を含む対応状況を返す。対応する基準環境でのクリック起動は必須とし、すべての環境を非対応や不明にして完了とはしない。GNOME・KDEそれぞれの結果と、Windows各アーキテクチャの配布・登録条件を記録する。KDEの起動試験は、修正済みの`xdg-desktop-portal-kde 6.2.5`以降で行う。
+未登録の展開実行と非対応のデスクトップ環境では、理由を含む対応状況を返す。対応する基準環境でのクリック起動は必須とし、すべての環境を非対応や不明にして完了とはしない。GNOME・KDEそれぞれの結果と、Windows各アーキテクチャの配布・登録条件を記録する。GNOME・KDEの起動試験にはPortal本体1.20以降を使用し、KDEではさらに修正済みの`xdg-desktop-portal-kde 6.2.5`以降を必要とする。
 
 コミットは`feat: activate CEF apps from native notifications`を目安とし、OSや配布形式ごとに動作を確認できる単位へ分ける。
 
@@ -630,6 +632,14 @@ CEFの通知操作を、保存済み投稿の識別、未受領イベントの�
 KDEはPlasma 5.27.12、`xdg-desktop-portal-kde 5.27.11`、Portal本体1.20.3を組み合わせた実デスクトップで調べた。通知のアプリ名とアイコン、本文、追加ボタンを表示できたが、投稿元の終了後はクリックしてもアプリが起動しなかった。D-Busの観測では、OSのクリック通知がKDE側へ届いた後、アプリへの起動呼び出しが送られていなかった。上記の公式修正と一致するため、ランタイムに旧KDE専用の起動方式を追加せず、修正済みKDEを起動対応の条件とする方針に合意した。
 
 Linuxの公開配布アプリを使った起動試験と、修正済みKDEでの確認は継続中である。段階8の完了条件はまだ満たしていない。
+
+### Portal本体の対応条件についての合意
+
+GNOMEの公開配布試験では、simpleモードで更新前の通知、空白を含むパスへの移動、未受領イベントの保持、登録解除時の残存通知削除を確認した。一方、validateモードでは、通知用scopeの作成後にCEF自身が同じプロセスをChromiumのscopeへ移し、通知投稿が別のアプリ識別子として拒否された。表示操作の待機方法を変更せず、上記の公式ソースとD-Bus・systemdの記録から識別子の競合を確認した。
+
+この結果を受け、Linuxの通知起動をPortal本体1.20以降に限定し、旧版は通知表示と実行中の操作を扱う方針に合意した。旧版向けscope処理を削除し、登録APIがない場合の非対応理由と実行中の通知機能を検証する。KDEの追加条件は6.2.5以降のままとする。
+
+KDE Plasma 6.3.6、Portal本体1.20.3、portal-kde 6.3.5では、通知表示と操作が両モードで成功した。公開配布アプリのsimpleモードでは、更新前の通知からの起動、空白を含む移動先への登録更新、登録解除時の通知削除も成功した。validateモードは起動・再配送・受領確認まで成功し、通知無効化ビルドの試験設定を修正して残りを確認する段階である。段階8全体は引き続き未完了とする。
 
 ### 残る検証とビルド警告
 

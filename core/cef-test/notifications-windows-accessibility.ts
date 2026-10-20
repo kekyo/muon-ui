@@ -114,20 +114,11 @@ export const createWindowsNotificationDriver = async (
       arguments: ["ms-settings:notifications"],
     });
     await agent.waitForWindow({ title: "Settings" }, { timeoutMs: 10000 });
-    const result =
-      await powershell(`Add-Type -AssemblyName UIAutomationClient;Add-Type -AssemblyName UIAutomationTypes
-$root=[System.Windows.Automation.AutomationElement]::RootElement
-foreach($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.Condition]::TrueCondition)){
- if($w.Current.Name -ne 'Settings'){continue}
- $n=$w.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'SystemSettings_Notifications_ShowAppNotifications_ToggleSwitch'))
- if($null -eq $n){continue}
- $p=$n.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
- ${desired === undefined ? "" : `if([int]$p.Current.ToggleState -ne ${desired ? 1 : 0}){$p.Toggle()}`}
- $state=[int]$p.Current.ToggleState
- ${desired === undefined ? "" : `if($state -ne ${desired ? 1 : 0}){throw 'Notification switch did not update'}`}
- Write-Output $state;exit 0
-}
-throw 'Notification settings switch was not found'`);
+    const result = await execute(
+      observer,
+      ["setting", "", "", desired === undefined ? "" : desired ? "1" : "0"],
+      35000,
+    );
     if (result !== "0" && result !== "1")
       throw new Error(`Unknown notification switch: ${result}`);
     return result === "1";

@@ -8,6 +8,7 @@
 #include <uiautomation.h>
 #include <atomic>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -108,6 +109,30 @@ static void Invoke(IUIAutomationElement* element) {
   Check(pattern.value->Invoke(), "Invoke notification UI control");
 }
 
+static std::optional<ToggleState> Setting(IUIAutomation* automation,
+    IUIAutomationElement* root, const std::wstring& desired, bool& toggled) {
+  auto window = FindProperty(automation, root, UIA_NamePropertyId, L"Settings", TreeScope_Children);
+  if (!window.value) return {};
+  auto control = FindProperty(automation, window.value, UIA_AutomationIdPropertyId,
+      L"SystemSettings_Notifications_ShowAppNotifications_ToggleSwitch", TreeScope_Descendants);
+  if (!control.value) return {};
+  ComPointer<IUIAutomationTogglePattern> pattern;
+  Check(control.value->GetCurrentPatternAs(UIA_TogglePatternId, IID_IUIAutomationTogglePattern,
+      reinterpret_cast<void**>(&pattern.value)), "Get notification setting pattern");
+  ToggleState state;
+  Check(pattern.value->get_CurrentToggleState(&state), "Read notification setting");
+  if (state == ToggleState_Indeterminate)
+    throw std::runtime_error("Notification setting is indeterminate");
+  if (desired.empty()) return state;
+  const auto requested = desired == L"1" ? ToggleState_On : ToggleState_Off;
+  if (state != requested && !toggled) {
+    Check(pattern.value->Toggle(), "Change notification setting");
+    toggled = true;
+    Check(pattern.value->get_CurrentToggleState(&state), "Read changed notification setting");
+  }
+  return state == requested ? std::optional{state} : std::nullopt;
+}
+
 class Changes final : public IUIAutomationStructureChangedEventHandler,
                       public IUIAutomationPropertyChangedEventHandler {
  public:
@@ -161,14 +186,25 @@ static int Observe(const std::wstring& operation, const std::wstring& title,
   Check(automation.value->AddStructureChangedEventHandler(root.value, TreeScope_SubTree,
       nullptr, changes.value), "Subscribe to UIA structure changes");
   PROPERTYID properties[] = {UIA_IsOffscreenPropertyId, UIA_BoundingRectanglePropertyId,
-      UIA_NamePropertyId};
+      UIA_NamePropertyId, UIA_ToggleToggleStatePropertyId};
   Check(automation.value->AddPropertyChangedEventHandlerNativeArray(root.value,
-      TreeScope_SubTree, nullptr, changes.value, properties, 3), "Subscribe to UIA properties");
+      TreeScope_SubTree, nullptr, changes.value, properties, 4), "Subscribe to UIA properties");
   try {
     const auto deadline = GetTickCount64() + 30000;
     bool expanded = false;
+    bool toggled = false;
     while (true) {
-      auto center = Center(automation.value, root.value);
+      // A Settings window can exist before its requested page and controls.
+      // Observe structure/property events until the actual switch is ready.
+      if (operation == L"setting") {
+        const auto state = Setting(automation.value, root.value, action, toggled);
+        if (state) {
+          std::cout << (*state == ToggleState_On ? "1\n" : "0\n");
+          break;
+        }
+      }
+      auto center = operation == L"setting" ? ComPointer<IUIAutomationElement>{}
+          : Center(automation.value, root.value);
       if (center.value) {
         RECT bounds{};
         auto notification = Notification(automation.value, center.value, title, app_name, bounds);

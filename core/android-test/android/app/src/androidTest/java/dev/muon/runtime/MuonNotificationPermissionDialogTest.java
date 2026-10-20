@@ -15,6 +15,9 @@ import android.Manifest;
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.UiAutomation;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.NotificationChannel;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -27,7 +30,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.ArrayDeque;
@@ -62,6 +65,14 @@ public final class MuonNotificationPermissionDialogTest {
                 destroyedActivity = reference.get();
                 assertTrue(destroyedActivity.awaitPageReadyForTest(30, TimeUnit.SECONDS));
                 destroyedBridge = destroyedActivity.getRpcBridgeForTest();
+                destroyedActivity.clearTestMessages();
+                scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(
+                        "void (async()=>{try{await __muon_plugin_call('notifications-capability','muon.notifications.post',"
+                                + "[JSON.stringify({id:'denied',title:'Denied',body:''})]);muonAndroidTest.postMessage('unexpected');}"
+                                + "catch(error){muonAndroidTest.postMessage(String(error));}})();", null));
+                String denied = destroyedActivity.awaitTestMessage(30, TimeUnit.SECONDS);
+                assertNotNull(denied);
+                assertTrue(denied, denied.contains("runtime permission is not granted"));
                 requestDialog(scenario, destroyedActivity, automation);
                 assertEquals(1, destroyedActivity.getNativePendingCallCountForTest());
                 scenario.onActivity(MuonActivity::releaseNativeContextForTest);
@@ -129,6 +140,51 @@ public final class MuonNotificationPermissionDialogTest {
                     scenario.moveToState(Lifecycle.State.RESUMED);
                     assertEquals(0, activity.getNativePendingCallCountForTest());
                 }
+                NotificationManager manager = activity.getSystemService(NotificationManager.class);
+                if (Build.VERSION.SDK_INT >= 26) {
+                    manager.createNotificationChannel(new NotificationChannel("post-blocked", "Blocked", NotificationManager.IMPORTANCE_NONE));
+                    activity.clearTestMessages();
+                    scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(
+                            "void (async()=>{try{await __muon_plugin_call('notifications-capability','muon.notifications.post',"
+                                    + "[JSON.stringify({id:'blocked',title:'Blocked',body:'',category:'post-blocked'})]);muonAndroidTest.postMessage('unexpected');}"
+                                    + "catch(error){muonAndroidTest.postMessage(String(error));}})();", null));
+                    String blocked = activity.awaitTestMessage(30, TimeUnit.SECONDS);
+                    assertNotNull(blocked);
+                    assertTrue(blocked, blocked.contains("notification channel is disabled"));
+                }
+                String[][] operations = {
+                        { "post", "{\"id\":\"posting-a\",\"title\":\"First\",\"body\":\"Body A\"}" },
+                        { "post", "{\"id\":\"posting-b\",\"title\":\"Second\",\"body\":\"Body B\",\"category\":\"quiet\"}" },
+                        { "post", "{\"id\":\"posting-a\",\"title\":\"Updated\",\"body\":\"Changed\"}" },
+                        { "cancel", "posting-a" },
+                        { "cancel", "posting-b" }
+                };
+                for (int index = 0; index < operations.length; index++) {
+                    String[] operation = operations[index];
+                    activity.clearTestMessages();
+                    scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(
+                            "void (async()=>{try{await __muon_plugin_call('notifications-capability','muon.notifications."
+                                    + operation[0] + "',[" + JSONObject.quote(operation[1]) + "]);"
+                                    + "muonAndroidTest.postMessage('posted');}catch(error){muonAndroidTest.postMessage(String(error));}})();", null));
+                    assertEquals("posted", activity.awaitTestMessage(30, TimeUnit.SECONDS));
+                    var notifications = manager.getActiveNotifications();
+                    assertEquals(new int[] { 1, 2, 2, 1, 0 }[index], notifications.length);
+                    for (var notification : notifications) {
+                        assertNotNull(notification.getNotification().getSmallIcon());
+                        assertNotNull(notification.getNotification().contentIntent);
+                        assertTrue((notification.getNotification().flags & Notification.FLAG_AUTO_CANCEL) != 0);
+                        if (notification.getTag().equals("posting-a")) {
+                            assertEquals(index == 2 ? "Updated" : "First",
+                                    notification.getNotification().extras.getString(Notification.EXTRA_TITLE));
+                            if (Build.VERSION.SDK_INT >= 26) {
+                                assertEquals("general", notification.getNotification().getChannelId());
+                            }
+                        } else {
+                            assertEquals("posting-b", notification.getTag());
+                            assertEquals("Second", notification.getNotification().extras.getString(Notification.EXTRA_TITLE));
+                        }
+                    }
+                }
                 scenario.recreate();
                 scenario.onActivity(reference::set);
                 MuonActivity recreated = reference.get();
@@ -152,19 +208,12 @@ public final class MuonNotificationPermissionDialogTest {
 
     private static void requestDialog(ActivityScenario<MuonActivity> scenario, MuonActivity activity,
             UiAutomation automation) throws Exception {
-        CountDownLatch shown = new CountDownLatch(1);
+        Semaphore changes = new Semaphore(0);
         AccessibilityNodeInfo previousRoot = automation.getRootInActiveWindow();
         int previousWindowId = previousRoot == null ? -1 : previousRoot.getWindowId();
-        automation.setOnAccessibilityEventListener(event -> {
-            AccessibilityNodeInfo root = automation.getRootInActiveWindow();
-            var window = root == null ? null : root.getWindow();
-            // A closing dialog's cached nodes can outlive its Activity. Wait for
-            // the new window to own input focus before sending Back or clicking.
-            if (root != null && root.getWindowId() != previousWindowId
-                    && window != null && window.isFocused() && permissionButton(root, "allow") != null) {
-                shown.countDown();
-            }
-        });
+        // UiAutomation delivers callbacks on the application's main thread.
+        // Query accessibility nodes on the instrumentation thread so the UI can respond.
+        automation.setOnAccessibilityEventListener(event -> changes.release());
         try {
             activity.clearTestMessages();
             scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(
@@ -172,7 +221,18 @@ public final class MuonNotificationPermissionDialogTest {
                             + "'muon.android.notifications.requestPermission',[]);"
                             + "muonAndroidTest.postMessage(JSON.stringify({ok:true,value}));}catch(error){"
                             + "muonAndroidTest.postMessage(JSON.stringify({ok:false,error:String(error)}));}})();", null));
-            assertTrue("The actual OS notification dialog must appear", shown.await(30, TimeUnit.SECONDS));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+            while (true) {
+                AccessibilityNodeInfo root = automation.getRootInActiveWindow();
+                var window = root == null ? null : root.getWindow();
+                // A closing dialog's cached nodes can outlive its Activity. Wait for
+                // the new window to own input focus before sending Back or clicking.
+                if (root != null && root.getWindowId() != previousWindowId
+                        && window != null && window.isFocused() && permissionButton(root, "allow") != null) { break; }
+                long remaining = deadline - System.nanoTime();
+                assertTrue("The actual OS notification dialog must appear", remaining > 0
+                        && changes.tryAcquire(remaining, TimeUnit.NANOSECONDS));
+            }
         } finally {
             automation.setOnAccessibilityEventListener(null);
         }

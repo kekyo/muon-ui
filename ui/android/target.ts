@@ -16,6 +16,10 @@ import { prepareAndroid } from "./toolchain.js";
 import { validateMuonAndroidConfig } from "../../core/android/renderer/android-config.js";
 import { resolveMuonAndroidInitialSystemBars } from "../../core/android/system-bars-config.js";
 import { resolveMuonNotificationConfig } from "../common/notification-config.js";
+import {
+  resolveAndroidNotificationConfig,
+  createAndroidNotificationIcon,
+} from "./notifications.js";
 import type { MuonAndroidOptions } from "../android.js";
 import type { MuonBuildOptions } from "../common/build.js";
 import type { MuonProgressCallback } from "../common/progress.js";
@@ -198,6 +202,17 @@ export const buildMuonAndroidTarget = async (input: {
     throw new Error("node is unavailable in Android application builds.");
   const browser = object(config.browser, "browser");
   const notifications = resolveMuonNotificationConfig(config.notifications);
+  const androidNotifications = resolveAndroidNotificationConfig(
+    android.notifications,
+    notifications,
+    options.android?.notifications === undefined ? input.configDirectory : root,
+  );
+  const notificationIcons =
+    androidNotifications.smallIcon === undefined
+      ? []
+      : await createAndroidNotificationIcon(
+          await readFile(androidNotifications.smallIcon),
+        );
   const systemBars = resolveMuonAndroidInitialSystemBars(
     android.systemBars,
     browser.initialWindowState,
@@ -402,6 +417,8 @@ export const buildMuonAndroidTarget = async (input: {
     permissions,
     systemBars,
     notifications,
+    androidNotifications,
+    notificationIcons,
     values,
     pluginAccess: pluginConfiguration.pluginAccess,
     plugins,

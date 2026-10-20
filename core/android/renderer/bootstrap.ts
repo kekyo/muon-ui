@@ -36,6 +36,7 @@ const createCapabilityClient = (
       'muon.android.systemBars': id,
       'muon.android.settings': id,
       'muon.android.notifications': id,
+      'muon.notifications': id,
     });
     let value: unknown = api;
     for (const segment of path.split('.').slice(1)) {
@@ -91,6 +92,7 @@ export const bootstrapMuonAndroid = (
     'muon.android.systemBars': 'system-bars-capability',
     'muon.android.settings': 'settings-capability',
     'muon.android.notifications': 'android-notifications-capability',
+    'muon.notifications': 'notifications-capability',
   });
   const allowed = new Set(metadata.builtinFunctions);
   const builtin = selectAllowedFunctions(api, 'muon', allowed);

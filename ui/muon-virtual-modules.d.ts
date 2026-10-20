@@ -3,6 +3,17 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+declare module "muon:notifications" {
+  /** Post or update a native notification without implicitly requesting permission. */
+  export const post: MuonNotificationsApi["post"];
+  /** Cancel one app-scoped stable notification ID. */
+  export const cancel: MuonNotificationsApi["cancel"];
+  /** Read app-wide and optionally category-specific posting state. */
+  export const getStatus: MuonNotificationsApi["getStatus"];
+  /** Read feature support independently of user permission. */
+  export const getCapabilities: MuonNotificationsApi["getCapabilities"];
+}
+
 declare module "muon:android.settings" {
   /** Check whether this app's requested Android settings screen is available. */
   export const isAvailable: MuonAndroidSettingsApi["isAvailable"];
@@ -11,6 +22,12 @@ declare module "muon:android.settings" {
 }
 
 declare module "muon:android.notifications" {
+  /** Read Android-only feature support. */
+  export const getCapabilities: MuonAndroidNotificationsApi["getCapabilities"];
+  /** Register a channel without replacing existing user settings. */
+  export const ensureChannel: MuonAndroidNotificationsApi["ensureChannel"];
+  /** Read effective settings for an OS channel, or null when absent. */
+  export const getChannel: MuonAndroidNotificationsApi["getChannel"];
   /** Read current runtime permission and app-wide notification state. */
   export const getPermissionState: MuonAndroidNotificationsApi["getPermissionState"];
   /** Explicitly request notification permission from the foreground Activity. */

@@ -29,6 +29,8 @@ declare global {
     readonly fs: MuonFsApi;
     /** Android-only operations, present when permitted by the plugin policy. */
     readonly android?: MuonAndroidApi;
+    /** Native local notifications, present only when enabled and permitted. */
+    readonly notifications?: MuonNotificationsApi;
     /**
      * Optional out-of-process Node.js runtime.
      *
@@ -37,6 +39,138 @@ declare global {
      * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
+  }
+
+  /** Values preserved when notification data is serialized and restored. */
+  type MuonNotificationData =
+    | null
+    | boolean
+    | number
+    | string
+    | readonly MuonNotificationData[]
+    | { readonly [key: string]: MuonNotificationData };
+
+  /** Application-owned local notification. */
+  interface MuonNotificationOptions {
+    /** Stable app-scoped ID, up to 128 UTF-16 code units; reposting updates it. */
+    readonly id: string;
+    /** Nonempty display title, up to 1024 UTF-16 code units. */
+    readonly title: string;
+    /** Body text, up to 4096 UTF-16 code units; may be empty. */
+    readonly body: string;
+    /** Purpose key, up to 128 code units; omission uses notifications.defaultCategory. */
+    readonly category?: string;
+    /** JSON data for notification interaction; maximum encoded size is 16384 UTF-8 bytes and depth is 64. */
+    readonly data?: MuonNotificationData;
+  }
+
+  /** Support for a feature, independently of current notification permission. */
+  interface MuonNotificationSupport {
+    /** Support established from this implementation and its environment. */
+    readonly state: "supported" | "unsupported" | "unknown";
+    /** Diagnostic reason when applicable; null when no explanation is needed. */
+    readonly reason: string | null;
+  }
+
+  /** Features available in the current implementation and OS environment. */
+  interface MuonNotificationCapabilities {
+    /** Delivery of notification operations to the running application. */
+    readonly interaction: MuonNotificationSupport;
+    /** Starting an exited application and delivering its notification operation. */
+    readonly launch: MuonNotificationSupport;
+    /** Keeping posted notifications after normal application process exit. */
+    readonly persistence: MuonNotificationSupport;
+    /** Additional named action buttons. */
+    readonly actions: MuonNotificationSupport;
+    /** Reading application-wide posting permission. */
+    readonly appStatus: MuonNotificationSupport;
+    /** Reading OS controls for an individual purpose category. */
+    readonly categoryStatus: MuonNotificationSupport;
+  }
+
+  /** Current posting permission observation; not evidence of display or reading. */
+  interface MuonNotificationPostingState {
+    /** Whether posting is enabled, disabled, or cannot be determined. */
+    readonly state: "enabled" | "disabled" | "unknown";
+    /** Diagnostic reason, or null when no explanation is needed. */
+    readonly reason: string | null;
+  }
+
+  /** Application state and, only when requested, category-specific state. */
+  interface MuonNotificationStatus {
+    /** Current application-wide permission observation. */
+    readonly app: MuonNotificationPostingState;
+    /** Category observation, independently of app state; null for an app-only query. */
+    readonly category:
+      | (MuonNotificationPostingState & {
+          /** Requested category ID. */
+          readonly id: string;
+        })
+      | null;
+  }
+
+  /** Shared native local notification operations, present only in enabled builds. */
+  interface MuonNotificationsApi {
+    /**
+     * Posts or replaces one notification using its app-scoped stable ID.
+     * @param options - Content, category and JSON data for this notification.
+     * @returns Completion of the OS API submission, not delivery or viewing confirmation.
+     * @remarks Never requests permission implicitly. Rejects known permission or
+     * channel disablement, unregistered Android categories and unsupported options.
+     */
+    readonly post: (options: MuonNotificationOptions) => Promise<void>;
+    /**
+     * Withdraws one notification without affecting other IDs.
+     * @param id - Stable app-scoped notification ID.
+     * @returns Completion; a missing notification is also successful.
+     */
+    readonly cancel: (id: string) => Promise<void>;
+    /**
+     * Reads fresh posting state, separately from feature support.
+     * @param category - Optional purpose key; omission queries only the application.
+     * @returns App-wide state and the explicitly requested category, if any.
+     */
+    readonly getStatus: (category?: string) => Promise<MuonNotificationStatus>;
+    /**
+     * Reads support for each notification feature in the current environment.
+     * @returns Support and diagnostics; does not imply user permission.
+     */
+    readonly getCapabilities: () => Promise<MuonNotificationCapabilities>;
+  }
+
+  /** Initial importance for an Android notification channel. */
+  type MuonAndroidNotificationImportance = "min" | "low" | "default" | "high";
+
+  /** Channel definition registered before posting to its category. */
+  interface MuonAndroidNotificationChannelOptions {
+    /** Stable purpose key, up to 128 code units; also used as notification category. */
+    readonly id: string;
+    /** Nonempty user-visible name, up to 128 code units. */
+    readonly name: string;
+    /** User-visible explanation, up to 1024 code units; defaults to an empty string. */
+    readonly description?: string;
+    /** Initial importance; existing channels retain their OS/user-controlled settings. */
+    readonly importance: MuonAndroidNotificationImportance;
+  }
+
+  /** Effective channel settings read from Android. */
+  interface MuonAndroidNotificationChannel {
+    /** Stable channel and purpose ID. */
+    readonly id: string;
+    /** Name currently registered with Android. */
+    readonly name: string;
+    /** Description currently registered with Android. */
+    readonly description: string;
+    /** OS-controlled importance; none means the channel is disabled. */
+    readonly importance: MuonAndroidNotificationImportance | "none";
+    /** Whether this channel is enabled, independently of app-wide permission. */
+    readonly enabled: boolean;
+  }
+
+  /** Features specific to Android notifications. */
+  interface MuonAndroidNotificationCapabilities {
+    /** OS channels require API 26; older versions only support static Muon categories. */
+    readonly channels: MuonNotificationSupport;
   }
 
   /** Operations specific to the Android WebView backend. */
@@ -50,7 +184,15 @@ declare global {
   }
 
   /** System settings screens scoped to this application. */
-  type MuonAndroidSettingsTarget = "app-details" | "notifications";
+  type MuonAndroidSettingsTarget =
+    | "app-details"
+    | "notifications"
+    | {
+        /** Channel settings require a concrete channel ID. */
+        readonly type: "notification-channel";
+        /** Registered channel ID belonging to this application. */
+        readonly channelId: string;
+      };
 
   /** Explicit fallback when a dedicated settings screen is unavailable. */
   interface MuonAndroidSettingsOptions {
@@ -124,6 +266,27 @@ declare global {
 
   /** Android notification permission operations, exposed only when notifications are enabled. */
   interface MuonAndroidNotificationsApi {
+    /**
+     * Reads availability of Android-only notification features.
+     * @returns Channel support independently of user permission.
+     */
+    readonly getCapabilities: () => Promise<MuonAndroidNotificationCapabilities>;
+    /**
+     * Registers a channel, preserving existing OS and user settings.
+     * @param options - New channel definition; existing channels are left unchanged.
+     * @returns Current effective channel settings; rejects on API 24/25.
+     */
+    readonly ensureChannel: (
+      options: MuonAndroidNotificationChannelOptions,
+    ) => Promise<MuonAndroidNotificationChannel>;
+    /**
+     * Reads the current OS channel settings.
+     * @param id - Category/channel ID to query.
+     * @returns The channel or null when absent; rejects on API 24/25.
+     */
+    readonly getChannel: (
+      id: string,
+    ) => Promise<MuonAndroidNotificationChannel | null>;
     /**
      * Reads current OS state without requesting permission.
      * @returns Fresh runtime permission and app-wide notification observations.

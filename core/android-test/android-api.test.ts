@@ -55,6 +55,13 @@ const expectedFunctionPaths = [
   'muon.android.settings.open',
   'muon.android.notifications.getPermissionState',
   'muon.android.notifications.requestPermission',
+  'muon.android.notifications.getCapabilities',
+  'muon.android.notifications.ensureChannel',
+  'muon.android.notifications.getChannel',
+  'muon.notifications.post',
+  'muon.notifications.cancel',
+  'muon.notifications.getStatus',
+  'muon.notifications.getCapabilities',
 ] as const;
 
 describe('muon Android API metadata', () => {
@@ -100,12 +107,14 @@ describe('muon Android API metadata', () => {
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
       'muon.android.notifications': 'android-notifications-capability',
+      'muon.notifications': 'notifications-capability',
     });
 
     expect(Object.keys(api)).toEqual([
       'browser',
       'environments',
       'fs',
+      'notifications',
       'android',
     ]);
     expect(Object.keys(api.browser)).toEqual([
@@ -167,6 +176,7 @@ describe('muon Android API metadata', () => {
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
       'muon.android.notifications': 'android-notifications-capability',
+      'muon.notifications': 'notifications-capability',
     });
     const controller = new AbortController();
     const source = new Uint8Array([1, 2, 3]);
@@ -224,6 +234,7 @@ describe('muon Android API metadata', () => {
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
       'muon.android.notifications': 'android-notifications-capability',
+      'muon.notifications': 'notifications-capability',
     });
 
     await expect(
@@ -283,6 +294,7 @@ describe('muon Android API metadata', () => {
         'muon.android.systemBars': 'system-bars-capability',
         'muon.android.settings': 'settings-capability',
         'muon.android.notifications': 'android-notifications-capability',
+        'muon.notifications': 'notifications-capability',
       });
       let closeWatcher: (() => Promise<void>) | undefined;
       let listenerCompleted = false;

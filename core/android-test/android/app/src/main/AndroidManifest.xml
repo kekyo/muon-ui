@@ -12,6 +12,7 @@
         <intent>
             <action android:name="android.settings.APP_NOTIFICATION_SETTINGS" />
         </intent>
+        <intent><action android:name="android.settings.CHANNEL_NOTIFICATION_SETTINGS" /></intent>
     </queries>
 
     <application
@@ -21,6 +22,7 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="false">
+        <meta-data android:name="dev.muon.notifications.smallIcon" android:resource="@drawable/muon_notification_small" />
         <activity android:name="dev.muon.runtime.MuonWindowActivity" android:exported="false" />
         <activity
             android:name="dev.muon.runtime.MuonActivity"

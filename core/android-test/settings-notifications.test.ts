@@ -27,6 +27,7 @@ describe('Android settings and notification permissions', () => {
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings',
         'muon.android.notifications': 'notifications',
+        'muon.notifications': 'notifications',
       }
     );
     await expect(
@@ -71,6 +72,7 @@ describe('Android settings and notification permissions', () => {
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings',
         'muon.android.notifications': 'notifications',
+        'muon.notifications': 'notifications',
       }
     );
     await expect(
@@ -104,6 +106,7 @@ describe('Android settings and notification permissions', () => {
           'muon.android.systemBars': 'bars',
           'muon.android.settings': 'settings',
           'muon.android.notifications': 'notifications',
+          'muon.notifications': 'notifications',
         }
       );
       await expect(

@@ -3,10 +3,14 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { notificationIdentifier } from "../../core/common/renderer/notifications.js";
+
 /** Notification features selected by the application, independently of OS permission. */
 export interface MuonNotificationConfig {
   /** Whether the application includes and exposes notification operations. */
   readonly enabled: boolean;
+  /** Purpose used by post() when its category is omitted. */
+  readonly defaultCategory?: string;
 }
 
 /**
@@ -22,10 +26,20 @@ export const resolveMuonNotificationConfig = (
     throw new Error("notifications must be an object.");
   const source = value as Record<string, unknown>;
   for (const key of Object.keys(source)) {
-    if (key !== "enabled")
+    if (key !== "enabled" && key !== "defaultCategory")
       throw new Error(`Unsupported notifications setting: ${key}`);
   }
   if (source.enabled !== undefined && typeof source.enabled !== "boolean")
     throw new Error("notifications.enabled must be a boolean.");
-  return { enabled: source.enabled === true };
+  return {
+    enabled: source.enabled === true,
+    ...(source.defaultCategory === undefined
+      ? {}
+      : {
+          defaultCategory: notificationIdentifier(
+            source.defaultCategory,
+            "notifications.defaultCategory",
+          ),
+        }),
+  };
 };

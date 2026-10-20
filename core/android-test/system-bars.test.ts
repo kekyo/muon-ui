@@ -19,6 +19,7 @@ describe('Android system bar API', () => {
         'muon.android.systemBars': 'system-bars-capability',
         'muon.android.settings': 'settings-capability',
         'muon.android.notifications': 'android-notifications-capability',
+        'muon.notifications': 'notifications-capability',
       }
     );
     const options = {
@@ -57,6 +58,7 @@ describe('Android system bar API', () => {
         'muon.android.systemBars': 'system-bars-capability',
         'muon.android.settings': 'settings-capability',
         'muon.android.notifications': 'android-notifications-capability',
+        'muon.notifications': 'android-notifications-capability',
       }
     );
     await api.android.systemBars.configure({ statusBar: { visible: false } });
@@ -98,6 +100,7 @@ describe('Android system bar API', () => {
           'muon.android.systemBars': 'system-bars-capability',
           'muon.android.settings': 'settings-capability',
           'muon.android.notifications': 'android-notifications-capability',
+          'muon.notifications': 'android-notifications-capability',
         }
       );
       await expect(

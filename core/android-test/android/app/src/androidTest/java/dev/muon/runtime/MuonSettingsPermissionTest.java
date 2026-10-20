@@ -82,13 +82,16 @@ public final class MuonSettingsPermissionTest {
             activity.clearTestMessages();
             scenario.onActivity(current -> current.getWebViewForTest().evaluateJavascript(
                     "muonAndroidTest.postMessage(JSON.stringify({"
-                            + "publicApi:typeof muon.android.notifications,"
+                            + "publicApi:typeof muon.android.notifications,commonApi:typeof muon.notifications,"
                             + "registered:__muon_android_plugin_metadata.builtinFunctions.some("
                             + "path=>path.startsWith('muon.android.notifications.'))}));", null));
             String message = activity.awaitTestMessage(30, TimeUnit.SECONDS);
             assertNotNull(message);
             JSONObject exposed = new JSONObject(message);
             assertEquals("undefined", exposed.getString("publicApi"));
+            assertEquals("undefined", exposed.getString("commonApi"));
+            assertFalse(call(scenario, activity, "notifications-capability", "muon.notifications.getCapabilities",
+                    new JSONArray()).getBoolean("ok"));
             assertFalse(exposed.getBoolean("registered"));
             for (String function : new String[] { "getPermissionState", "requestPermission" }) {
                 assertFalse(call(scenario, activity, "android-notifications-capability",

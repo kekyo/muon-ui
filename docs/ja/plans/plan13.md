@@ -146,9 +146,26 @@ Web側に渡す値はCSSピクセルを基本とし、端末の物理ピクセ�
 
 `getStatus()`は、引数を省略した場合にはアプリ全体の投稿可否を返す。`category`を指定した場合には、アプリ全体とその分類の状態を区別して返す。投稿可能、無効、判定できない状態を表し、通知の閲覧状態や一時的な表示の抑制とは分ける。Android固有の詳細は専用APIの権限状態とチャンネル情報で取得する。
 
+段階4の`post()`は`id`、`title`、`body`を必須とする。`id`と`category`は空白だけではない128 UTF-16コード単位以内、`title`は空白だけではない1024コード単位以内、`body`は空文字を許す4096コード単位以内の文字列で、いずれもNULを含めない。`data`はJSONの有限数・文字列・真偽値・null・配列・通常のオブジェクトから構成し、UTF-8のJSON表現で16384バイト、配列・オブジェクトの入れ子64個までとする。循環参照やJSON化で失われる値、未対応のオプションは拒否する。
+
+`getStatus(category?)`は`{ app, category }`を返す。`app`は`{ state, reason }`、`category`はその状態と`id`を含むか、引数省略時の`null`である。状態は`enabled`、`disabled`、`unknown`を使う。分類が有効でもアプリ全体が無効な場合を別々に表示し、既定分類は投稿だけに適用する。
+
 ### 対応機能と実行環境
 
-`getCapabilities()`は、実装済みの機能と現在のOS・通知サービス・配布登録状態を照らして返す。返却項目は実行中の通知操作、プロセス終了後のクリック起動、通知の保持、追加アクション、アプリ全体と分類別の状態取得を区別する。各項目は対応、非対応、不明を表し、必要な登録がない場合などの理由も取得できるようにする。具体的な型と項目名は段階4で確定する。
+`getCapabilities()`は、実装済みの機能と現在のOS・通知サービス・配布登録状態を照らして返す。返却項目は実行中の通知操作、プロセス終了後のクリック起動、通知の保持、追加アクション、アプリ全体と分類別の状態取得を区別する。各項目は対応、非対応、不明を表し、必要な登録がない場合などの理由も取得できるようにする。各項目は`{ state, reason }`とし、`state`は`supported`、`unsupported`、`unknown`、`reason`は理由を表す文字列または`null`で返す。
+
+対応機能の項目は次のとおりである。
+
+| 項目 | 意味 |
+| --- | --- |
+| `interaction` | 実行中のアプリへの通知操作イベントの配送。 |
+| `launch` | 終了したアプリの起動と操作イベントの配送。 |
+| `persistence` | アプリの通常終了後の通知保持。強制停止やユーザーによる削除は含まない。 |
+| `actions` | 追加の操作ボタン。 |
+| `appStatus` | アプリ全体の投稿可否の取得。 |
+| `categoryStatus` | 分類別のOS設定状態の取得。 |
+
+段階4では通知タップでアプリを開けるが、操作イベントの配送は段階5の対象である。このため`interaction`、`launch`、`actions`は非対応として返す。
 
 対応機能はユーザーの現在の許可状態とは異なる。OS名だけで対応を決めたり、非対応と権限拒否を同じ値にしたりしない。投稿可否の状態取得を提供しない環境では、`getStatus()`が判定できないことを表す`unknown`を返す。Linuxの通知サーバーでは操作や保持が任意の機能なので、存在を仮定しない。[Desktop Notificationsの対応機能と操作イベント](https://specifications.freedesktop.org/notification/latest/protocol.html)
 
@@ -174,6 +191,10 @@ Android 8以降のチャンネルでは、作成後の重要度などをユー�
 
 API 24・25でも共通のローカル通知は提供する。OSチャンネルが存在しないことを専用APIの利用可否に示し、OSチャンネルの作成要求は非対応として返す。この環境では静的に宣言した用途分類だけに投稿できる。静的設定はmuonが保持し、対応する通知単位の表示属性へ変換できる範囲を明示する。アプリ全体の投稿可否は取得できるが、分類別のOS設定状態は取得できない。チャンネルをユーザーが設定できるようになったとは表示しない。[Android 7.1以前の通知属性](https://developer.android.com/develop/ui/views/notifications/build-notification)
 
+段階4のチャンネル定義は`{ id, name, description?, importance }`とし、重要度は`min`、`low`、`default`、`high`から指定する。IDと名前は空白だけではない128コード単位以内、説明は1024コード単位以内の文字列で、いずれもNULを含めない。説明の省略値は空文字とする。`ensureChannel()`は既存チャンネルを変更せず、`getChannel(id)`と同じ実効値`{ id, name, description, importance, enabled }`を返す。無効なチャンネルの重要度は`none`、存在しないチャンネルの取得結果は`null`である。
+
+Android専用の`getCapabilities()`は`{ channels: { state, reason } }`を返す。API 24・25の`ensureChannel()`と`getChannel()`は非対応エラーとなる。この環境では静的分類の重要度を通知のpriorityへ変換し、音・振動・ユーザー設定までAPI 26以降と同じになる保証は設けない。
+
 ### 通知権限と配布設定
 
 `requestPermission()`は、アプリがユーザーへ通知の用途を説明した後で明示的に呼ぶ。`post()`や起動時のチャンネル登録で、暗黙に権限ダイアログを表示しない。Android 13以降の通常通知は`POST_NOTIFICATIONS`の実行時許可を扱う。[通知権限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)
@@ -195,6 +216,8 @@ API 24・25でも共通のローカル通知は提供する。OSチャンネル�
 共通設定の`notifications.enabled`が有効な場合に、`android.notifications.channels`と`android.notifications.smallIcon`から必要なManifest宣言と通知用リソースを生成する。既存の`android.permissions`と権限宣言を重複させず、通知を使わないアプリへ新たな実行時権限を要求しない。`notifications.defaultCategory`がある場合は、静的チャンネルの参照先としてビルド時に検証する。動的登録した分類は、`ensureChannel()`が完了した後の`post()`へ明示して使う。
 
 通知用アイコンはランチャーアイコンと分けて指定し、Androidの小アイコンに適したリソースへ変換・検証する。チャンネル名、説明、重要度、既定分類の参照先、アイコンの欠落をビルドで診断する。リソース生成でテキスト処理が必要な場合は既存方針どおり`funcity`を使う。[通知の作成とアイコン](https://developer.android.com/develop/ui/views/notifications/build-notification)
+
+段階4の`smallIcon`は24〜1024ピクセルの正方形PNGで、透明部分と白いシルエットを持つ画像を要求する。色付き、全透明、全面不透明の画像はエラーとする。24 dpを基準にmdpi、hdpi、xhdpi、xxhdpi、xxxhdpi向けの画像を生成し、ランチャーアイコンとは別のリソースとして登録する。実行時にはManifestのresource参照からIDを取得する。
 
 通知アクションボタンを追加する場合も、初期実装では自アプリを開いて操作IDを渡す用途に限定する。プロセスを起動せずに業務処理だけを実行するボタンや直接返信は、後続のバックグラウンド処理の設計で扱う。
 
@@ -252,7 +275,7 @@ CEFの既存プロセスへの引数配送には、`root_cache_path`に対応す
 
 `isAvailable()`は、その端末で対象画面への遷移が可能かを返す。`open()`も実際の起動時に失敗を扱う。専用画面が存在しない場合は非対応を返し、呼び出し側が明示的に許可した場合だけアプリ情報画面へ切り替える。その結果には要求した画面と実際の遷移先を含める。[Settingsの公開アクションとAPIコメント](https://developer.android.com/reference/android/provider/Settings)
 
-段階3の`target`は`app-details`と`notifications`である。`open(target, { fallback: 'app-details' })`と明示した場合だけ、非対応の通知設定画面をアプリ情報画面へ切り替える。結果は`{ requestedTarget, target, fallbackUsed }`で返す。`isAvailable(target)`はfallbackを適用せず、その画面自体の利用可否を返す。API 24・25には公開された通知専用画面のアクションがないため、`notifications`を非対応として返す。指定チャンネルの設定画面は段階4で追加する。
+段階3の`target`は`app-details`と`notifications`である。段階4では`{ type: 'notification-channel', channelId }`を追加し、チャンネルIDを必須にする。`open(target, { fallback: 'app-details' })`と明示した場合だけ、非対応の通知設定画面をアプリ情報画面へ切り替える。結果は`{ requestedTarget, target, fallbackUsed }`で返す。`isAvailable(target)`はfallbackを適用せず、その画面自体の利用可否を返す。API 24・25には公開された通知専用画面のアクションがないため、`notifications`を非対応として返す。チャンネル設定はAPI 26以降の登録済みチャンネルだけを対象とし、非対応時は明示されたアプリ情報への代替に従う。
 
 `open()`は前面のActivityから呼ぶ。バックグラウンドのActivityでは要求を拒否し、OSによる起動制限を成功として扱わない。`open()`の完了は、画面を開く要求が受理されたことを意味する。ユーザーが設定を変更したかどうかの結果にはしない。Activityが復帰したら権限・通知・バーの実効状態を再取得し、その後の状態取得へ反映する。Web側でも復帰後の取得で更新された表示を確認できるようにする。設定画面を開いている間にプロセスが終了した場合は、新しい起動時に再取得する。
 
@@ -407,14 +430,15 @@ Androidの案Bと案Cの組み合わせに加え、CEFの案2を反映した。�
 
 ## 進捗記録
 
-2026年10月20日時点で、`feature/plan13`の段階1〜3を完了した。共通通知、Androidのチャンネル・通知操作、CEFの通知は段階4以降で実装する。
+2026年10月20日時点で、`feature/plan13`の段階1〜4を完了した。Androidの通知イベントとCEFの通知は段階5以降で実装する。
 
 | 段階 | 状態 | 実装・検証した範囲 |
 | --- | --- | --- |
 | 1 | 完了 | `00bd0c5 feat: add Android system bar plugin APIs`。階層名前空間、simple・validate、許可フィルター、上下別の表示と既存fullscreenの状態共有を実装した。TypeScriptと実機のテストで未実装時の失敗と実装後の成功を確認した。 |
 | 2 | 完了 | 配置方式、Insetsの取得・購読、CSS変数、アイコン配色、初期設定とActivity再生成を実装した。一時表示中の状態取得は、承認されたOS報告値の契約へ変更した。 |
 | 3 | 完了 | 自アプリの設定画面、通知設定画面、通知権限の状態取得と明示的な要求を実装した。無効ビルドでは通知専用APIを公開せず、設定から復帰したときに現在の状態を再取得できる。 |
-| 4〜9 | 未着手 | 共通通知、チャンネル、イベント、CEFのOS通知、配布物と全体検証を順に進める。 |
+| 4 | 完了 | 共通の投稿・更新・取り消し、状態・対応機能の取得、静的・動的チャンネル、専用アイコンと設定画面を実装した。公開CLIで作成したsimple・validateのAPKから、実際のOS通知とタップによる前面化を確認した。 |
+| 5〜9 | 未着手 | Androidの通知イベント、CEFのOS通知、配布物と全体検証を順に進める。 |
 
 段階2のInsetsは`unit: 'css-px'`を持ち、システムバー、カットアウト、ジェスチャー領域、IMEを分けて返す。`safeArea`はバーとカットアウトの各辺の最大値で、`contentSafeArea`はWeb側で追加する余白である。`safe-area`では`contentSafeArea`と対応するCSS変数を0にし、ネイティブ側の余白を重ねて適用しない。購読は初期状態と変更後の状態を返し、`close()`とページ破棄で解放する。
 
@@ -456,6 +480,26 @@ ANDROID_SERIAL=<device> npm run test:android-settings-e2e --workspace muon-ui
 ```
 
 権限ダイアログのinstrumentationを再実行するときは、Gradleの前処理がテストホスト`dev.muon.testhost`の通知権限だけを初期化する。API 33未満またはテストホストが未導入の場合は変更しない。この前処理は既存のAndroidテスト入口にも接続し、対象パッケージと処理条件を3件のテストで検証した。
+
+### 段階4の実装と検証
+
+共通の投稿・更新・取り消し、投稿可否と対応機能の取得をAndroidへ接続した。通知IDはアプリ単位で管理し、同じIDの投稿は既存通知を更新する。通知を有効にしたビルドだけに共通APIとAndroid専用APIを公開する。simple・validateの両方で同じAPIを使い、許可のない関数は呼べない。
+
+静的チャンネルと既定分類をビルド設定から生成し、動的なチャンネル登録と専用設定画面への遷移を追加した。既存チャンネルの名前・説明・重要度は変更せず、OSから取得した実効値を返す。通知専用APIを無効にしたビルドでも、以前登録したチャンネルの設定画面は開ける。small iconには透明背景の白いPNGを要求し、24 dpの各密度用リソースを生成する。
+
+renderer側の99件とUIのAndroid・パッケージ試験103件が成功した。引数の深さ、nullのチャンネル説明、未知の分類、無効なビルド、Unicodeの空白だけからなるIDについて、修正前の失敗と修正後の成功を確認した。チャンネル名・説明の長さ制限もJavaScriptとネイティブでそろえた。通常実行で省略される端末試験は、この件数に含めていない。
+
+API 24・25の各エミュレーターでは、WebViewに依存しない9件の試験が成功した。静的分類への投稿、同じIDの更新、個別の取り消し、priorityへの変換、OSチャンネルAPIの非対応を確認した。分類別のOS設定状態はunknownとなる。この結果を、旧版WebViewを含む全機能の検証成功とは扱わない。
+
+Pixel 6のAndroid 17 / API 37では、instrumentation全61件が失敗・スキップなしで成功した。公開CLIの試験では、今回のランタイムを含むnpmパッケージを別の利用アプリへ導入し、simple・validateそれぞれのAPKを生成した。両方ともPlaywright MCPから投稿・更新・取り消し・動的チャンネル登録・チャンネル設定画面を操作できた。通知欄の実表示を確認し、ホーム画面へ移動した後の通知タップで、対象アプリが前面へ戻ることも検証した。通知のタイトル・本文・アプリ名とアイコンは実画面でも確認した。
+
+画面観測の再実行では、Accessibilityのイベントコールバック内で画面情報を読むテストが停滞する事象を再現した。コールバックは変更の通知だけにし、テスト実行スレッドで画面情報を読む方式へ修正した。定期的な待機時間に依存せず、イベントと画面の条件を待つ。修正後は権限ダイアログ・設定画面・通知の表示とタップが成功した。[UiAutomationのコールバック契約](https://developer.android.com/reference/android/app/UiAutomation#setOnAccessibilityEventListener(android.app.UiAutomation.OnAccessibilityEventListener))
+
+追加した公開CLI・実機試験の入口は次のとおりである。事前に今回のランタイムを含むmuon-uiのnpmパッケージを作成する。
+
+```bash
+ANDROID_SERIAL=<device> MUON_ANDROID_NOTIFICATION_TGZ=<muon-ui.tgz> npm run test:android-notifications-e2e --workspace muon-ui
+```
 
 ### 残る検証とビルド警告
 

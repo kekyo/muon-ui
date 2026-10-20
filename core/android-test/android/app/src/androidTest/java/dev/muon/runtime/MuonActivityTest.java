@@ -141,6 +141,7 @@ public final class MuonActivityTest {
                             "namespaces: Object.keys(globalThis.muon)," +
                             "browser: Object.keys(globalThis.muon.browser)," +
                             "fs: Object.keys(globalThis.muon.fs)," +
+                            "notifications: Object.keys(globalThis.muon.notifications)," +
                             "systemBars: Object.keys(globalThis.muon.android.systemBars)," +
                             "hasHardReload: 'hardReload' in globalThis.muon.browser" +
                             "})",
@@ -153,10 +154,11 @@ public final class MuonActivityTest {
             assertNotNull(result.get());
             String decoded = new JSONArray("[" + result.get() + "]").getString(0);
             JSONObject api = new JSONObject(decoded);
-            assertEquals("[\"browser\",\"environments\",\"fs\",\"android\",\"test\"]",
+            assertEquals("[\"browser\",\"environments\",\"fs\",\"notifications\",\"android\",\"test\"]",
                     api.getJSONArray("namespaces").toString());
             assertEquals(8, api.getJSONArray("browser").length());
             assertEquals(22, api.getJSONArray("fs").length());
+            assertEquals("[\"post\",\"cancel\",\"getStatus\",\"getCapabilities\"]", api.getJSONArray("notifications").toString());
             assertEquals("[\"configure\",\"getState\",\"getInsets\",\"watchInsets\"]", api.getJSONArray("systemBars").toString());
             assertFalse(api.getBoolean("hasHardReload"));
         }

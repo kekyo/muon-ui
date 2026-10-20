@@ -64,6 +64,17 @@ export const androidSettingsFunctionNames = ['isAvailable', 'open'] as const;
 export const androidNotificationFunctionNames = [
   'getPermissionState',
   'requestPermission',
+  'getCapabilities',
+  'ensureChannel',
+  'getChannel',
+] as const;
+
+/** Shared native notification functions implemented by Android. */
+export const notificationFunctionNames = [
+  'post',
+  'cancel',
+  'getStatus',
+  'getCapabilities',
 ] as const;
 
 /** Fully-qualified built-in function paths implemented by the Android backend. */
@@ -82,6 +93,9 @@ export const muonAndroidBuiltinFunctionPaths = [
   ...androidNotificationFunctionNames.map(
     (name) => `muon.android.notifications.${name}` as const
   ),
+  ...notificationFunctionNames.map(
+    (name) => `muon.notifications.${name}` as const
+  ),
 ] as const;
 
 /**
@@ -94,7 +108,9 @@ export const getMuonAndroidBuiltinFunctionPaths = (
 ): readonly MuonAndroidBuiltinFunctionPath[] =>
   muonAndroidBuiltinFunctionPaths.filter(
     (path) =>
-      notificationsEnabled || !path.startsWith('muon.android.notifications.')
+      notificationsEnabled ||
+      (!path.startsWith('muon.android.notifications.') &&
+        !path.startsWith('muon.notifications.'))
   );
 
 /** A built-in function path available on Android. */

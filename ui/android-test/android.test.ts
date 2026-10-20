@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import sharp from "sharp";
 import { buildMuonApp, normalizeMuonBuildTarget } from "../common/build.js";
 import { allMuonTargets } from "../common/targets.js";
 
@@ -46,15 +47,77 @@ const project = async (config: unknown): Promise<string> => {
     JSON.stringify({ name: "my-application", version: "2.3.4" }),
   );
   await writeFile(join(root, "muon.json"), JSON.stringify(config));
+  await writeFile(
+    join(root, "notification.png"),
+    await sharp(
+      Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="8" fill="white"/></svg>',
+      ),
+    )
+      .png()
+      .toBuffer(),
+  );
   return root;
 };
 
 describe("public Android builds", () => {
+  it("packages static notification categories and a separately validated small icon", async () => {
+    const root = await project({
+      notifications: { enabled: true, defaultCategory: "orders" },
+      android: {
+        notifications: {
+          smallIcon: "notification.png",
+          channels: [{ id: "orders", name: "Orders", importance: "default" }],
+        },
+      },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    const input = buildAndroid.mock.calls[0]![0];
+    expect(input.androidNotifications).toEqual({
+      channels: [
+        {
+          id: "orders",
+          name: "Orders",
+          description: "",
+          importance: "default",
+        },
+      ],
+      smallIcon: join(root, "notification.png"),
+    });
+    expect(input.notifications).toEqual({
+      enabled: true,
+      defaultCategory: "orders",
+    });
+    expect(input.pluginAccess.internalAllow).toContain(
+      "muon.notifications.post",
+    );
+    expect(input.notificationIcons).toHaveLength(5);
+  });
+  it("rejects a missing small icon or unresolved default category before packaging", async () => {
+    for (const android of [
+      { notifications: {} },
+      { notifications: { smallIcon: "notification.png", channels: [] } },
+    ]) {
+      const root = await project({
+        notifications: { enabled: true, defaultCategory: "missing" },
+        android,
+      });
+      await expect(
+        buildMuonApp({ root, targets: ["android"] }),
+      ).rejects.toThrow(/smallIcon|defaultCategory/);
+    }
+    expect(buildAndroid).not.toHaveBeenCalled();
+  });
   it.each([true, false, undefined])(
     "enables notification permissions and functions only when configured: %s",
     async (enabled) => {
       const root = await project(
-        enabled === undefined ? {} : { notifications: { enabled } },
+        enabled === undefined
+          ? {}
+          : {
+              notifications: { enabled },
+              android: { notifications: { smallIcon: "notification.png" } },
+            },
       );
       await buildMuonApp({ root, targets: ["android"] });
       const input = buildAndroid.mock.calls[0]![0];

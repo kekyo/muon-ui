@@ -22,7 +22,7 @@ import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -51,7 +51,7 @@ public final class MuonSettingsPermissionServiceTest {
             Result available = new Result();
             Result opened = new Result();
             scenario.onActivity(activity -> {
-                service.set(new MuonAndroidSettingsService(activity));
+                service.set(new MuonAndroidSettingsService(activity, id -> false));
                 service.get().invoke("muon.android.settings.isAvailable",
                         new JSONArray().put("{\"target\":\"app-details\"}"), new byte[0][], available);
                 service.get().invoke("muon.android.settings.open",
@@ -70,7 +70,7 @@ public final class MuonSettingsPermissionServiceTest {
             AtomicReference<MuonAndroidSettingsService> service = new AtomicReference<>();
             Result available = new Result();
             scenario.onActivity(activity -> {
-                service.set(new MuonAndroidSettingsService(activity));
+                service.set(new MuonAndroidSettingsService(activity, id -> false));
                 service.get().setResumed(true);
                 service.get().invoke("muon.android.settings.isAvailable",
                         new JSONArray().put("{\"target\":\"notifications\"}"), new byte[0][], available);
@@ -84,18 +84,21 @@ public final class MuonSettingsPermissionServiceTest {
             }
             Result opened = new Result();
             var automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
-            CountDownLatch settingsVisible = new CountDownLatch(1);
-            automation.setOnAccessibilityEventListener(event -> {
-                var root = automation.getRootInActiveWindow();
-                if (root != null && "com.android.settings".contentEquals(root.getPackageName())) {
-                    settingsVisible.countDown();
-                }
-            });
+            Semaphore changes = new Semaphore(0);
+            // Accessibility callbacks run on the main thread; only signal from them.
+            automation.setOnAccessibilityEventListener(event -> changes.release());
             try {
                 scenario.onActivity(activity -> service.get().invoke("muon.android.settings.open",
                         new JSONArray().put("{\"target\":\"notifications\",\"fallback\":\"app-details\"}"),
                         new byte[0][], opened));
-                assertTrue("Settings must actually appear", settingsVisible.await(30, TimeUnit.SECONDS));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                while (true) {
+                    var root = automation.getRootInActiveWindow();
+                    if (root != null && "com.android.settings".contentEquals(root.getPackageName())) { break; }
+                    long remaining = deadline - System.nanoTime();
+                    assertTrue("Settings must actually appear", remaining > 0
+                            && changes.tryAcquire(remaining, TimeUnit.NANOSECONDS));
+                }
             } finally {
                 automation.setOnAccessibilityEventListener(null);
             }
@@ -109,6 +112,56 @@ public final class MuonSettingsPermissionServiceTest {
             scenario.onActivity(activity -> service.get().invoke("muon.android.settings.isAvailable",
                     new JSONArray().put("{\"target\":\"app-details\"}"), new byte[0][], closed));
             assertTrue(closed.await().startsWith("error:"));
+        }
+    }
+
+    @Test
+    public void opensKnownChannelSettingsAndRequiresExplicitFallbackOnOlderAndroid() throws Exception {
+        try (ActivityScenario<MuonWindowActivity> scenario = ActivityScenario.launch(MuonWindowActivity.class)) {
+            AtomicReference<MuonAndroidNotificationService> notifications = new AtomicReference<>();
+            AtomicReference<MuonAndroidSettingsService> settings = new AtomicReference<>();
+            Result available = new Result();
+            Result unknown = new Result();
+            scenario.onActivity(activity -> {
+                notifications.set(new MuonAndroidNotificationService(activity, MuonAppConfig.load(activity)));
+                settings.set(new MuonAndroidSettingsService(activity, notifications.get()::hasChannel));
+                settings.get().setResumed(true);
+                settings.get().invoke("muon.android.settings.isAvailable", new JSONArray().put(
+                        "{\"target\":\"notification-channel\",\"channelId\":\"general\"}"), new byte[0][], available);
+                settings.get().invoke("muon.android.settings.isAvailable", new JSONArray().put(
+                        "{\"target\":\"notification-channel\",\"channelId\":\"missing-channel\"}"), new byte[0][], unknown);
+            });
+            assertEquals(Boolean.toString(Build.VERSION.SDK_INT >= 26), available.await());
+            assertEquals("false", unknown.await());
+            Result rejected = new Result();
+            scenario.onActivity(activity -> settings.get().invoke("muon.android.settings.open", new JSONArray().put(
+                    "{\"target\":\"notification-channel\",\"channelId\":\"missing-channel\"}"), new byte[0][], rejected));
+            assertTrue(rejected.await().contains("unavailable"));
+            var automation = InstrumentationRegistry.getInstrumentation().getUiAutomation();
+            Semaphore changes = new Semaphore(0);
+            automation.setOnAccessibilityEventListener(event -> changes.release());
+            Result opened = new Result();
+            try {
+                scenario.onActivity(activity -> settings.get().invoke("muon.android.settings.open", new JSONArray().put(
+                        "{\"target\":\"notification-channel\",\"channelId\":\"general\",\"fallback\":\"app-details\"}"), new byte[0][], opened));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+                while (true) {
+                    var root = automation.getRootInActiveWindow();
+                    if (root != null && "com.android.settings".contentEquals(root.getPackageName())) { break; }
+                    long remaining = deadline - System.nanoTime();
+                    assertTrue("Channel settings or the explicit fallback must appear", remaining > 0
+                            && changes.tryAcquire(remaining, TimeUnit.NANOSECONDS));
+                }
+            } finally { automation.setOnAccessibilityEventListener(null); }
+            JSONObject result = new JSONObject(opened.await());
+            assertEquals("notification-channel", result.getJSONObject("requestedTarget").getString("type"));
+            assertEquals("general", result.getJSONObject("requestedTarget").getString("channelId"));
+            assertEquals(Build.VERSION.SDK_INT < 26, result.getBoolean("fallbackUsed"));
+            if (Build.VERSION.SDK_INT >= 26) {
+                assertEquals("general", result.getJSONObject("target").getString("channelId"));
+            } else { assertEquals("app-details", result.getString("target")); }
+            assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK));
+            scenario.onActivity(activity -> { settings.get().close(); notifications.get().close(); });
         }
     }
 

@@ -4,6 +4,19 @@
 // https://github.com/kekyo/muon-ui
 
 import type { MuonWebViewRpcClient } from './webview-rpc.js';
+import { notificationIdentifier } from '../../common/renderer/notifications.js';
+import {
+  normalizeMuonAndroidNotificationChannel,
+  type MuonAndroidNotificationCapabilities,
+  type MuonAndroidNotificationChannel,
+  type MuonAndroidNotificationChannelOptions,
+} from './notification-channels.js';
+export type {
+  MuonAndroidNotificationCapabilities,
+  MuonAndroidNotificationChannel,
+  MuonAndroidNotificationChannelOptions,
+  MuonAndroidNotificationImportance,
+} from './notification-channels.js';
 
 /** Current notification permission observations; not a permanent-denial diagnosis. */
 export interface MuonAndroidNotificationPermissionState {
@@ -38,6 +51,27 @@ export interface MuonAndroidNotificationPermissionResult {
 /** Android notification permission operations, exposed only when notifications are enabled. */
 export interface MuonAndroidNotificationsApi {
   /**
+   * Reads availability of Android-only notification features.
+   * @returns Channel support independently of user permission.
+   */
+  readonly getCapabilities: () => Promise<MuonAndroidNotificationCapabilities>;
+  /**
+   * Registers a channel, preserving existing OS and user settings.
+   * @param options - New channel definition; existing channels are left unchanged.
+   * @returns Current effective channel settings; rejects on API 24/25.
+   */
+  readonly ensureChannel: (
+    options: MuonAndroidNotificationChannelOptions
+  ) => Promise<MuonAndroidNotificationChannel>;
+  /**
+   * Reads the current OS channel settings.
+   * @param id - Category/channel ID to query.
+   * @returns The channel or null when absent; rejects on API 24/25.
+   */
+  readonly getChannel: (
+    id: string
+  ) => Promise<MuonAndroidNotificationChannel | null>;
+  /**
    * Reads current OS state without requesting permission.
    * @returns Fresh runtime permission and app-wide notification observations.
    */
@@ -62,20 +96,39 @@ export const createMuonAndroidNotificationsApi = (
   client: MuonWebViewRpcClient,
   capabilityId: string
 ): MuonAndroidNotificationsApi => {
-  const call = async <T>(name: string): Promise<T> => {
+  const call = async <T>(
+    name: string,
+    args: readonly unknown[]
+  ): Promise<T> => {
     const value = await client.call(
       capabilityId,
       `muon.android.notifications.${name}`,
-      []
+      args
     );
     if (typeof value !== 'string')
       throw new TypeError('Android native JSON result is invalid');
     return JSON.parse(value) as T;
   };
   return Object.freeze({
+    getCapabilities: async () =>
+      await call<MuonAndroidNotificationCapabilities>('getCapabilities', []),
+    ensureChannel: async (options: MuonAndroidNotificationChannelOptions) =>
+      await call<MuonAndroidNotificationChannel>('ensureChannel', [
+        JSON.stringify(normalizeMuonAndroidNotificationChannel(options)),
+      ]),
+    getChannel: async (id: string) =>
+      await call<MuonAndroidNotificationChannel | null>('getChannel', [
+        notificationIdentifier(id, 'Channel id'),
+      ]),
     getPermissionState: async () =>
-      await call<MuonAndroidNotificationPermissionState>('getPermissionState'),
+      await call<MuonAndroidNotificationPermissionState>(
+        'getPermissionState',
+        []
+      ),
     requestPermission: async () =>
-      await call<MuonAndroidNotificationPermissionResult>('requestPermission'),
+      await call<MuonAndroidNotificationPermissionResult>(
+        'requestPermission',
+        []
+      ),
   });
 };

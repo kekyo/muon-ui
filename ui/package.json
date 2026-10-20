@@ -36,6 +36,7 @@
     "test:windows-nsis-e2e": "npm run build && vitest run cef-test/nsis-windows-e2e.test.ts",
     "test:android-system-bars-e2e": "MUON_ANDROID_SYSTEM_BARS_E2E=1 vitest run android-test/system-bars-e2e.test.ts",
     "test:android-settings-e2e": "MUON_ANDROID_SETTINGS_E2E=1 vitest run android-test/settings-e2e.test.ts",
+    "test:android-notifications-e2e": "MUON_ANDROID_NOTIFICATIONS_E2E=1 vitest run android-test/notifications-e2e.test.ts",
     "verify:package-runtime": "node scripts/verify-package-runtime.mjs",
     "pack": "bash ../build_package.sh",
     "dependencies": "reskill"

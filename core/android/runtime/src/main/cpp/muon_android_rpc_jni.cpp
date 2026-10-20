@@ -143,6 +143,16 @@ static const std::vector<std::string> kPlatformFunctionPaths = {
 static const std::vector<std::string> kAndroidNotificationFunctionPaths = {
     "muon.android.notifications.getPermissionState",
     "muon.android.notifications.requestPermission",
+    "muon.android.notifications.getCapabilities",
+    "muon.android.notifications.ensureChannel",
+    "muon.android.notifications.getChannel",
+};
+
+static const std::vector<std::string> kNotificationFunctionPaths = {
+    "muon.notifications.post",
+    "muon.notifications.cancel",
+    "muon.notifications.getStatus",
+    "muon.notifications.getCapabilities",
 };
 
 static MuonAndroidRpcHost* GetAndroidRpcHost(jlong handle) {
@@ -1472,6 +1482,12 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
                           &settings_policy, error_message)) {
     return false;
   }
+  auto common_notification_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (state->notifications_enabled &&
+      !CreateBuiltinPolicy(state, kNotificationFunctionPaths,
+                           &common_notification_policy, error_message)) {
+    return false;
+  }
   auto notification_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (state->notifications_enabled &&
       !CreateBuiltinPolicy(state, kAndroidNotificationFunctionPaths,
@@ -1558,7 +1574,8 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
       !add_policy("system-bars-capability", system_bars_policy) ||
       !add_policy("settings-capability", settings_policy) ||
       (state->notifications_enabled &&
-       !add_policy("android-notifications-capability", notification_policy)) ||
+       (!add_policy("android-notifications-capability", notification_policy) ||
+        !add_policy("notifications-capability", common_notification_policy))) ||
       !add_policy("fs-capability", filesystem_policy))) {
     return false;
   }
@@ -1757,6 +1774,8 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeCreateHost(
     state->platform_function_paths.insert(state->platform_function_paths.end(),
                                         kAndroidNotificationFunctionPaths.begin(),
                                         kAndroidNotificationFunctionPaths.end());
+    state->platform_function_paths.insert(state->platform_function_paths.end(),
+                                        kNotificationFunctionPaths.begin(), kNotificationFunctionPaths.end());
   }
   auto allowed = std::vector<std::string>{};
   for (jsize i = 0; i < environment->GetArrayLength(internal_allow); ++i) {

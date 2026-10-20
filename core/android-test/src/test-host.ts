@@ -48,9 +48,17 @@ if (bridge === undefined) {
     'muon.android.systemBars': 'system-bars-capability',
     'muon.android.settings': 'settings-capability',
     'muon.android.notifications': 'android-notifications-capability',
+    'muon.notifications': 'notifications-capability',
   });
   const androidApi = {
-    ...simpleApi,
+    browser: simpleApi.browser,
+    environments: simpleApi.environments,
+    fs: simpleApi.fs,
+    ...(rendererMetadata.builtinFunctions.some((path) =>
+      path.startsWith('muon.notifications.')
+    )
+      ? { notifications: simpleApi.notifications }
+      : {}),
     android: {
       systemBars: simpleApi.android.systemBars,
       settings: simpleApi.android.settings,
@@ -318,6 +326,120 @@ if (bridge === undefined) {
     settings.append(control);
   }
   app.append(settings);
+  const notifications = document.createElement('fieldset');
+  const notificationsLegend = document.createElement('legend');
+  notificationsLegend.textContent = 'Native local notifications';
+  const notificationOutput = document.createElement('pre');
+  notificationOutput.id = 'notification-result';
+  notifications.append(notificationsLegend, notificationOutput);
+  const notificationActions: ReadonlyArray<
+    readonly [string, () => Promise<unknown>]
+  > = [
+    [
+      'Post notification',
+      async () =>
+        await androidApi.notifications!.post({
+          id: 'driver-order',
+          title: 'Muon order',
+          body: 'Order is preparing',
+          data: { order: 42 },
+        }),
+    ],
+    [
+      'Update notification',
+      async () =>
+        await androidApi.notifications!.post({
+          id: 'driver-order',
+          title: 'Muon order updated',
+          body: 'Order is ready',
+          data: { order: 42 },
+        }),
+    ],
+    [
+      'Post second notification',
+      async () =>
+        await androidApi.notifications!.post({
+          id: 'driver-other',
+          title: 'Muon other',
+          body: 'Separate notification',
+          category: 'quiet',
+        }),
+    ],
+    [
+      'Cancel notification',
+      async () => await androidApi.notifications!.cancel('driver-order'),
+    ],
+    [
+      'Cancel second notification',
+      async () => await androidApi.notifications!.cancel('driver-other'),
+    ],
+    [
+      'Read notification status',
+      async () => ({
+        app: await androidApi.notifications!.getStatus(),
+        general: await androidApi.notifications!.getStatus('general'),
+      }),
+    ],
+    [
+      'Read notification capabilities',
+      async () => ({
+        common: await androidApi.notifications!.getCapabilities(),
+        android: await androidApi.android.notifications!.getCapabilities(),
+      }),
+    ],
+    [
+      'Read notification channel',
+      async () => await androidApi.android.notifications!.getChannel('general'),
+    ],
+    [
+      'Create notification channel',
+      async () =>
+        await androidApi.android.notifications!.ensureChannel({
+          id: 'dynamic',
+          name: 'Dynamic notifications',
+          description: 'Created explicitly by the driver',
+          importance: 'low',
+        }),
+    ],
+    [
+      'Post dynamic notification',
+      async () =>
+        await androidApi.notifications!.post({
+          id: 'driver-dynamic',
+          title: 'Muon dynamic',
+          body: 'Uses an explicitly created channel',
+          category: 'dynamic',
+        }),
+    ],
+    [
+      'Open channel settings',
+      async () =>
+        await androidApi.android.settings.open({
+          type: 'notification-channel',
+          channelId: 'general',
+        }),
+    ],
+  ];
+  for (const [label, action] of notificationActions) {
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.textContent = label;
+    control.disabled = androidApi.notifications === undefined;
+    control.addEventListener('click', async () => {
+      control.disabled = true;
+      try {
+        notificationOutput.textContent =
+          JSON.stringify(await action(), null, 2) ?? 'Completed';
+      } catch (error) {
+        notificationOutput.textContent =
+          error instanceof Error ? error.message : String(error);
+      } finally {
+        control.disabled = false;
+      }
+    });
+    notifications.append(control);
+  }
+  app.append(notifications);
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState === 'visible') {
       await refreshPermission();

@@ -3,6 +3,11 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import {
+  createMuonNotificationsApi,
+  type MuonNotificationsApi,
+} from '../../common/renderer/notifications.js';
+
 import type { MuonWebViewRpcClient } from './webview-rpc.js';
 import {
   createMuonAndroidSystemBarsApi,
@@ -48,6 +53,8 @@ export interface MuonAndroidCapabilityIds {
   readonly 'muon.android.settings': string;
   /** Capability for Android notification permission operations. */
   readonly 'muon.android.notifications': string;
+  /** Capability for shared notification operations. */
+  readonly 'muon.notifications': string;
 }
 
 /** Android browser functions available in simple mode. */
@@ -374,6 +381,8 @@ export interface MuonAndroidFsApi {
 
 /** Built-in API object exposed by Android simple mode. */
 export interface MuonAndroidSimpleApi {
+  /** Shared notification operations, filtered when disabled by application settings. */
+  readonly notifications: MuonNotificationsApi;
   /** Android-specific operations available in this runtime. */
   readonly android: {
     /** System bar visibility and state. */
@@ -1115,6 +1124,14 @@ export const createMuonAndroidSimpleApi = (
         ),
     }),
     fs: createMuonAndroidFsApi(client, capabilityIds['muon.fs']),
+    notifications: createMuonNotificationsApi(
+      async (name, args) =>
+        await client.call(
+          capabilityIds['muon.notifications'],
+          `muon.notifications.${name}`,
+          args
+        )
+    ),
     android: Object.freeze({
       settings: createMuonAndroidSettingsApi(
         client,

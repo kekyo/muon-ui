@@ -20,13 +20,18 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 import java.util.Iterator;
+import java.util.function.Predicate;
 
 /** Opens explicitly selected Android settings screens for this application. */
 final class MuonAndroidSettingsService implements AutoCloseable {
     @Nullable private Activity activity;
     private boolean resumed;
+    private final Predicate<String> channelExists;
 
-    MuonAndroidSettingsService(@NonNull Activity activity) { this.activity = activity; }
+    MuonAndroidSettingsService(@NonNull Activity activity, @NonNull Predicate<String> channelExists) {
+        this.activity = activity;
+        this.channelExists = channelExists;
+    }
 
     void setResumed(boolean value) { resumed = value; }
 
@@ -49,20 +54,34 @@ final class MuonAndroidSettingsService implements AutoCloseable {
             }
             for (Iterator<String> keys = options.keys(); keys.hasNext();) {
                 String key = keys.next();
-                if (!key.equals("target") && !(open && key.equals("fallback"))) {
+                if (!key.equals("target") && !key.equals("channelId") && !(open && key.equals("fallback"))) {
                     throw new IllegalArgumentException("Unknown settings option: " + key);
                 }
             }
             Object targetValue = options.opt("target");
-            if (!"app-details".equals(targetValue) && !"notifications".equals(targetValue)) {
-                throw new IllegalArgumentException("Settings target must be app-details or notifications");
+            if (!"app-details".equals(targetValue) && !"notifications".equals(targetValue)
+                    && !"notification-channel".equals(targetValue)) {
+                throw new IllegalArgumentException("Settings target must be app-details, notifications or notification-channel");
             }
             String requested = (String) targetValue;
+            String channelId = null;
+            Object requestedTarget = requested;
+            if (requested.equals("notification-channel")) {
+                Object value = options.opt("channelId");
+                if (!(value instanceof String) || ((String) value).matches("[\\s\\p{Z}\\uFEFF]*")
+                        || ((String) value).length() > 128 || ((String) value).indexOf('\0') >= 0) {
+                    throw new IllegalArgumentException("A valid notification channelId is required");
+                }
+                channelId = (String) value;
+                requestedTarget = new JSONObject().put("type", "notification-channel").put("channelId", channelId);
+            } else if (options.has("channelId")) {
+                throw new IllegalArgumentException("channelId is only valid for notification-channel settings");
+            }
             boolean fallback = options.has("fallback");
             if (fallback && !"app-details".equals(options.get("fallback"))) {
                 throw new IllegalArgumentException("Settings fallback must be app-details");
             }
-            Intent intent = intent(current, requested);
+            Intent intent = intent(current, requested, channelId);
             if (!open) {
                 completion.completeBoolean(available(current, intent));
                 return;
@@ -76,7 +95,7 @@ final class MuonAndroidSettingsService implements AutoCloseable {
                     throw new ActivityNotFoundException("Android settings target is unavailable: " + requested);
                 }
                 selected = "app-details";
-                intent = intent(current, selected);
+                intent = intent(current, selected, null);
             }
             if (!available(current, intent)) {
                 throw new ActivityNotFoundException("Android settings target is unavailable: " + selected);
@@ -87,22 +106,29 @@ final class MuonAndroidSettingsService implements AutoCloseable {
                 // The handler can disappear after the availability check.
                 if (!fallback || selected.equals("app-details")) { throw error; }
                 selected = "app-details";
-                Intent replacement = intent(current, selected);
+                Intent replacement = intent(current, selected, null);
                 if (!available(current, replacement)) { throw error; }
                 current.startActivity(replacement);
             }
-            completion.completeString(new JSONObject().put("requestedTarget", requested)
-                    .put("target", selected).put("fallbackUsed", !requested.equals(selected)).toString());
+            completion.completeString(new JSONObject().put("requestedTarget", requestedTarget)
+                    .put("target", selected.equals(requested) ? requestedTarget : selected)
+                    .put("fallbackUsed", !requested.equals(selected)).toString());
         } catch (JSONException | RuntimeException error) {
             String diagnostic = error.getMessage();
             completion.fail(diagnostic == null ? error.getClass().getSimpleName() : diagnostic);
         }
     }
 
-    @Nullable private static Intent intent(Activity activity, String target) {
+    @Nullable private Intent intent(Activity activity, String target, @Nullable String channelId) {
         if (target.equals("app-details")) {
             return new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                     Uri.fromParts("package", activity.getPackageName(), null));
+        }
+        if (target.equals("notification-channel")) {
+            return Build.VERSION.SDK_INT < 26 || !channelExists.test(channelId) ? null
+                    : new Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, activity.getPackageName())
+                            .putExtra(Settings.EXTRA_CHANNEL_ID, channelId);
         }
         // The public per-application notification settings action starts at API 26.
         return Build.VERSION.SDK_INT < 26 ? null

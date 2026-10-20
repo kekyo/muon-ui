@@ -11,11 +11,17 @@
         <intent>
             <action android:name="android.settings.APP_NOTIFICATION_SETTINGS" />
         </intent>
+        <intent>
+            <action android:name="android.settings.CHANNEL_NOTIFICATION_SETTINGS" />
+        </intent>
     </queries>
     <application android:allowBackup="false" android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher" android:supportsRtl="true"
         android:theme="@style/MuonTheme"
         android:usesCleartextTraffic="false">
+{{if notificationsEnabled}}
+        <meta-data android:name="dev.muon.notifications.smallIcon" android:resource="@drawable/muon_notification_small" />
+{{end}}
         <activity android:name="dev.muon.runtime.MuonAppActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -240,6 +240,7 @@ describe('packaged Android renderer', () => {
       'browser',
       'environments',
       'fs',
+      'notifications',
     ]);
     const result = api.environments.getConfigValues();
     const call = JSON.parse(sent[0]!);

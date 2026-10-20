@@ -52,6 +52,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     private final MuonAndroidSystemBarsService systemBarsService;
     private final MuonAndroidSettingsService settingsService;
     private final MuonAndroidNotificationPermissionService notificationPermissionService;
+    private final MuonAndroidNotificationService notificationService;
     private float managedZoomFactor = 1.0f;
 
     MuonAndroidPlatformService(
@@ -68,7 +69,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
                 activity.getResources().getDisplayMetrics().density,
                 config.systemBars,
                 retained instanceof String ? (String) retained : null);
-        settingsService = new MuonAndroidSettingsService(activity);
+        notificationService = new MuonAndroidNotificationService(activity, config);
+        settingsService = new MuonAndroidSettingsService(activity, notificationService::hasChannel);
         notificationPermissionService = new MuonAndroidNotificationPermissionService(activity, config.notificationsEnabled);
     }
 
@@ -95,8 +97,13 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             settingsService.invoke(functionPath, arguments, attachments, completion);
             return;
         }
-        if (functionPath.startsWith("muon.android.notifications.")) {
+        if (functionPath.equals("muon.android.notifications.getPermissionState")
+                || functionPath.equals("muon.android.notifications.requestPermission")) {
             notificationPermissionService.invoke(callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.notifications.") || functionPath.startsWith("muon.android.notifications.")) {
+            notificationService.invoke(functionPath, arguments, attachments, completion);
             return;
         }
         if (arguments.length() != 0 || attachments.length != 0) {
@@ -200,6 +207,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         systemBarsService.close();
         settingsService.close();
         notificationPermissionService.close();
+        notificationService.close();
         activity = null;
         webView = null;
     }

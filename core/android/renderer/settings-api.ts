@@ -4,9 +4,18 @@
 // https://github.com/kekyo/muon-ui
 
 import type { MuonWebViewRpcClient } from './webview-rpc.js';
+import { notificationIdentifier } from '../../common/renderer/notifications.js';
 
 /** System settings screens scoped to this application. */
-export type MuonAndroidSettingsTarget = 'app-details' | 'notifications';
+export type MuonAndroidSettingsTarget =
+  | 'app-details'
+  | 'notifications'
+  | {
+      /** Channel settings require a concrete channel ID. */
+      readonly type: 'notification-channel';
+      /** Registered channel ID belonging to this application. */
+      readonly channelId: string;
+    };
 
 /** Explicit fallback when a dedicated settings screen is unavailable. */
 export interface MuonAndroidSettingsOptions {
@@ -50,8 +59,21 @@ const request = (
   target: MuonAndroidSettingsTarget,
   options: MuonAndroidSettingsOptions | undefined
 ): string => {
-  if (target !== 'app-details' && target !== 'notifications')
-    throw new TypeError('Unsupported Android settings target');
+  let destination: { target: string; channelId?: string };
+  if (target === 'app-details' || target === 'notifications')
+    destination = { target };
+  else if (
+    target &&
+    typeof target === 'object' &&
+    !Array.isArray(target) &&
+    target.type === 'notification-channel' &&
+    Object.keys(target).every((key) => key === 'type' || key === 'channelId')
+  )
+    destination = {
+      target: target.type,
+      channelId: notificationIdentifier(target.channelId, 'Channel id'),
+    };
+  else throw new TypeError('Unsupported Android settings target');
   if (
     options !== undefined &&
     (options === null || typeof options !== 'object' || Array.isArray(options))
@@ -63,7 +85,7 @@ const request = (
   }
   if (options?.fallback !== undefined && options.fallback !== 'app-details')
     throw new TypeError('Android settings fallback must be app-details');
-  return JSON.stringify({ target, ...options });
+  return JSON.stringify({ ...destination, ...options });
 };
 
 /**

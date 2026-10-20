@@ -42,7 +42,10 @@ it.each([true, false])(
               imports: [
                 {
                   sources: ["src/**"],
-                  allow: ["muon.android.notifications.*"],
+                  allow: [
+                    "muon.android.notifications.*",
+                    "muon.notifications.*",
+                  ],
                 },
               ],
             },
@@ -79,9 +82,25 @@ it.each([true, false])(
     const module = await import(
       `data:text/javascript,${encodeURIComponent(resolver.load(id)!)}`
     );
-    expect(Object.keys(module)).toEqual([
+    expect(Object.keys(module).sort()).toEqual([
+      "ensureChannel",
+      "getCapabilities",
+      "getChannel",
       "getPermissionState",
       "requestPermission",
+    ]);
+    const commonId = resolver.resolveId(
+      "muon:notifications",
+      join(root, "src/main.ts"),
+    )!.id;
+    const common = await import(
+      `data:text/javascript,${encodeURIComponent(resolver.load(commonId)!)}`
+    );
+    expect(Object.keys(common).sort()).toEqual([
+      "cancel",
+      "getCapabilities",
+      "getStatus",
+      "post",
     ]);
   },
 );

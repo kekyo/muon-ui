@@ -1501,7 +1501,17 @@ void value;
       runTypeScriptConsumer(
         `import { configure, getState, getInsets, watchInsets } from "muon:android.systemBars";
 import { open, isAvailable } from "muon:android.settings";
-import { getPermissionState, requestPermission } from "muon:android.notifications";
+import { getPermissionState, requestPermission, ensureChannel, getChannel } from "muon:android.notifications";
+import { post, cancel, getStatus, getCapabilities } from "muon:notifications";
+await post({id:"order",title:"Ready",body:"Collect",data:{order:42}});
+await cancel("order");
+const notificationStatus: MuonNotificationStatus = await getStatus("orders");
+const notificationCapabilities: MuonNotificationCapabilities = await getCapabilities();
+const channel: MuonAndroidNotificationChannel = await ensureChannel({id:"orders",name:"Orders",importance:"default"});
+await getChannel("orders");
+await open({type:"notification-channel",channelId:"orders"});
+// @ts-expect-error channel settings require a channel ID
+await open({type:"notification-channel"});
 const available: boolean = await isAvailable("notifications");
 const opened: MuonAndroidSettingsResult = await open("notifications", { fallback: "app-details" });
 const permission: MuonAndroidNotificationPermissionState = await getPermissionState();

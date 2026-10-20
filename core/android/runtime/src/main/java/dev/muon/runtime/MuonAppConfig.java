@@ -25,6 +25,8 @@ final class MuonAppConfig {
     final JSONObject systemBars;
     final boolean pluginEnabled;
     final boolean notificationsEnabled;
+    final JSONObject notifications;
+    final JSONObject androidNotifications;
     final String[] internalAllow;
     final boolean validateMode;
     final String[] capabilityIds;
@@ -40,7 +42,9 @@ final class MuonAppConfig {
         }
         values = config.getJSONObject("values");
         systemBars = config.has("systemBars") ? config.getJSONObject("systemBars") : new JSONObject();
-        JSONObject notifications = config.has("notifications") ? config.getJSONObject("notifications") : new JSONObject();
+        notifications = config.has("notifications") ? config.getJSONObject("notifications") : new JSONObject();
+        androidNotifications = config.has("androidNotifications")
+                ? config.getJSONObject("androidNotifications") : new JSONObject();
         Object enabled = notifications.opt("enabled");
         if (notifications.has("enabled") && !(enabled instanceof Boolean)) {
             throw new JSONException("notifications.enabled must be a boolean");

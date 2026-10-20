@@ -44,6 +44,22 @@ export interface MuonAndroidPluginOptions {
 export interface MuonAndroidOptions {
   /** Initial system bars and safe-area policy, applied before JavaScript starts. */
   systemBars?: MuonAndroidSystemBarsOptions;
+  /** Android channels and monochrome small icon; enablement is in notifications.enabled. */
+  notifications?: {
+    /** White silhouette on a transparent square PNG, 24 to 1024 pixels. */
+    readonly smallIcon: string;
+    /** Static categories, available on API 24/25 and registered as OS channels on API 26+. */
+    readonly channels?: readonly {
+      /** Stable ID, also used as notification category. */
+      readonly id: string;
+      /** User-visible name. */
+      readonly name: string;
+      /** User-visible description. */
+      readonly description?: string;
+      /** Initial importance; existing OS/user settings are preserved. */
+      readonly importance: "min" | "low" | "default" | "high";
+    }[];
+  };
   /** External keystore and environment variable references used by muon pack. */
   signing?: MuonAndroidSigningOptions;
   /** Stable reverse-domain application identifier used for installation and updates. */

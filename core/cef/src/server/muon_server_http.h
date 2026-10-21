@@ -25,6 +25,8 @@ struct MuonServerHttpRequest {
   std::vector<uint8_t> body;
   /** Whether HTTP requested a protocol upgrade. */
   bool upgrade = false;
+  /** True only for HTTP/1.1, required for WebSocket upgrades. */
+  bool http11 = false;
 };
 
 /** Result of consuming an input fragment. */
@@ -47,3 +49,21 @@ struct MuonServerHttpParser {
 
 /** Creates a parser with 32 KiB headers, an 8 KiB target and a 1 MiB body limit. */
 std::shared_ptr<MuonServerHttpParser> CreateMuonServerHttpParser();
+
+/** Validated RFC 6455 upgrade metadata, before application authorization. */
+struct MuonServerWebSocketHandshake {
+  /** False for malformed or unsupported upgrade requests. */
+  bool valid = false;
+  /** Value for the native Sec-WebSocket-Accept response. */
+  std::string accept;
+  /** Offered application protocols, excluding the private credential. */
+  std::vector<std::string> protocols;
+  /** Decoded private browser credential; empty when absent. */
+  std::string bearer;
+};
+
+/** Validates an HTTP/1.1 upgrade and removes private protocol credentials.
+ * The caller must still enforce Host, Origin and Bearer policy before use.
+ * Invalid input returns valid=false without exposing a partially parsed secret.
+ */
+MuonServerWebSocketHandshake PrepareMuonServerWebSocket(MuonServerHttpRequest& request);

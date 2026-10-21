@@ -92,6 +92,83 @@ declare global {
      * an idle stream detects a lost peer when a later send fails.
      */
     readonly fetch: (request: Request) => Response | Promise<Response>;
+    /** Optional RFC 6455 WebSocket upgrade and connection handlers. */
+    readonly websocket?: MuonServerWebSocketHandlers;
+  }
+
+  /** A WebSocket accepted by the current page's server binding. */
+  interface MuonServerWebSocket {
+    /** Opaque connection identifier. */
+    readonly id: string;
+    /** The same Request passed to accept, with credentials removed.
+     * Its signal aborts when the connection or its owning binding closes.
+     */
+    readonly request: Request;
+    /** Negotiated subprotocol, or an empty string. */
+    readonly protocol: string;
+    /**
+     * Sends one text or binary message of at most 1 MiB.
+     * @param data - UTF-8 text or raw binary bytes.
+     * @returns After all message bytes are accepted by the OS.
+     * @remarks Await each send before starting another. OS acceptance does not
+     * confirm peer receipt. Sending on a closing connection rejects.
+     */
+    readonly send: (data: string | Uint8Array) => Promise<void>;
+    /**
+     * Sends a close frame without waiting for the peer's reply.
+     * @param code - 1000..1011 except 1004/1005/1006, or 3000..4999; defaults to 1000.
+     * @param reason - UTF-8 reason of at most 123 bytes; defaults to empty.
+     * @returns After the close frame is accepted by the OS.
+     * @remarks Await an outstanding send first. A peer that does not complete
+     * the close handshake is disconnected after five seconds.
+     */
+    readonly close: (code?: number, reason?: string) => Promise<void>;
+  }
+
+  /** Observed closure, including abnormal transport or ownership loss. */
+  interface MuonServerWebSocketCloseEvent {
+    /** Peer code, 1005 for no code, or 1006 if no valid peer close arrived. */
+    readonly code: number;
+    /** Peer reason, or empty for abnormal closure. */
+    readonly reason: string;
+    /** Whether both close frames were exchanged successfully. */
+    readonly wasClean: boolean;
+  }
+
+  /** Handlers for connections that passed native Host, Origin and Bearer checks. */
+  interface MuonServerWebSocketHandlers {
+    /**
+     * Accepts an upgrade or rejects it with HTTP 403.
+     * @param request - Upgrade request with private credentials removed.
+     * @returns False to reject, or options selecting an offered subprotocol.
+     * @remarks An omitted protocol selects muon.auth for browser Bearer
+     * connections, otherwise none. Exceptions produce a generic HTTP 500.
+     */
+    readonly accept: (
+      request: Request,
+    ) =>
+      | false
+      | { readonly protocol?: string }
+      | Promise<false | { readonly protocol?: string }>;
+    /** Runs after the handshake is sent, before any message callbacks. */
+    readonly open?: (socket: MuonServerWebSocket) => void | Promise<void>;
+    /**
+     * Receives text or binary messages of at most 1 MiB.
+     * @param socket - Connection that received the message.
+     * @param data - Validated UTF-8 text or binary bytes.
+     * @returns After application handling finishes.
+     * @remarks Callbacks are awaited in order per connection. Other connections
+     * proceed independently. Handler errors initiate closure with code 1011.
+     */
+    readonly message?: (
+      socket: MuonServerWebSocket,
+      data: string | Uint8Array,
+    ) => void | Promise<void>;
+    /** Runs once after closure; detach and server close report code 1006. */
+    readonly close?: (
+      socket: MuonServerWebSocket,
+      event: MuonServerWebSocketCloseEvent,
+    ) => void | Promise<void>;
   }
 
   /** Address returned after the server starts listening. */

@@ -45,6 +45,35 @@ int main() {
     const auto upgraded = Consume(upgrade, headers + "next");
     Expect(upgraded.request && upgraded.request->upgrade && upgraded.consumed == headers.size(),
         "Upgrade consumed following protocol bytes");
+    const auto handshake_headers = std::string("GET /ws HTTP/1.1\r\nHost: localhost:8000\r\n"
+        "Connection: keep-alive, Upgrade\r\nUpgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n");
+    const auto handshake = Consume(CreateMuonServerHttpParser(), handshake_headers +
+        "Sec-WebSocket-Protocol: muon.auth, muon.bearer.dG9rZW4, chat\r\n\r\n");
+    Expect(handshake.request != nullptr, "Upgrade request was not parsed");
+    auto upgrade_request = *handshake.request;
+    const auto prepared = PrepareMuonServerWebSocket(upgrade_request);
+    Expect(prepared.valid && prepared.accept == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+        "RFC 6455 example handshake was not accepted");
+    Expect(prepared.bearer == "token" && prepared.protocols == std::vector<std::string>({"muon.auth", "chat"}),
+        "Browser bearer protocols were not decoded");
+    for (const auto& [name, value] : upgrade_request.headers) {
+      (void)name;
+      Expect(value.find("muon.bearer.") == std::string::npos, "Private protocol credential reached application headers");
+    }
+    for (const auto& extra : {
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+        "Sec-WebSocket-Version: 13\r\n",
+        "Sec-WebSocket-Protocol: muon.bearer.dG9rZW4\r\n",
+        "Sec-WebSocket-Protocol: muon.auth, muon.bearer.dG9rZW5\r\n",
+        "Sec-WebSocket-Protocol: muon.auth, muon.auth\r\n",
+        "Sec-WebSocket-Protocol: chat, chat\r\n",
+        "Content-Length: 1\r\n"}) {
+      const auto invalid = Consume(CreateMuonServerHttpParser(), handshake_headers + extra + "\r\nx");
+      if (!invalid.request) continue;
+      auto request = *invalid.request;
+      Expect(!PrepareMuonServerWebSocket(request).valid, "Invalid upgrade was accepted");
+    }
     const auto pipeline = Consume(CreateMuonServerHttpParser(),
         "GET /one HTTP/1.1\r\nHost: localhost:8000\r\n\r\nGET /two HTTP/1.1\r\n\r\n");
     Expect(pipeline.request && pipeline.request->target == "/one", "Parser dispatched a second request");

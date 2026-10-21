@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { watch } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -17,7 +18,7 @@ import { expect, it } from "vitest";
 import { createMuonCapabilityModuleResolver } from "../../ui/common/capability.ts";
 
 it.each(["simple", "validate"] as const)(
-  "allows authenticated binary HTTP from the product asset origin in %s mode",
+  "allows authenticated HTTP and WebSocket from the product asset origin in %s mode",
   async (mode) => {
     const runtime = resolve(
       process.env.MUON_TEST_LINUX_RUNTIME ??
@@ -91,7 +92,11 @@ await filesystem.writeTextFile(${JSON.stringify(readyPath)}, 'ready', 'utf8', un
           titleBarType: "native",
         },
         network: {
-          allow: [`${origin}/**`, `${endpoint}/**`],
+          allow: [
+            `${origin}/**`,
+            `${endpoint}/**`,
+            `${endpoint.replace("http:", "ws:")}/**`,
+          ],
           localAccess: {
             loopbackOrigins: [{ scheme: "asset", domain: "main" }],
           },
@@ -251,6 +256,279 @@ await filesystem.writeTextFile(${JSON.stringify(readyPath)}, 'ready', 'utf8', un
         handled: 1,
       });
       await evaluate(`await window.server.close(); return true;`);
+      expect(
+        await evaluate(`
+        window.server = await window.serverApi.createServer({
+          name: 'websocket-driver', port: ${serverAddress.port},
+          bearerToken: window.token, allowedOrigins: [${JSON.stringify(origin)}],
+        });
+        window.wsRequests = [];
+        window.wsClosed = [];
+        window.binding = await window.server.attach({
+          fetch: () => new Response('HTTP still works'),
+          websocket: {
+            accept: request => {
+              window.wsRequests.push([...request.headers]);
+              const path = new URL(request.url).pathname;
+              return path === '/chat' ? {protocol: 'chat'} : path === '/echo' ? {} : false;
+            },
+            open: socket => { window.lastSocket = socket; },
+            message: async (socket, data) => {
+              if (data === 'close') { await socket.close(3001, '完了'); return; }
+              if (data === 'throw') throw new Error('private handler detail');
+              if (data === 'path') { await socket.send(new URL(socket.request.url).pathname); return; }
+              if (data === 'invalid-close') {
+                try { await socket.close(1006, 'invalid'); } catch {}
+                await socket.send('still open'); return;
+              }
+              if (data === 'stop') { await window.server.close(); return; }
+              await socket.send(data);
+            },
+            close: (socket, event) => { window.wsClosed.push({id: socket.id, ...event}); },
+          },
+        });
+        await window.server.listen();
+        const credential = 'muon.bearer.' + btoa(window.token).replace(/=/g, '').replace(/\\+/g, '-').replace(/\\//g, '_');
+        const socket = new WebSocket(${JSON.stringify(`${endpoint.replace("http:", "ws:")}/echo`)}, ['muon.auth', credential]);
+        socket.binaryType = 'arraybuffer';
+        await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(new Error('WebSocket connection failed')); });
+        const exchange = async data => {
+          const message = new Promise((resolve, reject) => { socket.onmessage = event => resolve(event.data); socket.onerror = reject; });
+          socket.send(data);
+          return await message;
+        };
+        const text = await exchange('日本語 WebSocket');
+        const bytes = new Uint8Array(256 * 1024).map((_, index) => index % 251);
+        const echoed = new Uint8Array(await exchange(bytes));
+        const closed = new Promise(resolve => { socket.onclose = event => resolve({code: event.code, reason: event.reason, wasClean: event.wasClean}); });
+        socket.close(1000, 'finished');
+        return {text, size: echoed.length, exact: bytes.every((value, index) => value === echoed[index]), protocol: socket.protocol, closed: await closed, leaked: JSON.stringify(window.wsRequests).includes(window.token) || JSON.stringify(window.wsRequests).includes('muon.bearer.')};
+      `),
+      ).toEqual({
+        text: "日本語 WebSocket",
+        size: 256 * 1024,
+        exact: true,
+        protocol: "muon.auth",
+        closed: { code: 1000, reason: "finished", wasClean: true },
+        leaked: false,
+      });
+      const token = await evaluate<string>("return window.token;");
+      const credential = `muon.bearer.${Buffer.from(token).toString("base64url")}`;
+      const probe = async (
+        headers: Record<string, string>,
+        path: string,
+      ): Promise<number> =>
+        await new Promise<number>((resolveProbe, reject) => {
+          const request = httpRequest(`${endpoint}${path}`, {
+            headers: {
+              Connection: "Upgrade",
+              Upgrade: "websocket",
+              "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+              "Sec-WebSocket-Version": "13",
+              ...headers,
+            },
+          });
+          request.on("error", reject);
+          request.on("response", (response) => {
+            response.resume();
+            resolveProbe(response.statusCode!);
+          });
+          request.on("upgrade", (response, socket) => {
+            socket.destroy();
+            resolveProbe(response.statusCode!);
+          });
+          request.end();
+        });
+      const beforeRejected = await evaluate<number>(
+        "return window.wsRequests.length;",
+      );
+      for (const [headers, status] of [
+        [{}, 401],
+        [{ Authorization: "Bearer invalid" }, 401],
+        [
+          {
+            Authorization: `Bearer ${token}`,
+            Origin: "https://untrusted.example",
+          },
+          403,
+        ],
+        [{ Authorization: `Bearer ${token}`, Host: "untrusted.example" }, 403],
+        [
+          {
+            Authorization: `Bearer ${token}`,
+            "Sec-WebSocket-Protocol": `muon.auth, ${credential}`,
+          },
+          401,
+        ],
+        [
+          { "Sec-WebSocket-Protocol": "muon.auth, muon.bearer.aW52YWxpZA" },
+          401,
+        ],
+      ] as Array<[Record<string, string>, number]>) {
+        expect(await probe(headers, "/echo")).toBe(status);
+      }
+      expect(await evaluate("return window.wsRequests.length;")).toBe(
+        beforeRejected,
+      );
+      expect(await probe({ Authorization: `Bearer ${token}` }, "/denied")).toBe(
+        403,
+      );
+      expect(await probe({ Authorization: `Bearer ${token}` }, "/echo")).toBe(
+        101,
+      );
+      expect(
+        await evaluate(
+          `return JSON.stringify(window.wsRequests).includes(window.token) || JSON.stringify(window.wsRequests).includes('muon.bearer.');`,
+        ),
+      ).toBe(false);
+
+      const connect = async (
+        path: string,
+        protocols: string[],
+      ): Promise<WebSocket> => {
+        const socket = new WebSocket(
+          `${endpoint.replace("http:", "ws:")}${path}`,
+          protocols,
+        );
+        socket.binaryType = "arraybuffer";
+        await new Promise<void>((opened, reject) => {
+          socket.addEventListener("open", () => opened(), { once: true });
+          socket.addEventListener(
+            "error",
+            () => reject(new Error("External WebSocket connection failed")),
+            { once: true },
+          );
+        });
+        return socket;
+      };
+      const exchange = async (
+        socket: WebSocket,
+        data: string | Uint8Array,
+      ): Promise<unknown> => {
+        const received = new Promise<unknown>((resolveMessage, reject) => {
+          socket.addEventListener(
+            "message",
+            (event) => resolveMessage(event.data),
+            { once: true },
+          );
+          socket.addEventListener("error", reject, { once: true });
+          socket.addEventListener(
+            "close",
+            () => reject(new Error("WebSocket closed before echo")),
+            { once: true },
+          );
+        });
+        socket.send(typeof data === "string" ? data : new Uint8Array(data));
+        return await received;
+      };
+      const closed = async (
+        socket: WebSocket,
+      ): Promise<{ code: number; reason: string; wasClean: boolean }> =>
+        await new Promise((resolveClose) =>
+          socket.addEventListener(
+            "close",
+            (event) =>
+              resolveClose({
+                code: event.code,
+                reason: event.reason,
+                wasClean: event.wasClean,
+              }),
+            { once: true },
+          ),
+        );
+      const external = await connect("/chat", [
+        "chat",
+        "muon.auth",
+        credential,
+      ]);
+      expect(external.protocol).toBe("chat");
+      expect(await exchange(external, "outside")).toBe("outside");
+      expect(await exchange(external, "invalid-close")).toBe("still open");
+      expect(await exchange(external, "path")).toBe("/chat");
+      const payload = new Uint8Array(1024 * 1024).map(
+        (_, index) => index % 239,
+      );
+      expect(
+        new Uint8Array((await exchange(external, payload)) as ArrayBuffer),
+      ).toEqual(payload);
+      const externalClosed = closed(external);
+      external.send("close");
+      expect(await externalClosed).toEqual({
+        code: 3001,
+        reason: "完了",
+        wasClean: true,
+      });
+
+      const failed = await connect("/echo", ["muon.auth", credential]);
+      const failedClosed = closed(failed);
+      failed.send("throw");
+      expect(await failedClosed).toEqual({
+        code: 1011,
+        reason: "Handler failed",
+        wasClean: true,
+      });
+
+      const detached = await connect("/echo", ["muon.auth", credential]);
+      expect(await exchange(detached, "before detach")).toBe("before detach");
+      const detachedClosed = closed(detached);
+      await evaluate("await window.binding.detach(); return true;");
+      expect((await detachedClosed).wasClean).toBe(false);
+      expect(await probe({ Authorization: `Bearer ${token}` }, "/echo")).toBe(
+        503,
+      );
+      expect(
+        await evaluate(`
+        try { await window.lastSocket.send('late'); return false; }
+        catch { return true; }
+      `),
+      ).toBe(true);
+      await evaluate(`await window.server.close(); return true;`);
+      await evaluate(`
+        window.startPublicServer = async () => {
+          window.server = await window.serverApi.createServer({name: 'public-websocket', port: ${serverAddress.port}, allowedOrigins: [${JSON.stringify(origin)}]});
+          await window.server.attach({
+            fetch: () => new Response('public HTTP'),
+            websocket: {
+              accept: () => ({}),
+              message: async (socket, data) => {
+                if (data === 'stop') await window.server.close();
+                else await socket.send(data);
+              },
+            },
+          });
+          await window.server.listen();
+        };
+        await window.startPublicServer(); return true;
+      `);
+      const publicSocket = await connect("/echo", []);
+      expect(await exchange(publicSocket, "no bearer")).toBe("no bearer");
+      expect(
+        await evaluate(`
+        const socket = new WebSocket(${JSON.stringify(endpoint.replace("http:", "ws:") + "/echo")});
+        const echoed = new Promise((resolve, reject) => {
+          socket.onopen = () => socket.send('asset without bearer');
+          socket.onmessage = event => resolve(event.data);
+          socket.onerror = reject;
+        });
+        const value = await echoed;
+        const closed = new Promise(resolve => { socket.onclose = resolve; });
+        socket.close(1000); await closed; return value;
+      `),
+      ).toBe("asset without bearer");
+      const stopped = closed(publicSocket);
+      publicSocket.send("stop");
+      expect((await stopped).wasClean).toBe(false);
+      await expect(fetch(endpoint)).rejects.toThrow();
+
+      await evaluate("await window.startPublicServer(); return true;");
+      const navigated = await connect("/echo", []);
+      expect(await exchange(navigated, "before navigation")).toBe(
+        "before navigation",
+      );
+      const navigatedClosed = closed(navigated);
+      await call("browser_navigate", { url: `${origin}/index.html?mpa` });
+      expect((await navigatedClosed).wasClean).toBe(false);
+      await expect(fetch(endpoint)).rejects.toThrow();
     } catch (error) {
       throw new Error(`${String(error)}\nMuon stderr:\n${diagnostics}`, {
         cause: error,

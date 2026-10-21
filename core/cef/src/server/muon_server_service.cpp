@@ -6,6 +6,7 @@
 #include "server/muon_server_service.h"
 #include "server/muon_server_http.h"
 #include "server/muon_server_socket.h"
+#include "server/muon_server_websocket.h"
 #include "muon_json_helpers.h"
 #include "include/cef_parser.h"
 #include <array>
@@ -28,6 +29,7 @@ struct ServerResponse {
   ServerBytes body;
   std::shared_ptr<cardio::promise_source<void>> sent;
   bool streaming = false;
+  bool upgraded = false;
 };
 struct ServerConnection {
   uint64_t id;
@@ -38,6 +40,16 @@ struct ServerConnection {
   std::shared_ptr<cardio::promise_source<void>> stream_end;
   bool writing = false;
   bool stream_complete = false;
+  std::string binding;
+  MuonServerWebSocketHandshake handshake;
+  std::shared_ptr<MuonServerWebSocketCodec> websocket;
+  std::string protocol;
+  std::shared_ptr<cardio::promise_source<void>> websocket_ack;
+  cardio::primitives::mutex websocket_write;
+  cardio::cancellation_source websocket_timer;
+  bool websocket_ready = false;
+  bool websocket_sending = false;
+  bool websocket_timer_started = false;
 };
 struct ServerRequest {
   std::shared_ptr<ServerConnection> connection;
@@ -48,6 +60,7 @@ struct ServerBinding {
   std::string token;
   std::deque<ServerBytes> events;
   std::shared_ptr<cardio::promise_source<ServerBytes>> waiting;
+  bool websocket = false;
 };
 struct ServerState {
   std::string id;
@@ -247,6 +260,11 @@ static void CheckServerStopped(const std::shared_ptr<ServerState>& state) {
   auto stopped = std::move(state->stopped);
   for (const auto& pending : stopped) pending->resolve();
 }
+static void CancelServerWebSocket(const std::shared_ptr<ServerConnection>& connection) {
+  if (connection->websocket_ack)
+    connection->websocket_ack->try_reject(std::make_exception_ptr(cardio::canceled_exception()));
+  (void)connection->websocket_timer.cancel();
+}
 static void DetachServer(const std::shared_ptr<ServerState>& state) {
   if (state->binding && state->binding->waiting) {
     auto pending = std::move(state->binding->waiting);
@@ -256,6 +274,7 @@ static void DetachServer(const std::shared_ptr<ServerState>& state) {
   for (const auto& [id, request] : state->requests) {
     (void)id;
     if (request.connection->responding) {
+      CancelServerWebSocket(request.connection);
       if (request.connection->stream_end)
         request.connection->stream_end->try_reject(std::make_exception_ptr(cardio::canceled_exception()));
       cardio::fire_and_forget(request.connection->socket->close());
@@ -270,6 +289,7 @@ static cardio::promise<void> StopServerIo(std::shared_ptr<ServerState> state) {
   state->listener.reset();
   for (const auto& [id, connection] : connections) {
     (void)id;
+    CancelServerWebSocket(connection);
     if (connection->response)
       connection->response->try_reject(std::make_exception_ptr(cardio::canceled_exception()));
     if (connection->stream_end)
@@ -298,7 +318,7 @@ static cardio::promise<void> WriteServerResponse(
     std::shared_ptr<ServerConnection> connection, const ServerResponse& response) {
   auto header = "HTTP/1.1 " + std::to_string(response.status) + " Response\r\n";
   for (const auto& [name, value] : response.headers) header += name + ": " + value + "\r\n";
-  header += response.streaming ? "Transfer-Encoding: chunked\r\n\r\n" :
+  header += response.upgraded ? "\r\n" : response.streaming ? "Transfer-Encoding: chunked\r\n\r\n" :
       "Content-Length: " + std::to_string(response.body.size()) + "\r\n\r\n";
   co_await connection->socket->write(std::span(
       reinterpret_cast<const uint8_t*>(header.data()), header.size()));
@@ -319,30 +339,109 @@ static cardio::promise<void> MonitorServerConnection(std::shared_ptr<ServerConne
   }
   if (failed) co_await connection->socket->close();
 }
+static cardio::promise<void> DrainServerWebSocket(std::shared_ptr<ServerConnection> connection) {
+  // cardio awaits expose the stored value by reference; move the RAII handle
+  // out before the temporary promise is released.
+  auto lock = std::move(co_await connection->websocket_write.lock());
+  while (connection->websocket->status().write_pending) {
+    const auto bytes = connection->websocket->take_output();
+    if (bytes.empty()) throw std::runtime_error("WebSocket output made no progress");
+    co_await connection->socket->write(bytes);
+  }
+}
+static cardio::promise<void> ExpireServerWebSocket(std::shared_ptr<ServerConnection> connection) {
+  try {
+    co_await cardio::promises::delay(5000, connection->websocket_timer.get_cancellation());
+  } catch (const cardio::canceled_exception&) { co_return; }
+  CancelServerWebSocket(connection);
+  co_await connection->socket->close();
+}
+static void StartServerWebSocketTimeout(const std::shared_ptr<ServerConnection>& connection) {
+  if (connection->websocket_timer_started) return;
+  connection->websocket_timer_started = true;
+  cardio::fire_and_forget(ExpireServerWebSocket(connection));
+}
+static cardio::promise<void> DeliverServerWebSocket(
+    std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection,
+    const std::string& type, bool binary, const ServerBytes& body) {
+  if (!state->binding || state->binding->token != connection->binding)
+    throw cardio::canceled_exception();
+  connection->websocket_ack = std::make_shared<cardio::promise_source<void>>();
+  auto pending = connection->websocket_ack->get_promise();
+  QueueServerEvent(state, ServerEnvelope("{\"type\":" + QuoteServerString(type) +
+      ",\"requestId\":" + QuoteServerString(connection->request_id) +
+      ",\"protocol\":" + QuoteServerString(connection->protocol) +
+      ",\"binary\":" + (binary ? "true" : "false") + "}", body));
+  co_await pending;
+  connection->websocket_ack.reset();
+}
+static cardio::promise<void> RunServerWebSocket(
+    std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection,
+    ServerBytes initial) {
+  co_await DeliverServerWebSocket(state, connection, "ws_open", false, {});
+  auto buffer = std::array<uint8_t, 16 * 1024>{};
+  while (connection->websocket->status().read_enabled) {
+    auto messages = std::vector<MuonServerWebSocketMessage>{};
+    if (!initial.empty()) {
+      messages = connection->websocket->receive(initial);
+      initial.clear();
+    } else {
+      const auto size = co_await connection->socket->read(buffer);
+      if (!size) break;
+      messages = connection->websocket->receive(std::span(buffer.data(), size));
+    }
+    co_await DrainServerWebSocket(connection);
+    if (connection->websocket->status().close_sent) StartServerWebSocketTimeout(connection);
+    for (const auto& message : messages) {
+      co_await DeliverServerWebSocket(state, connection, "ws_message", message.binary, message.body);
+    }
+  }
+}
 static cardio::promise<void> RunServerConnection(
     std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection) {
   auto acknowledged = std::shared_ptr<cardio::promise_source<void>>{};
   auto monitor = cardio::resolved();
+  auto clean_websocket = false;
   try {
     const auto parser = CreateMuonServerHttpParser();
     auto buffer = std::array<uint8_t, 16 * 1024>{};
     auto parsed = MuonServerHttpParseResult{0, 0, {}};
+    auto remaining = ServerBytes{};
     while (!parsed.request && !parsed.error_status) {
       const auto size = co_await connection->socket->read(buffer);
       parsed = size ? parser->consume(std::span(buffer.data(), size)) : parser->finish();
+      if (parsed.request && parsed.consumed < size)
+        remaining.assign(buffer.begin() + parsed.consumed, buffer.begin() + size);
     }
     auto response = ServerErrorResponse(parsed.error_status ? parsed.error_status : 400);
     if (parsed.request && !state->closing) {
-      const auto& incoming = *parsed.request;
+      auto incoming = *parsed.request;
+      if (incoming.upgrade) {
+        connection->handshake = PrepareMuonServerWebSocket(incoming);
+        if (connection->handshake.valid && !connection->handshake.bearer.empty()) {
+          if (state->bearer_token.empty() || !IsServerBearerToken(connection->handshake.bearer))
+            connection->handshake.valid = false;
+          // An existing Authorization becomes a duplicate and is rejected by
+          // the common policy; credentials cannot override each other.
+          incoming.headers.emplace_back("Authorization", "Bearer " + connection->handshake.bearer);
+          connection->handshake.bearer.clear();
+        }
+      }
       auto access = CheckServerAccess(*state, incoming.method, incoming.headers);
       const auto target = incoming.target.starts_with("/") ? state->url + incoming.target : incoming.target;
       if (access.status) response = ServerErrorResponse(access.status, std::move(access.headers));
-      else if (!target.starts_with(state->url + "/") || incoming.upgrade)
+      else if (!target.starts_with(state->url + "/") ||
+          (incoming.upgrade && !connection->handshake.valid))
         response = ServerErrorResponse(400, std::move(access.headers));
       else if (!state->binding || state->requests.size() >= kMaxServerRequests ||
           state->binding->events.size() >= kMaxServerRequests * 2)
         response = ServerErrorResponse(503, std::move(access.headers));
+      else if (incoming.upgrade && !state->binding->websocket)
+        response = ServerErrorResponse(400, std::move(access.headers));
       else {
+        if (incoming.upgrade) std::erase_if(incoming.headers, [](const auto& header) {
+          return LowerServerHeader(header.first) == "authorization";
+        });
         auto header_json = std::string("[");
         for (const auto& [name, value] : incoming.headers) {
           if (header_json.size() > 1) header_json += ',';
@@ -350,14 +449,16 @@ static cardio::promise<void> RunServerConnection(
         }
         header_json += ']';
         connection->request_id = std::to_string(++state->next_request);
+        connection->binding = state->binding->token;
         connection->response = std::make_shared<cardio::promise_source<ServerResponse>>();
         auto pending = connection->response->get_promise();
         state->requests.emplace(connection->request_id,
             ServerRequest{connection, incoming.method, std::move(access.headers)});
-        QueueServerEvent(state, ServerEnvelope("{\"type\":\"request\",\"requestId\":" +
+        QueueServerEvent(state, ServerEnvelope("{\"type\":" +
+            QuoteServerString(incoming.upgrade ? "ws_request" : "request") + ",\"requestId\":" +
             QuoteServerString(connection->request_id) + ",\"method\":" + QuoteServerString(incoming.method) +
             ",\"url\":" + QuoteServerString(target) + ",\"headers\":" + header_json + "}", incoming.body));
-        monitor = MonitorServerConnection(connection);
+        if (!incoming.upgrade) monitor = MonitorServerConnection(connection);
         response = co_await pending;
       }
     }
@@ -368,17 +469,33 @@ static cardio::promise<void> RunServerConnection(
       connection->stream_end = std::make_shared<cardio::promise_source<void>>();
       stream_finished = connection->stream_end->get_promise();
     }
+    if (response.upgraded) connection->websocket_ready = true;
     if (acknowledged) acknowledged->try_resolve();
-    co_await stream_finished;
+    if (response.upgraded) {
+      co_await RunServerWebSocket(state, connection, std::move(remaining));
+      const auto status = connection->websocket->status();
+      clean_websocket = status.close_received && status.close_sent;
+    } else co_await stream_finished;
   } catch (...) {
     if (acknowledged) acknowledged->try_reject(std::current_exception());
   }
+  CancelServerWebSocket(connection);
+  connection->websocket_ready = false;
   // Closing cancels the monitor before its buffer and socket can be released.
   co_await connection->socket->close();
   co_await monitor;
   if (!connection->request_id.empty() && state->requests.erase(connection->request_id)) {
-    QueueServerEvent(state, ServerEnvelope("{\"type\":\"disconnect\",\"requestId\":" +
-        QuoteServerString(connection->request_id) + "}"));
+    if (state->binding && state->binding->token == connection->binding) {
+      if (connection->websocket) {
+        const auto status = connection->websocket->status();
+        QueueServerEvent(state, ServerEnvelope("{\"type\":\"ws_close\",\"requestId\":" +
+            QuoteServerString(connection->request_id) + ",\"code\":" +
+            std::to_string(status.close_received ? status.code : 1006) + ",\"reason\":" +
+            QuoteServerString(status.close_received ? status.reason : "") +
+            ",\"wasClean\":" + (clean_websocket ? "true" : "false") + "}"));
+      } else QueueServerEvent(state, ServerEnvelope("{\"type\":\"disconnect\",\"requestId\":" +
+          QuoteServerString(connection->request_id) + "}"));
+    }
   }
   state->connections.erase(connection->id);
   CheckServerStopped(state);
@@ -449,6 +566,7 @@ static cardio::promise<void> RespondToServerRequest(const std::shared_ptr<Server
 }
 
 static cardio::promise<void> AbortServerStream(std::shared_ptr<ServerConnection> connection) {
+  CancelServerWebSocket(connection);
   const auto canceled = std::make_exception_ptr(cardio::canceled_exception());
   if (connection->response) connection->response->try_reject(canceled);
   if (connection->stream_end) connection->stream_end->try_reject(canceled);
@@ -486,6 +604,58 @@ static cardio::promise<void> WriteServerChunk(std::shared_ptr<ServerState> state
     connection->writing = false;
     connection->stream_end->try_reject(std::current_exception());
     throw;
+  }
+}
+
+static cardio::promise<void> AcceptServerWebSocket(
+    std::shared_ptr<ServerState> state, yyjson_val* root) {
+  const auto found = state->requests.find(RequiredServerString(root, "requestId"));
+  if (found == state->requests.end()) throw std::runtime_error("WebSocket request is no longer active");
+  const auto connection = found->second.connection;
+  if (!connection->handshake.valid || connection->responding)
+    throw std::runtime_error("Request cannot upgrade to WebSocket");
+  auto protocol = RequiredServerString(root, "protocol");
+  const auto& offered = connection->handshake.protocols;
+  if (protocol.empty() && std::find(offered.begin(), offered.end(), "muon.auth") != offered.end())
+    protocol = "muon.auth";
+  if (!protocol.empty() && std::find(offered.begin(), offered.end(), protocol) == offered.end())
+    throw std::runtime_error("WebSocket protocol was not offered by the client");
+  auto headers = ServerHeaders{{"Upgrade", "websocket"}, {"Connection", "Upgrade"},
+      {"Sec-WebSocket-Accept", connection->handshake.accept}};
+  if (!protocol.empty()) headers.emplace_back("Sec-WebSocket-Protocol", protocol);
+  auto sent = std::make_shared<cardio::promise_source<void>>();
+  auto pending = sent->get_promise();
+  connection->protocol = std::move(protocol);
+  connection->websocket = CreateMuonServerWebSocketCodec();
+  connection->responding = true;
+  connection->response->resolve(ServerResponse{101, std::move(headers), {}, sent, false, true});
+  co_await pending;
+}
+static cardio::promise<void> SendServerWebSocket(
+    std::shared_ptr<ServerConnection> connection, yyjson_val* root,
+    const ServerBytes& body, bool close) {
+  if (!connection->websocket_ready || connection->websocket_sending)
+    throw std::runtime_error("WebSocket is unavailable or already sending");
+  if (close) {
+    const auto code = yyjson_obj_get(root, "code");
+    if (!yyjson_is_uint(code) || yyjson_get_uint(code) > 65535)
+      throw std::runtime_error("Invalid WebSocket close code");
+    connection->websocket->close(static_cast<uint16_t>(yyjson_get_uint(code)), RequiredServerString(root, "reason"));
+    StartServerWebSocketTimeout(connection);
+  } else {
+    const auto binary = yyjson_obj_get(root, "binary");
+    if (!yyjson_is_bool(binary)) throw std::runtime_error("Invalid WebSocket message type");
+    connection->websocket->queue(yyjson_get_bool(binary), body);
+  }
+  connection->websocket_sending = true;
+  auto failure = std::exception_ptr{};
+  try { co_await DrainServerWebSocket(connection); }
+  catch (...) { failure = std::current_exception(); }
+  connection->websocket_sending = false;
+  if (failure) {
+    CancelServerWebSocket(connection);
+    co_await connection->socket->close();
+    std::rethrow_exception(failure);
   }
 }
 
@@ -558,6 +728,7 @@ static cardio::promise<ServerBytes> DispatchServer(
     if (state->binding) throw std::runtime_error("Server already has a handler binding");
     state->binding = std::make_unique<ServerBinding>();
     state->binding->token = std::to_string(++state->next_binding);
+    state->binding->websocket = yyjson_get_bool(yyjson_obj_get(root, "websocket"));
     co_return ServerEnvelope("{\"binding\":" + QuoteServerString(state->binding->token) + "}");
   }
   if (!state->binding || RequiredServerString(root, "binding") != state->binding->token) {
@@ -585,6 +756,21 @@ static cardio::promise<ServerBytes> DispatchServer(
     state->binding->waiting = std::make_shared<cardio::promise_source<ServerBytes>>();
     auto pending = state->binding->waiting->get_promise();
     co_return co_await pending;
+  }
+  if (operation == "ws_accept") {
+    co_await AcceptServerWebSocket(state, root);
+    co_return ServerEnvelope("null");
+  }
+  if (operation == "ws_send" || operation == "ws_close" || operation == "ws_ack") {
+    const auto request = state->requests.find(RequiredServerString(root, "requestId"));
+    if (request == state->requests.end()) throw std::runtime_error("WebSocket is no longer active");
+    const auto connection = request->second.connection;
+    if (!connection->websocket) throw std::runtime_error("Request is not a WebSocket");
+    if (operation == "ws_ack") {
+      if (!connection->websocket_ack) throw std::runtime_error("WebSocket has no pending event");
+      connection->websocket_ack->try_resolve();
+    } else co_await SendServerWebSocket(connection, root, body, operation == "ws_close");
+    co_return ServerEnvelope("null");
   }
   if (operation == "write" || operation == "finish" || operation == "abort") {
     const auto request_id = RequiredServerString(root, "requestId");

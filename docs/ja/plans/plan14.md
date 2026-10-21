@@ -152,7 +152,7 @@ Bearerを使うClaude Codeの設定例では、ヘッダーに独自の環境変
 }
 ```
 
-これらは公式の設定方式に基づく例であり、未実装のmuonサーバーへの接続試験を済ませたものではない。
+これらは公式の設定方式に基づく例である。Codexの実接続検証は段階3の実施記録に記載する。Claude Codeの実接続検証はユーザー指示により省略した。
 
 ## 他のローカルMCPサーバーの既定値
 
@@ -202,7 +202,7 @@ CORSは、ブラウザーが別Originの応答を読み取るための許可で�
 
 OriginがないことはCLI由来である証明にはならない。ブラウザーからの画像取得やナビゲーションなどのGET／HEAD要求にも、Originが付かない場合がある。汎用HTTPの実装では、GET／HEADへ状態変更を割り当てず、用途に応じた追加の検証が必要か確認する。Host／Originだけで外部Webサイトからのあらゆる要求を拒否できるとは説明しない。[Fetch StandardのOrigin付加規則](https://fetch.spec.whatwg.org/#append-a-request-origin-header)
 
-ブラウザー標準のWebSocket APIは任意のAuthorizationヘッダーを指定できない。Bearerを有効にした内部WebSocket接続では、所有元と宛先を限定したネイティブ側の付加や別の認証手順が必要になる。この接続方法は未確定であり、ブラウザーからのfetchと同じ設定だけで動くとは扱わない。[WebSocketの公開インターフェイス](https://websockets.spec.whatwg.org/#the-websocket-interface)
+ブラウザー標準のWebSocket APIは任意のAuthorizationヘッダーを指定できない。Bearerを有効にした内部WebSocket接続では、段階4で定めた専用のsubprotocol候補を使って資格情報を渡す。ブラウザーからのfetchと同じ設定だけでは接続できない。[WebSocketの公開インターフェイス](https://websockets.spec.whatwg.org/#the-websocket-interface)
 
 ### MCP仕様との関係
 
@@ -315,7 +315,7 @@ HTTPハンドラーはWeb標準の`Request`を受け取り、`Response`または
 
 `Request`、`Response`、`ReadableStream`をそのままRPCへ渡すことは前提にしない。renderer側のアダプターがメタデータ、バイナリーの本文、ストリームの操作へ変換する。本文の受信方法、キャンセル、送信Promiseの完了条件は、CEFの公開APIで実現できる範囲を検証して定める。
 
-WebSocketは同じ`attach()`で接続要求、メッセージ、切断のハンドラーを登録する形とする。接続要求を許可した後は接続ハンドルで送受信する。HTTP応答とWebSocket接続の型は分け、text／binary、subprotocol、close codeなどの対応範囲をCEFの検証前に保証しない。WebSocketの具体的なメンバー名と型は未確定である。
+WebSocketは同じ`attach()`で接続要求、メッセージ、切断のハンドラーを登録する。接続要求を許可した後は接続ハンドルで送受信し、HTTP応答とは別の型で扱う。具体的なメンバー名と型、text／binary、subprotocol、close codeの対応範囲は段階4で確定した。
 
 MCP SDKのサーバー処理を載せるアダプターと、汎用HTTPサーバー機能は分ける。Fetch形式を採用しても、Nodeの`http.Server`やExpressとの直接互換性は保証しない。ブラウザーで使えるNPMパッケージとNode専用パッケージを区別し、利用するMCP SDKとの接続を検証する。
 
@@ -380,7 +380,7 @@ CEF内蔵サービスにサーバー、ハンドラー登録、要求・接続�
 この段階は、次の単位で進める。通常のMCP SDK接続を確認した後は、実Codexの接続試験と独立したフレーム処理の実装を並行できる。
 
 1. フレーム処理と実行可能なネイティブテストを追加する。text／binary、分割受信、fragmentの再構成、UTF-8、不正なmaskや長さ、ping／pong、close、上限超過を確認する。メッセージは1 MiBまでとし、受信結果と送信キューにも件数・バイト数の上限を設ける。送信結果は最大64 KiBずつTCP層へ渡す。
-2. HTTP Upgrade、認証、ページとの通信を接続する。`attach()`の`websocket`へ`accept`、`open`、`message`、`close`を登録する。`accept`はRequestを受け取り、拒否を示す`false`か、選択するprotocolを任意に指定したオブジェクトを返す。接続ハンドルには`id`、`protocol`、非同期の`send()`と`close()`を設ける。textはstring、binaryはUint8Arrayで受け取る。同じ接続のメッセージ処理は順序を保ち、アプリが処理するまで受信の進行を抑える。
+2. HTTP Upgrade、認証、ページとの通信を接続する。`attach()`の`websocket`へ`accept`、`open`、`message`、`close`を登録する。`accept`はRequestを受け取り、拒否を示す`false`か、選択するprotocolを任意に指定したオブジェクトを返す。接続ハンドルには`id`、`request`、`protocol`、非同期の`send()`と`close()`を設ける。`request`は受理したRequestと同じオブジェクトであり、メッセージ処理でも接続先のパスやOriginを参照できる。認証用の秘密はこのRequestから取り除く。textはstring、binaryはUint8Arrayで受け取る。同じ接続のメッセージ処理は順序を保ち、アプリが処理するまで受信の進行を抑える。
 3. CEF内と外部のクライアントで往復、認証拒否、例外、明示停止、ページ破棄を検証する。外部クライアントはAuthorizationのBearerを使える。標準のブラウザーWebSocketでは、subprotocol候補に`muon.auth`と`muon.bearer.<tokenのbase64url表現>`を渡す方式を追加する。認証用の値はUpgrade前にネイティブ側で検証して取り除き、応答のprotocolやアプリの候補には含めない。アプリがprotocolを指定しなければ`muon.auth`を選ぶ。URLへ資格情報を入れず、通常のHost／Origin検証も維持する。
 
 初版では圧縮などの拡張を交渉しない。close codeはWslayが受信できる1000～1011のうち1004・1005・1006を除く値と、3000～4999を扱い、それ以外は送信時にも拒否する。理由はUTF-8で123バイトまでとする。1012～1014などの追加コードも対応済みとは説明しない。[Wslayのclose code検証](https://github.com/tatsuhiro-t/wslay/blob/release-1.1.1/lib/wslay_event.c#L554-L558)、[closeの公開API](https://tatsuhiro-t.github.io/wslay/man/wslay_event_queue_close.html)
@@ -421,12 +421,10 @@ LinuxとWindowsの配布対象でビルドと動作を確認し、汎用HTTP、W
 
 ## 未確定事項
 
-- 後続段階で追加するAPIの詳細な引数・戻り値、WebSocketのメンバー名と型。名前の衝突と重複登録、明示的な登録解除で処理中の要求を打ち切る規則は、段階1の実施記録に記載する。
+- 後続段階で追加するAPIの詳細な引数・戻り値。初版のWebSocket APIは段階4で確定した。名前の衝突と重複登録、明示的な登録解除で処理中の要求を打ち切る規則は、段階1の実施記録に記載する。
 - 動的ポートの提供方法と、IPv4とIPv6を同じサーバーとして扱う範囲。段階1はIPv4と明示指定のポートを扱う。
 - 将来のアプリ連動を追加する時期と生存期間の指定方法、既存サーバー取得・再登録の権限、常駐するJavaScript実行環境の提供方法。初版のページ連動と管理対象の分離は採用済みである。
-- 内部専用のWebSocket接続で、ブラウザーから資格情報を付加する方法。HTTPは段階2の実施記録に記載したBearer設定を使う。
-- SSEとWebSocketのリソース上限、要求のタイムアウト。送信Promiseの完了は、対象データをOSが受け付けた時点とする。
-- 使用するMCP SDKと対応プロトコルのバージョン、CEFで提供するWebSocketの機能範囲。
+- HTTP要求やアプリのハンドラーに対するタイムアウトの追加。初版ではハンドラーの実行期限を自動では設けず、切断・登録解除・停止を扱う。WebSocketのclose開始後は5秒で通信を打ち切る。
 
 アプリ連動の生存期間と`getServer()`、画面遷移から独立したJavaScript実行環境、全ウインドウを閉じた後の常駐、便利関数`serve()`、一般向けの低水準APIは初版の必須範囲に含めない。LAN公開、TLS、OAuth認可サーバー、クライアントへの自動登録、TCPを使わない内部専用経路も後続の検討対象とする。必要になった場合に、追加する用途と完了条件をこの計画へ記録する。
 
@@ -470,7 +468,23 @@ SDKを使う契約テスト1件と、実CEFのsimple／validate・Bearerあり�
 
 Codex CLI 0.163.0でも、Bearerあり／なしの両方で、状態取得、1回の書込み、再取得が成功した。別のSDKクライアントとPlaywright MCPでも変更後の状態を確認した。Bearerは子プロセスの環境変数から渡し、接続設定はその起動だけに適用する。CLIの既定の承認設定では書込みが拒否されたため、実装検証として許可されたテスト画面の`write_state`だけに、起動時の`approval_mode="approve"`を指定した。サーバーのBearer認証とクライアントの操作承認は別の条件になる。[Codexのツール承認設定](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
 
-WebSocket、Windows実機での検証、全体の`npm test`は残っている。段階ごとの実装や個別テストの成功を、全体の完了とは扱わない。
+この時点ではWebSocket、Windows実機での検証、全体の`npm test`が残っていた。段階ごとの実装や個別テストの成功を、全体の完了とは扱わない。
+
+## 段階4の実施記録
+
+WebSocketのフレーム処理を独立した部品として実装し、接続・認証・ページのハンドラーへ接続した。HTTP UpgradeはGETとHTTP/1.1、version 13、16バイトのkeyを検証する。許可されていないHost／Origin、Bearer設定時の未提示・不正な資格情報、Authorizationとブラウザー用資格情報の併用は、アプリの`accept`を呼ぶ前に拒否する。ブラウザー用資格情報はパディングを省いたbase64urlで表す。
+
+`accept(request)`は`false`か`{ protocol?: string }`を返す。前者はHTTP 403、例外は汎用のHTTP 500になる。`open(socket)`、`message(socket, data)`、`close(socket, event)`は任意で登録できる。接続ハンドルの`request`には`accept`と同じRequestを渡し、そのsignalは切断時にabortする。複数の接続先パスを扱うアプリでも接続元の要求を参照できるよう、段階4のAPI詳細を決める際にこのメンバーを追加した。
+
+同じ接続の`open`と`message`は順番に実行し、Promiseの完了を待つ。`send()`へはstringかUint8Arrayを渡し、前の送信をawaitしてから次を送る。送信の完了はOSが対象データを受け付けた時点であり、相手の受信確認ではない。ハンドラーの例外はcode 1011で切断する。`close()`はcloseフレームの送信完了まで待つが、相手の返信は待たない。無効な引数で失敗した場合は、訂正して再試行できる。登録解除、サーバー停止、ページ破棄では接続を打ち切り、古いハンドルからの操作を拒否する。
+
+メッセージは送受信とも1 MiBまでとする。ネイティブ部品の送信キューは1 MiBかつ128件、1回の受信処理で保持する完了メッセージは1 MiBかつ32件までとし、上限超過は拒否または切断する。ソケットへは最大64 KiBずつ、前の書込み完了を待って送る。pingへのpong、フレームの分割・結合、textのUTF-8検証を扱い、圧縮拡張は交渉しない。close codeは1000〜1011のうち1004・1005・1006を除いた値と、3000〜4999を受け付ける。reasonはUTF-8で123バイトまでとする。1012〜1014を扱わない制約は採用した[Wslay 1.1.1の検証範囲](https://github.com/tatsuhiro-t/wslay/blob/release-1.1.1/lib/wslay_event.c#L554-L558)に合わせたものである。
+
+Wslay 1.1.1では、closeのpayloadが1バイトの場合と、reasonのUTF-8が入力境界をまたぐ場合に検証が不適切になることを動作テストで確認した。[closeの長さ判定](https://github.com/tatsuhiro-t/wslay/blob/release-1.1.1/lib/wslay_event.c#L704-L723)、[UTF-8検証](https://github.com/tatsuhiro-t/wslay/blob/release-1.1.1/lib/wslay_event.c#L639-L658)。公開のframe callbackを使ってcloseの入力単位を制限し、最大125バイトのpayloadが揃った時点で検証する。外部ソースは変更していない。
+
+フレーム処理の7群はLinux、ASan／UBSan、Windows amd64／i686のWine実行で成功した。CEFのsimple／validate両モードでは、asset Originからの認証あり・なしの接続、外部クライアントとのtext／binary往復、1 MiBのメッセージ、独自protocol、日本語reason、認証・Host／Originの拒否、例外、登録解除、コールバック内の停止、MPA遷移による切断を確認した。HTTP・SSE・MCPを含む9件の結合テスト、追加したWebSocket所有期間テスト2件、UIテスト35件、ネイティブテスト61件も成功した。
+
+残る作業は段階5のWindows実機検証と利用文書、全体の`npm test`である。Wineの成功をWindows実機での確認の代わりにはしない。
 
 ## 計画書保存時の確認
 

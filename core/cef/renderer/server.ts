@@ -33,6 +33,65 @@ export interface ServerHandlers {
    * The request signal aborts on detected transport failure, detach or closure.
    */
   readonly fetch: (request: Request) => Response | Promise<Response>;
+  /** Optional RFC 6455 WebSocket upgrade and connection handlers. */
+  readonly websocket?: ServerWebSocketHandlers;
+}
+
+/** A native WebSocket accepted by the current binding. */
+export interface ServerWebSocket {
+  /** Opaque connection identifier. */
+  readonly id: string;
+  /** Accepted upgrade request, with credentials removed; its signal aborts on close. */
+  readonly request: Request;
+  /** Negotiated subprotocol, or an empty string. */
+  readonly protocol: string;
+  /** Sends one message of at most 1 MiB; await before sending another.
+   * Resolves after OS acceptance, without implying peer receipt.
+   */
+  readonly send: (data: string | Uint8Array) => Promise<void>;
+  /** Sends a close frame; does not wait for the peer's reply.
+   * Codes: 1000..1011 except 1004/1005/1006, or 3000..4999.
+   * The UTF-8 reason is limited to 123 bytes. Defaults to 1000 and empty.
+   */
+  readonly close: (code?: number, reason?: string) => Promise<void>;
+}
+
+/** Observed connection closure; 1006 means no valid peer close arrived. */
+export interface ServerWebSocketCloseEvent {
+  /** Peer close code, 1005 for no code, or 1006 for abnormal closure. */
+  readonly code: number;
+  /** Peer close reason; empty for abnormal closure. */
+  readonly reason: string;
+  /** Whether both close frames were exchanged successfully. */
+  readonly wasClean: boolean;
+}
+
+/** Page callbacks for authenticated WebSocket connections. */
+export interface ServerWebSocketHandlers {
+  /** Accepts an upgrade with an optional offered protocol, or rejects with 403.
+   * Native Host, Origin and Bearer checks run first. Private credentials are
+   * removed from the request headers. Errors produce a generic HTTP 500.
+   */
+  readonly accept: (
+    request: Request
+  ) =>
+    | false
+    | { readonly protocol?: string }
+    | Promise<false | { readonly protocol?: string }>;
+  /** Runs after the handshake is sent, before the first message callback. */
+  readonly open?: (socket: ServerWebSocket) => void | Promise<void>;
+  /** Handles text or binary; callbacks are awaited in connection order.
+   * Other connections continue independently. Throwing closes with 1011.
+   */
+  readonly message?: (
+    socket: ServerWebSocket,
+    data: string | Uint8Array
+  ) => void | Promise<void>;
+  /** Runs once after closure; detach and server close report abnormal closure. */
+  readonly close?: (
+    socket: ServerWebSocket,
+    event: ServerWebSocketCloseEvent
+  ) => void | Promise<void>;
 }
 
 /** Address of a listening server. */
@@ -71,7 +130,7 @@ interface NativePacket {
 }
 
 interface NativeRequest {
-  readonly type: 'request';
+  readonly type: 'request' | 'ws_request';
   readonly requestId: string;
   readonly method: string;
   readonly url: string;
@@ -81,13 +140,31 @@ interface NativeRequest {
 interface PendingRequest {
   readonly controller: AbortController;
   reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  upgradeRequest: Request | undefined;
 }
 
 interface BindingState {
   readonly id: string;
   readonly requests: Map<string, PendingRequest>;
+  readonly websockets: Map<string, WebSocketState>;
   readonly detach: () => Promise<void>;
   active: boolean;
+}
+
+interface WebSocketState {
+  readonly socket: ServerWebSocket;
+  readonly notifyClose: (event: ServerWebSocketCloseEvent) => Promise<void>;
+  closed: boolean;
+}
+
+interface NativeWebSocketEvent {
+  readonly type: 'ws_open' | 'ws_message' | 'ws_close';
+  readonly requestId: string;
+  readonly protocol: string;
+  readonly binary: boolean;
+  readonly code: number;
+  readonly reason: string;
+  readonly wasClean: boolean;
 }
 
 const decodePacket = (buffer: ArrayBuffer): NativePacket => {
@@ -107,6 +184,12 @@ const decodePacket = (buffer: ArrayBuffer): NativePacket => {
 const abortBinding = (binding: BindingState): void => {
   binding.active = false;
   for (const request of binding.requests.values()) request.controller.abort();
+  for (const socket of binding.websockets.values()) {
+    queueMicrotask(
+      async () =>
+        await socket.notifyClose({ code: 1006, reason: '', wasClean: false })
+    );
+  }
 };
 
 const preserveReceivedHeaders = (
@@ -204,6 +287,7 @@ export const createMuonCefServerApi = (
         };
         let responding = false;
         let completed = false;
+        let upgraded = false;
         // Cancellation must unblock a response reader even if its producer never
         // completes. Cancelling the stream cannot cancel arbitrary handler work.
         const cancelReader = async (): Promise<void> => {
@@ -227,6 +311,40 @@ export const createMuonCefServerApi = (
             }),
             new Headers(event.headers)
           );
+          if (event.type === 'ws_request') {
+            const accepted = await handlers.websocket!.accept(request);
+            if (!binding.active || signal.aborted) return;
+            if (accepted === false) {
+              responding = true;
+              await operation(
+                'respond',
+                { ...requestFields, status: 403, headers: [] },
+                new ArrayBuffer(0)
+              );
+            } else {
+              if (
+                !accepted ||
+                typeof accepted !== 'object' ||
+                (accepted.protocol !== undefined &&
+                  typeof accepted.protocol !== 'string')
+              )
+                throw new TypeError(
+                  'WebSocket accept must return false or protocol options'
+                );
+              // Native validation failures still permit an HTTP error response;
+              // the native operation owns the transition to upgraded transport.
+              pending.upgradeRequest = request;
+              await operation(
+                'ws_accept',
+                { ...requestFields, protocol: accepted.protocol ?? '' },
+                new ArrayBuffer(0)
+              );
+              responding = true;
+              upgraded = true;
+            }
+            completed = true;
+            return;
+          }
           const response = await handlers.fetch(request);
           if (!(response instanceof Response) || response.status < 200)
             throw new TypeError('Server handler must return an HTTP Response');
@@ -315,7 +433,137 @@ export const createMuonCefServerApi = (
           pending.reader = undefined;
           reader?.releaseLock();
           signal.removeEventListener('abort', cancelReader);
-          binding.requests.delete(event.requestId);
+          if (!upgraded) binding.requests.delete(event.requestId);
+        }
+      };
+
+      const handleWebSocketEvent = async (
+        binding: BindingState,
+        handlers: ServerWebSocketHandlers,
+        event: NativeWebSocketEvent,
+        body: ArrayBuffer
+      ): Promise<void> => {
+        const fields = { binding: binding.id, requestId: event.requestId };
+        let state = binding.websockets.get(event.requestId);
+        if (event.type === 'ws_close') {
+          await state?.notifyClose({
+            code: event.code,
+            reason: event.reason,
+            wasClean: event.wasClean,
+          });
+          return;
+        }
+        try {
+          if (!binding.active) return;
+          if (event.type === 'ws_open') {
+            const pending = binding.requests.get(event.requestId);
+            if (!pending?.upgradeRequest)
+              throw new Error('WebSocket upgrade request is unavailable');
+            let sending = false;
+            let closingSocket: Promise<void> | undefined;
+            const requireSocket = (): void => {
+              if (!binding.active || state!.closed || closingSocket)
+                throw new Error('WebSocket is closed');
+            };
+            const socket: ServerWebSocket = {
+              id: event.requestId,
+              request: pending.upgradeRequest,
+              protocol: event.protocol,
+              send: async (data) => {
+                requireSocket();
+                if (sending) throw new Error('WebSocket is already sending');
+                if (typeof data !== 'string' && !(data instanceof Uint8Array))
+                  throw new TypeError(
+                    'WebSocket data must be string or Uint8Array'
+                  );
+                const binary = typeof data !== 'string';
+                const bytes =
+                  typeof data === 'string'
+                    ? new TextEncoder().encode(data)
+                    : new Uint8Array(data);
+                if (bytes.byteLength > 1024 * 1024)
+                  throw new RangeError('WebSocket message exceeds 1 MiB');
+                sending = true;
+                try {
+                  await operation(
+                    'ws_send',
+                    { ...fields, binary },
+                    bytes.buffer
+                  );
+                } finally {
+                  sending = false;
+                }
+              },
+              close: async (code = 1000, reason = '') => {
+                if (!closingSocket) {
+                  requireSocket();
+                  closingSocket = (async () => {
+                    await operation(
+                      'ws_close',
+                      { ...fields, code, reason },
+                      new ArrayBuffer(0)
+                    );
+                  })();
+                }
+                const closingOperation = closingSocket;
+                try {
+                  await closingOperation;
+                } catch (error) {
+                  // Rejected arguments have not closed the native socket.
+                  // Permit correction; transport failures remain native errors.
+                  if (closingSocket === closingOperation)
+                    closingSocket = undefined;
+                  throw error;
+                }
+              },
+            };
+            state = {
+              socket,
+              closed: false,
+              notifyClose: async (event) => {
+                if (state!.closed) return;
+                state!.closed = true;
+                pending.controller.abort();
+                binding.requests.delete(socket.id);
+                binding.websockets.delete(socket.id);
+                try {
+                  await handlers.close?.(socket, event);
+                } catch {
+                  /* A terminal callback cannot alter native closure. */
+                }
+              },
+            };
+            binding.websockets.set(event.requestId, state);
+            await handlers.open?.(socket);
+          } else {
+            if (!state || state.closed) return;
+            await handlers.message?.(
+              state.socket,
+              event.binary
+                ? new Uint8Array(body)
+                : new TextDecoder('utf-8', { fatal: true }).decode(body)
+            );
+          }
+        } catch {
+          try {
+            await operation(
+              'ws_close',
+              { ...fields, code: 1011, reason: 'Handler failed' },
+              new ArrayBuffer(0)
+            );
+          } catch {
+            try {
+              await operation('abort', fields, new ArrayBuffer(0));
+            } catch {
+              /* Native ownership may already have ended. */
+            }
+          }
+        } finally {
+          try {
+            await operation('ws_ack', fields, new ArrayBuffer(0));
+          } catch {
+            /* Disconnect or detach may have removed this event. */
+          }
         }
       };
 
@@ -332,14 +580,35 @@ export const createMuonCefServerApi = (
             );
             if (!binding.active || closed) break;
             const event = packet.metadata as
-              NativeRequest | { type: 'disconnect'; requestId: string } | null;
+              | NativeRequest
+              | NativeWebSocketEvent
+              | { type: 'disconnect'; requestId: string }
+              | null;
             if (!event) break;
             if (event.type === 'disconnect') {
               binding.requests.get(event.requestId)?.controller.abort();
-            } else {
+            } else if (
+              event.type === 'ws_open' ||
+              event.type === 'ws_message' ||
+              event.type === 'ws_close'
+            ) {
+              queueMicrotask(
+                async () =>
+                  await handleWebSocketEvent(
+                    binding,
+                    handlers.websocket!,
+                    event,
+                    packet.body
+                  )
+              );
+            } else if (
+              event.type === 'request' ||
+              event.type === 'ws_request'
+            ) {
               const pending: PendingRequest = {
                 controller: new AbortController(),
                 reader: undefined,
+                upgradeRequest: undefined,
               };
               binding.requests.set(event.requestId, pending);
               // Keep receiving disconnects and other requests while this handler
@@ -376,18 +645,34 @@ export const createMuonCefServerApi = (
           requireOpen();
           if (!handlers || typeof handlers.fetch !== 'function')
             throw new TypeError('Server handlers must provide fetch');
+          if (
+            handlers.websocket &&
+            (typeof handlers.websocket.accept !== 'function' ||
+              ['open', 'message', 'close'].some((name) => {
+                const value =
+                  handlers.websocket![name as 'open' | 'message' | 'close'];
+                return value !== undefined && typeof value !== 'function';
+              }))
+          )
+            throw new TypeError('Invalid WebSocket handlers');
           if (attaching || current)
             throw new Error('Server already has an attached handler');
           attaching = true;
           try {
-            const result = (await operation('attach', {}, new ArrayBuffer(0)))
-              .metadata as { binding: string };
+            const result = (
+              await operation(
+                'attach',
+                { websocket: !!handlers.websocket },
+                new ArrayBuffer(0)
+              )
+            ).metadata as { binding: string };
             requireOpen();
             let detaching: Promise<void> | undefined;
             const binding: BindingState = {
               id: result.binding,
               active: true,
               requests: new Map(),
+              websockets: new Map(),
               detach: async () => {
                 if (!detaching)
                   detaching = (async () => {

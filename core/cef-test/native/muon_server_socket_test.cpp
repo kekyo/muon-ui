@@ -183,14 +183,48 @@ static cardio::promise<void> TestBinaryAndHalfClose(const std::shared_ptr<MuonSe
   co_await listener->close();
 }
 
+struct BlockedTestWrite {
+  cardio::promise<void> operation;
+  size_t bytes;
+};
+
+static cardio::promise<std::shared_ptr<BlockedTestWrite>> FillUntilBlocked(
+    const std::shared_ptr<MuonServerSocket>& server, std::span<const uint8_t> block) {
+  // Windows can accept more than 8 MiB before flow control applies. Observe
+  // an actual pending write with bounded 64 KiB calls and constant memory;
+  // keep a 64 MiB diagnostic ceiling instead of assuming an OS buffer size.
+  constexpr auto limit = size_t{64 * 1024 * 1024};
+  for (size_t bytes = block.size(); bytes <= limit; bytes += block.size()) {
+    auto writing = server->write(block);
+    if (!writing.is_ready()) {
+      std::cout << "Blocked write after " << bytes << " bytes\n";
+      co_return std::make_shared<BlockedTestWrite>(BlockedTestWrite{std::move(writing), bytes});
+    }
+    // A ready promise may contain an error; report that error before deciding
+    // whether the test environment exceeded the bounded setup budget.
+    co_await writing;
+  }
+  throw std::runtime_error("test could not establish a blocked write within its 64 MiB setup budget");
+}
+
+static cardio::promise<void> CompleteTestWrite(
+    const std::shared_ptr<MuonServerSocket>& server, cardio::promise<void> writing,
+    std::span<const uint8_t> block, size_t bytes, size_t total) {
+  co_await writing;
+  while (bytes < total) {
+    co_await server->write(block);
+    bytes += block.size();
+  }
+}
+
 static cardio::promise<void> TestBackpressure(const std::shared_ptr<MuonServerSockets>& sockets) {
   auto listener = sockets->listen(0);
   auto client = co_await Connect(listener->port, true);
   auto server = co_await listener->accept();
-  auto data = std::vector<uint8_t>(8 * 1024 * 1024);
+  auto data = std::vector<uint8_t>(64 * 1024);
   for (size_t i = 0; i < data.size(); ++i) data[i] = static_cast<uint8_t>(i * 17 + i / 251);
-  auto writing = server->write(data);
-  Expect(!writing.is_ready(), "test could not establish a blocked write within its 8 MiB buffer budget");
+  auto blocked = co_await FillUntilBlocked(server, data);
+  auto writing = std::move(blocked->operation);
   auto duplicate_failed = false;
   try { co_await server->write(data); }
   catch (const std::exception&) { duplicate_failed = true; }
@@ -205,16 +239,18 @@ static cardio::promise<void> TestBackpressure(const std::shared_ptr<MuonServerSo
   Expect(marker_count == 1 && marker_received == marker,
          "blocked write stalled another connection");
   co_await other_server->close();
+  const auto total = std::max(blocked->bytes, size_t{8 * 1024 * 1024});
+  auto completing = CompleteTestWrite(server, std::move(writing), data, blocked->bytes, total);
   std::array<uint8_t, 32768> buffer{};
   auto offset = size_t{0};
-  while (offset < data.size()) {
+  while (offset < total) {
     const auto count = co_await ReadClient(client, buffer);
-    Expect(count > 0 && offset + count <= data.size(), "large response was truncated");
-    Expect(std::equal(buffer.begin(), buffer.begin() + count, data.begin() + offset),
-           "large response was corrupted or reordered");
+    Expect(count > 0 && offset + count <= total, "large response was truncated");
+    for (size_t i = 0; i < count; ++i)
+      Expect(buffer[i] == data[(offset + i) % data.size()], "large response was corrupted or reordered");
     offset += count;
   }
-  co_await writing;
+  co_await completing;
   co_await server->close();
   const auto closed = co_await ReadClient(client, buffer);
   Expect(closed == 0, "large response did not finish");
@@ -237,9 +273,9 @@ static cardio::promise<void> TestCancellation(const std::shared_ptr<MuonServerSo
   auto server = co_await listener->accept();
   std::array<uint8_t, 1> byte{};
   auto reading = server->read(byte);
-  auto data = std::vector<uint8_t>(8 * 1024 * 1024, 123);
-  auto writing = server->write(data);
-  Expect(!writing.is_ready(), "cancellation test could not establish a blocked write within its 8 MiB buffer budget");
+  auto data = std::vector<uint8_t>(64 * 1024, 123);
+  auto blocked = co_await FillUntilBlocked(server, data);
+  auto writing = std::move(blocked->operation);
   auto read_failure = ExpectFailure(reading);
   auto write_failure = ExpectFailure(writing);
   close_one = server->close();

@@ -569,6 +569,12 @@ add_library(muon_sha1 STATIC "${MUON_SHA1_SOURCE_DIR}/sha1.c")
 set_target_properties(muon_sha1 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(muon_sha1 PRIVATE c_std_99)
 target_include_directories(muon_sha1 PUBLIC "${MUON_SHA1_SOURCE_DIR}")
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+  # GCC 12's -O3 inlining falsely diagnoses SHA1Final's one-byte padding as
+  # a 64-byte read in SHA1Update's unreachable full-block loop. Keep this
+  # unchanged external implementation at -O2 instead of suppressing warnings.
+  target_compile_options(muon_sha1 PRIVATE $<$<CONFIG:Release>:-O2>)
+endif()
 MUON_APPLY_SANITIZERS(muon_sha1)
 
 add_library(yyjson STATIC
@@ -1732,6 +1738,36 @@ else()
     )
 endif()
 if(MUON_BUILD_TESTS)
+  add_executable(muon_server_http_test
+    ../cef-test/native/muon_server_http_test.cpp
+    src/server/muon_server_http.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_http_test)
+  target_compile_features(muon_server_http_test PRIVATE cxx_std_20)
+  target_include_directories(muon_server_http_test PRIVATE src)
+  target_link_libraries(muon_server_http_test PRIVATE muon_llhttp muon_sha1)
+  MUON_APPLY_SANITIZERS(muon_server_http_test)
+  add_test(NAME server_http COMMAND muon_server_http_test)
+  add_executable(muon_server_websocket_test
+    ../cef-test/native/muon_server_websocket_test.cpp
+    src/server/muon_server_websocket.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_websocket_test)
+  target_compile_features(muon_server_websocket_test PRIVATE cxx_std_20)
+  target_include_directories(muon_server_websocket_test PRIVATE src)
+  target_link_libraries(muon_server_websocket_test PRIVATE muon_wslay)
+  MUON_APPLY_SANITIZERS(muon_server_websocket_test)
+  add_test(NAME server_websocket COMMAND muon_server_websocket_test)
+  add_executable(muon_server_socket_test
+    ../cef-test/native/muon_server_socket_test.cpp
+    src/server/muon_server_socket.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_socket_test)
+  target_compile_features(muon_server_socket_test PRIVATE cxx_std_20)
+  target_include_directories(muon_server_socket_test PRIVATE src)
+  target_link_libraries(muon_server_socket_test PRIVATE muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
+  if(WIN32)
+    target_link_libraries(muon_server_socket_test PRIVATE ws2_32)
+  endif()
+  MUON_APPLY_SANITIZERS(muon_server_socket_test)
+  add_test(NAME server_socket COMMAND muon_server_socket_test)
   add_executable(muon_runtime_info_generated_test
     ../cef-test/native/muon_runtime_info_generated_test.cpp
     "${MUON_RUNTIME_INFO_HEADER_PATH}"
@@ -2131,36 +2167,6 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   target_link_libraries(muon_server_rpc_test PRIVATE muon_rpc_core)
   MUON_APPLY_SANITIZERS(muon_server_rpc_test)
   add_test(NAME server_rpc COMMAND muon_server_rpc_test)
-  add_executable(muon_server_http_test
-    ../cef-test/native/muon_server_http_test.cpp
-    src/server/muon_server_http.cpp)
-  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_http_test)
-  target_compile_features(muon_server_http_test PRIVATE cxx_std_20)
-  target_include_directories(muon_server_http_test PRIVATE src)
-  target_link_libraries(muon_server_http_test PRIVATE muon_llhttp muon_sha1)
-  MUON_APPLY_SANITIZERS(muon_server_http_test)
-  add_test(NAME server_http COMMAND muon_server_http_test)
-  add_executable(muon_server_websocket_test
-    ../cef-test/native/muon_server_websocket_test.cpp
-    src/server/muon_server_websocket.cpp)
-  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_websocket_test)
-  target_compile_features(muon_server_websocket_test PRIVATE cxx_std_20)
-  target_include_directories(muon_server_websocket_test PRIVATE src)
-  target_link_libraries(muon_server_websocket_test PRIVATE muon_wslay)
-  MUON_APPLY_SANITIZERS(muon_server_websocket_test)
-  add_test(NAME server_websocket COMMAND muon_server_websocket_test)
-  add_executable(muon_server_socket_test
-    ../cef-test/native/muon_server_socket_test.cpp
-    src/server/muon_server_socket.cpp)
-  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_socket_test)
-  target_compile_features(muon_server_socket_test PRIVATE cxx_std_20)
-  target_include_directories(muon_server_socket_test PRIVATE src)
-  target_link_libraries(muon_server_socket_test PRIVATE muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
-  if(WIN32)
-    target_link_libraries(muon_server_socket_test PRIVATE ws2_32)
-  endif()
-  MUON_APPLY_SANITIZERS(muon_server_socket_test)
-  add_test(NAME server_socket COMMAND muon_server_socket_test)
   add_executable(muon_notification_model_test
     ../cef-test/native/muon_notification_model_test.cpp
     src/notifications/muon_notification_model.cpp)

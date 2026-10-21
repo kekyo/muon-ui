@@ -142,9 +142,11 @@ await server.attach({
 | `message(socket, data)` | textはstring、binaryはUint8Arrayで受け取る。任意 |
 | `close(socket, event)` | 終了時に一度呼ぶ。eventは`{ code, reason, wasClean }`。任意 |
 
-接続ハンドルは`id`、`request`、`protocol`、`send(data)`、`close(code?, reason?)`を持ちます。`request`は`accept`と同じオブジェクトです。接続元のパスやOriginを参照でき、signalは切断時にabortします。BearerのAuthorizationと専用の資格情報は、このRequestから除かれます。
+接続ハンドルは`id`、`request`、`protocol`、`send(data)`、`close(code?, reason?)`を持ちます。`request`は`accept`と同じオブジェクトです。接続元のパスやOriginを参照でき、signalは切断を検出した時点でabortします。BearerのAuthorizationと専用の資格情報は、このRequestから除かれます。
 
 `open`と`message`のPromiseは接続ごとに順番に待ちます。別の接続は並行して処理できます。`send()`は前の送信をawaitしてから呼び、完了はOSによる受入れを表します。相手の受信・処理完了は保証しません。ハンドラー例外では1011で切断します。
+
+ハンドラーの実行中も受信を一つ進め、データがなければTCPの終了やエラーを検出してsignalをabortします。受信済みのデータがある場合は、その処理をハンドラー完了まで待つため、後続の切断検出が遅れることがあります。必要な処理期限はアプリ側で設けてください。
 
 `close()`の既定値はcode 1000、空のreasonです。Promiseはcloseフレームの送信後に完了し、相手の返信を待ちません。5秒以内に終了しなければ通信を打ち切ります。使えるcodeは1000〜1011のうち1004・1005・1006を除く値と、3000〜4999です。reasonはUTF-8で123バイトまでです。1012〜1014には対応しません。[採用したWslayのclose code検証](https://github.com/tatsuhiro-t/wslay/blob/release-1.1.1/lib/wslay_event.c#L554-L558)
 

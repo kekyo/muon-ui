@@ -6,6 +6,7 @@
 #include "server/muon_server_service.h"
 #include "muon_cardio_post.h"
 #include "muon_json_helpers.h"
+#include "include/cef_parser.h"
 #include "include/cef_server.h"
 #include <algorithm>
 #include <deque>
@@ -22,6 +23,7 @@ static constexpr size_t kMaxServerRequests = 32;
 struct ServerRequest {
   int connection;
   std::string method;
+  CefServer::HeaderMap response_headers;
 };
 struct ServerBinding {
   std::string token;
@@ -36,6 +38,8 @@ struct ServerState {
   std::string host;
   uint16_t port;
   std::string url;
+  std::string bearer_token;
+  std::set<std::string> allowed_origins;
   std::unique_ptr<ServerBinding> binding;
   uint64_t next_binding = 0;
   uint64_t next_request = 0;
@@ -77,11 +81,133 @@ static std::string LowerServerHeader(std::string value) {
   for (auto& ch : value) if (ch >= 'A' && ch <= 'Z') ch += 'a' - 'A';
   return value;
 }
+static bool IsServerHeaderName(const std::string& name) {
+  return !name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') || std::string("!#$%&'*+-.^_`|~").find(ch) != std::string::npos;
+  });
+}
+static bool IsServerBearerToken(const std::string& token) {
+  if (token.empty() || token.size() > 4096) return false;
+  bool padding = false;
+  for (size_t i = 0; i < token.size(); ++i) {
+    const auto ch = token[i];
+    if (ch == '=') {
+      if (i == 0) return false;
+      padding = true;
+    } else if (padding || !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+        (ch >= '0' && ch <= '9') || std::string("-._~+/").find(ch) != std::string::npos)) return false;
+  }
+  return true;
+}
+static bool IsServerOrigin(const std::string& origin) {
+  if (origin.size() > 2048 || origin.find('*') != std::string::npos) return false;
+  CefURLParts parts;
+  if (!CefParseURL(origin, parts)) return false;
+  const auto scheme = CefString(&parts.scheme).ToString();
+  const auto host = CefString(&parts.host).ToString();
+  const auto port = CefString(&parts.port).ToString();
+  if ((scheme != "http" && scheme != "https" && scheme != "asset") || host.empty()) return false;
+  // Requiring the serialized origin rejects paths, userinfo, whitespace and
+  // opaque origins rather than silently broadening a caller's allowlist.
+  const auto serialized = scheme + "://" + host + (port.empty() ? "" : ":" + port);
+  return origin == serialized;
+}
+static CefServer::HeaderMap ServerResponseHeaders(const std::string& origin) {
+  auto headers = CefServer::HeaderMap{{"Connection", "close"}, {"Vary", "Origin"}};
+  if (!origin.empty()) {
+    headers.emplace("Access-Control-Allow-Origin", origin);
+    // Cookies and credentialed CORS are not enabled. Explicit Authorization
+    // headers work with the default fetch credentials mode.
+    headers.emplace("Access-Control-Expose-Headers", "*");
+  }
+  return headers;
+}
 static void ServerError(const std::shared_ptr<ServerState>& state,
-                        int connection, int status) {
-  if (state->server && state->connections.contains(connection))
-    state->server->SendHttpResponse(connection, status, "text/plain", 0,
-                                   {{"Connection", "close"}});
+                        int connection, int status,
+                        CefServer::HeaderMap headers = ServerResponseHeaders("")) {
+  if (state->server && state->connections.contains(connection)) {
+    headers.emplace("Cache-Control", "no-store");
+    if (status == 401) headers.emplace("WWW-Authenticate", "Bearer");
+    state->server->SendHttpResponse(connection, status, "text/plain", 0, headers);
+  }
+}
+
+struct ServerAccess {
+  // Zero delegates to the page; a nonzero status completes natively.
+  int status;
+  CefServer::HeaderMap headers;
+};
+static bool HasServerBearer(const std::string& authorization, const std::string& token) {
+  const auto separator = authorization.find(' ');
+  if (separator == std::string::npos || LowerServerHeader(authorization.substr(0, separator)) != "bearer") return false;
+  const auto start = authorization.find_first_not_of(' ', separator);
+  if (start == std::string::npos || authorization.size() - start != token.size()) return false;
+  // Check every byte of an equal-length token; do not reveal a matching prefix.
+  unsigned char difference = 0;
+  for (size_t i = 0; i < token.size(); ++i)
+    difference |= static_cast<unsigned char>(authorization[start + i]) ^ static_cast<unsigned char>(token[i]);
+  return difference == 0;
+}
+static ServerAccess CheckServerAccess(const ServerState& state,
+                                      const std::string& method,
+                                      const ServerHeaders& headers) {
+  auto hosts = size_t{0};
+  auto origins = size_t{0};
+  auto authorizations = size_t{0};
+  auto preflight_methods = size_t{0};
+  auto preflight_headers = size_t{0};
+  auto origin = std::string{};
+  auto authorization = std::string{};
+  auto requested_method = std::string{};
+  auto requested_headers = std::string{};
+  bool allowed = true;
+  const auto port = ":" + std::to_string(state.port);
+  for (const auto& [name, value] : headers) {
+    const auto lower = LowerServerHeader(name);
+    if (lower == "host") {
+      ++hosts;
+      if (LowerServerHeader(value) != state.host + port &&
+          LowerServerHeader(value) != "localhost" + port) allowed = false;
+    } else if (lower == "origin") { ++origins; origin = value; }
+    else if (lower == "authorization") { ++authorizations; authorization = value; }
+    else if (lower == "access-control-request-method") { ++preflight_methods; requested_method = value; }
+    else if (lower == "access-control-request-headers") { ++preflight_headers; requested_headers = value; }
+  }
+  if (!allowed || hosts != 1 || origins > 1 ||
+      (origins == 1 && !state.allowed_origins.contains(origin)))
+    return {403, ServerResponseHeaders("")};
+  auto response = ServerResponseHeaders(origin);
+  if (method == "OPTIONS" && (preflight_methods || preflight_headers)) {
+    const auto lower_method = LowerServerHeader(requested_method);
+    if (origins != 1 || preflight_methods != 1 || preflight_headers > 1 ||
+        !IsServerHeaderName(requested_method) || requested_method == "*" ||
+        lower_method == "connect" || lower_method == "trace" || lower_method == "track" ||
+        requested_headers.size() > 8192) return {400, std::move(response)};
+    if (preflight_headers) {
+      auto start = size_t{0};
+      auto count = size_t{0};
+      do {
+        const auto end = requested_headers.find(',', start);
+        auto name = requested_headers.substr(start, end == std::string::npos ? end : end - start);
+        const auto first = name.find_first_not_of(" \t");
+        if (first == std::string::npos) return {400, std::move(response)};
+        name = name.substr(first, name.find_last_not_of(" \t") - first + 1);
+        if (!IsServerHeaderName(name) || name == "*" || ++count > 64) return {400, std::move(response)};
+        if (end == std::string::npos) break;
+        start = end + 1;
+      } while (true);
+      // Explicitly list Authorization; CORS does not treat it as a wildcard.
+      response.emplace("Access-Control-Allow-Headers", requested_headers);
+    }
+    response.emplace("Access-Control-Allow-Methods", requested_method);
+    response.emplace("Vary", "Access-Control-Request-Method, Access-Control-Request-Headers");
+    return {204, std::move(response)};
+  }
+  if (!state.bearer_token.empty() &&
+      (authorizations != 1 || !HasServerBearer(authorization, state.bearer_token)))
+    return {401, std::move(response)};
+  return {0, std::move(response)};
 }
 static void QueueServerEvent(const std::shared_ptr<ServerState>& state, ServerBytes event) {
   if (!state->binding) return;
@@ -101,7 +227,7 @@ static void DetachServer(const std::shared_ptr<ServerState>& state) {
   state->binding.reset();
   for (const auto& [id, request] : state->requests) {
     (void)id;
-    ServerError(state, request.connection, 503);
+    ServerError(state, request.connection, 503, request.response_headers);
   }
   state->requests.clear();
 }
@@ -196,28 +322,18 @@ class MuonHttpServerHandler final : public CefServerHandler {
           body = std::move(body), oversized, method = request->GetMethod().ToString(),
           path = request->GetURL().ToString()] {
       if (!state->connections.contains(connection) || state->closing) return;
-      auto hosts = size_t{0};
-      bool allowed = true;
-      const auto authority = state->host + ":" + std::to_string(state->port);
-      for (const auto& [name, value] : headers) {
-        const auto lower = LowerServerHeader(name);
-        if (lower == "host") {
-          ++hosts;
-          if (LowerServerHeader(value) != authority &&
-              LowerServerHeader(value) != "localhost:" + std::to_string(state->port)) allowed = false;
-        } else if (lower == "origin") allowed = false;
-      }
-      if (!allowed || hosts != 1) { ServerError(state, connection, 403); return; }
-      if (oversized) { ServerError(state, connection, 413); return; }
+      auto access = CheckServerAccess(*state, method, headers);
+      if (access.status) { ServerError(state, connection, access.status, access.headers); return; }
+      if (oversized) { ServerError(state, connection, 413, access.headers); return; }
       if (!state->binding || state->requests.size() >= kMaxServerRequests ||
           state->binding->events.size() >= kMaxServerRequests * 2) {
-        ServerError(state, connection, 503); return;
+        ServerError(state, connection, 503, access.headers); return;
       }
       if (std::any_of(state->requests.begin(), state->requests.end(),
           [connection](const auto& entry) { return entry.second.connection == connection; })) {
         state->server->CloseConnection(connection); return;
       }
-      if (!path.starts_with(state->url + "/")) { ServerError(state, connection, 400); return; }
+      if (!path.starts_with(state->url + "/")) { ServerError(state, connection, 400, access.headers); return; }
       auto header_json = std::string("[");
       for (const auto& [name, value] : headers) {
         if (header_json.size() > 1) header_json += ',';
@@ -225,7 +341,7 @@ class MuonHttpServerHandler final : public CefServerHandler {
       }
       header_json += ']';
       const auto request_id = std::to_string(++state->next_request);
-      state->requests.emplace(request_id, ServerRequest{connection, method});
+      state->requests.emplace(request_id, ServerRequest{connection, method, std::move(access.headers)});
       QueueServerEvent(state, ServerEnvelope("{\"type\":\"request\",\"requestId\":" +
           QuoteServerString(request_id) + ",\"method\":" + QuoteServerString(method) +
           ",\"url\":" + QuoteServerString(path) +
@@ -244,12 +360,6 @@ class MuonHttpServerHandler final : public CefServerHandler {
   IMPLEMENT_REFCOUNTING(MuonHttpServerHandler);
 };
 
-static bool IsServerHeaderName(const std::string& name) {
-  return !name.empty() && std::all_of(name.begin(), name.end(), [](unsigned char ch) {
-    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') || std::string("!#$%&'*+-.^_`|~").find(ch) != std::string::npos;
-  });
-}
 static void RespondToServerRequest(const std::shared_ptr<ServerState>& state,
                                   yyjson_val* root, const ServerBytes& body) {
   const auto request_id = RequiredServerString(root, "requestId");
@@ -261,7 +371,7 @@ static void RespondToServerRequest(const std::shared_ptr<ServerState>& state,
   if (body.size() > kMaxServerBody) throw std::runtime_error("Server response body exceeds 1 MiB");
   const auto headers = yyjson_obj_get(root, "headers");
   if (!yyjson_is_arr(headers)) throw std::runtime_error("Invalid HTTP response headers");
-  auto extra = CefServer::HeaderMap{{"Connection", "close"}};
+  auto extra = found->second.response_headers;
   auto content_type = std::string("application/octet-stream");
   for (size_t i = 0; i < yyjson_arr_size(headers); ++i) {
     const auto pair = yyjson_arr_get(headers, i);
@@ -274,7 +384,8 @@ static void RespondToServerRequest(const std::shared_ptr<ServerState>& state,
       throw std::runtime_error("Invalid HTTP response header");
     const auto lower = LowerServerHeader(name);
     if (lower == "content-type") content_type = value;
-    else if (lower != "content-length" && lower != "transfer-encoding" && lower != "connection") extra.emplace(name, value);
+    else if (lower != "content-length" && lower != "transfer-encoding" && lower != "connection" &&
+        !lower.starts_with("access-control-")) extra.emplace(name, value);
   }
   const auto connection = found->second.connection;
   const auto code = static_cast<int>(yyjson_get_uint(status));
@@ -319,6 +430,20 @@ static cardio::promise<ServerBytes> DispatchServer(
     state->host = host;
     state->port = static_cast<uint16_t>(yyjson_get_uint(port));
     state->url = "http://" + host + ":" + std::to_string(state->port);
+    if (yyjson_obj_get(options, "bearerToken")) {
+      state->bearer_token = RequiredServerString(options, "bearerToken");
+      if (!IsServerBearerToken(state->bearer_token)) throw std::runtime_error("Invalid server bearer token format");
+    }
+    if (const auto origins = yyjson_obj_get(options, "allowedOrigins")) {
+      if (!yyjson_is_arr(origins) || yyjson_arr_size(origins) > 64) throw std::runtime_error("Invalid server origin allowlist");
+      for (size_t i = 0; i < yyjson_arr_size(origins); ++i) {
+        const auto value = yyjson_arr_get(origins, i);
+        if (!yyjson_is_str(value)) throw std::runtime_error("Invalid server origin");
+        const auto origin = muon_internal::ReadJsonString(value);
+        if (!IsServerOrigin(origin)) throw std::runtime_error("Server origin must be a serialized http, https or asset origin");
+        state->allowed_origins.insert(origin);
+      }
+    }
     service->servers.emplace(state->id, state);
     co_return ServerEnvelope("{\"id\":" + QuoteServerString(state->id) + ",\"name\":" + QuoteServerString(name) + "}");
   }
@@ -383,7 +508,7 @@ static cardio::promise<ServerBytes> DispatchServer(
       if (yyjson_is_str(value)) {
         const auto request = state->requests.find(muon_internal::ReadJsonString(value));
         if (request != state->requests.end()) {
-          ServerError(state, request->second.connection, 500);
+          ServerError(state, request->second.connection, 500, request->second.response_headers);
           state->requests.erase(request);
         }
       }

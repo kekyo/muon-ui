@@ -11,6 +11,20 @@ export interface ServerOptions {
   readonly port: number;
   /** Numeric loopback address; defaults to 127.0.0.1. */
   readonly host?: '127.0.0.1';
+  /**
+   * Secret required as a Bearer token on application requests when configured.
+   * @remarks Uses RFC 6750 b64token syntax, with 1 to 4096 ASCII characters.
+   * CORS preflight requests are checked separately without the token.
+   * @defaultValue No Bearer authentication.
+   */
+  readonly bearerToken?: string;
+  /**
+   * Exact http, https or asset origins permitted to access this server.
+   * @remarks Wildcards, opaque "null" origins, paths, queries and fragments
+   * are rejected. Entries are passed unchanged for native validation.
+   * @defaultValue An empty list; requests without Origin remain permitted.
+   */
+  readonly allowedOrigins?: readonly string[];
 }
 
 /** Handlers attached to the current page. */
@@ -165,7 +179,13 @@ export const createMuonCefServerApi = (
         await dispatch(
           {
             operation: 'create',
-            options: { name: options.name, port: options.port, host },
+            options: {
+              name: options.name,
+              port: options.port,
+              host,
+              bearerToken: options.bearerToken,
+              allowedOrigins: options.allowedOrigins,
+            },
           },
           new ArrayBuffer(0)
         )

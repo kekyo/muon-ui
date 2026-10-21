@@ -54,6 +54,24 @@ declare global {
      * @defaultValue "127.0.0.1"
      */
     readonly host?: "127.0.0.1";
+    /**
+     * Secret required in Authorization: Bearer on every application request.
+     * @remarks Must contain 1 to 4096 ASCII characters using RFC 6750 b64token
+     * syntax: letters, digits, -._~+/, followed only by optional = padding.
+     * An empty token is invalid. CORS preflight requests are checked separately
+     * without the token. When omitted, local processes need no credentials.
+     * @defaultValue No Bearer authentication.
+     */
+    readonly bearerToken?: string;
+    /**
+     * Exact origins permitted to access this server from a browser.
+     * @remarks Entries must be http, https or asset origins. Wildcards,
+     * the opaque origin "null", paths, queries and fragments are rejected.
+     * Values are matched exactly and are not normalized. Requests without
+     * an Origin header remain permitted, subject to Bearer authentication.
+     * @defaultValue An empty list.
+     */
+    readonly allowedOrigins?: readonly string[];
   }
 
   /** HTTP handlers attached to the current page. */

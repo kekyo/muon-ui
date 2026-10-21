@@ -1308,7 +1308,10 @@ exit 1
       runTypeScriptConsumer(`import type {} from "muon-ui";
 import { createServer } from "muon:server";
 
-const options: MuonServerOptions = { name: "automation", port: 8765 };
+const allowedOrigins = ["asset://main", "http://localhost:5173"] as const;
+const options: MuonServerOptions = {
+  name: "automation", port: 8765, bearerToken: "example-token", allowedOrigins,
+};
 const server: MuonServer = await createServer(options);
 const binding: MuonServerBinding = await server.attach({
   fetch: async (request) => {
@@ -1322,11 +1325,19 @@ const id: string = server.id;
 const host: string = address.host;
 await binding.detach();
 await server.close();
-await window.muon.server?.createServer({ name: "simple", host: "127.0.0.1", port: 8766 });
+await window.muon.server?.createServer({
+  name: "simple", host: "127.0.0.1", port: 8766,
+  bearerToken: "example-token", allowedOrigins,
+});
+await createServer({ name: "unauthenticated", port: 8767 });
 // @ts-expect-error A fixed port is mandatory.
 await createServer({ name: "missing-port" });
 // @ts-expect-error Initial servers bind only numeric loopback addresses.
 await createServer({ name: "public", port: 8765, host: "0.0.0.0" });
+// @ts-expect-error Bearer tokens are strings.
+await createServer({ name: "invalid-token", port: 8765, bearerToken: 42 });
+// @ts-expect-error Allowed origins must be an array.
+await createServer({ name: "invalid-origins", port: 8765, allowedOrigins: "asset://main" });
 // @ts-expect-error HTTP handlers return Response objects.
 await server.attach({ fetch: () => "hello" });
 `),

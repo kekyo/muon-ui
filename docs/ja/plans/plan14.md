@@ -51,7 +51,7 @@ Node sidecarの実例は[Expressのfixture](../../../core/cef-test/fixtures/node
 
 議論では外部プロセスからTCP接続されること自体を禁止せず、認証で利用を制約する前者を選択した。その後、最も多い用途を同じPCの外部CLIからの操作と整理し、標準設定ではBearerを任意にする方針になった。
 
-この変更によって、認証なしの標準設定を「CEF内だけに公開」と呼ぶことはできない。内部専用の利用では外部へ配布しない資格情報を使う。資格情報をJavaScriptへ渡すか、muonのネイティブ側で接続先と所有元を限定して付加するかは未確定である。同じOSユーザーの任意コードからも秘密を守れる、という保証はしない。
+この変更によって、認証なしの標準設定を「CEF内だけに公開」と呼ぶことはできない。内部専用の利用では外部へ配布しない資格情報を使う。HTTPではアプリが生成・保持するBearerをサーバー作成時に設定し、クライアントのfetchへAuthorizationヘッダーを指定する。ブラウザーのWebSocketでは同じ方法を使えないため、接続方法を段階4で定める。同じOSユーザーの任意コードからも秘密を守れる、という保証はしない。
 
 仮想HTTP方式の参照APIは[CEFのResourceHandler](https://cef-builds.spotifycdn.com/docs/147.0/classCefResourceHandler.html)と[SchemeHandlerFactory](https://cef-builds.spotifycdn.com/docs/147.0/classCefSchemeHandlerFactory.html)である。この方式を今回の実装範囲には含めない。
 
@@ -393,7 +393,7 @@ LinuxとWindowsの配布対象でビルドと動作を確認し、汎用HTTP、W
 - 後続段階で追加するAPIの詳細な引数・戻り値、WebSocketのメンバー名と型。名前の衝突と重複登録、明示的な登録解除で処理中の要求を打ち切る規則は、段階1の実施記録に記載する。
 - 動的ポートの提供方法と、IPv4とIPv6を同じサーバーとして扱う範囲。段階1はIPv4と明示指定のポートを扱う。
 - 将来のアプリ連動を追加する時期と生存期間の指定方法、既存サーバー取得・再登録の権限、常駐するJavaScript実行環境の提供方法。初版のページ連動と管理対象の分離は採用済みである。
-- 内部専用の資格情報の生成・保持・付加方法。特にブラウザーのWebSocket接続方法。
+- 内部専用のWebSocket接続で、ブラウザーから資格情報を付加する方法。HTTPは段階2の実施記録に記載したBearer設定を使う。
 - SSEとWebSocketの送信Promiseの完了条件とリソース上限、要求のタイムアウト。
 - 使用するMCP SDKと対応プロトコルのバージョン、CEFで提供するWebSocketの機能範囲。
 
@@ -411,7 +411,17 @@ LinuxとWindowsの配布対象でビルドと動作を確認し、汎用HTTP、W
 - 要求本文とバッファーに保持する応答本文は各1 MiB、サーバーごとの接続と処理中要求は各32、アプリ内のサーバーは32を上限とする。CEFが受信中に保持するメモリーまで、この制限で保証するものではない。
 - ネイティブの応答バッファーはSDKの`allocate_shared_buffer`で確保した領域をruntimeへ渡す。非同期RPCの完了まで本文を保持する。
 
-BearerとCORS、SSE／MCP、WebSocket、Windowsでの検証、全体の`npm test`は後続段階に残っている。段階1の実装や個別テストの成功を、全体の完了とは扱わない。
+段階2では`bearerToken`と`allowedOrigins`を作成時の設定へ追加した。Bearerを指定したサーバーが認証なしで201を返すテストの失敗を確認してから、ネイティブ側の認証を実装した。HTTP由来のページと外部クライアントを使う実通信テストはsimple／validateの両モードで成功した。製品の`asset://main`ページでも、両モードでBearer付きのバイナリー往復、MCPと独自の応答ヘッダーの読み取り、認証エラーの401を確認した。ネイティブテスト58件、設定の受け渡しと公開型などのTypeScriptテスト22件も成功した。
+
+段階2では次の詳細を採用する。
+
+- Bearerはアプリが生成・保持して設定する。省略時だけ認証なしとし、空文字列、形式不正、4096文字を超える値は拒否する。文字の形式は[RFC 6750のb64token](https://www.rfc-editor.org/rfc/rfc6750#section-2.1)に従う。値をURL、ログ、エラーメッセージへ含めない。
+- Originは`http`、`https`、`asset`の完全一致で許可する。ワイルドカード、`null`、パス、クエリー、fragmentを含む値は受け付けず、省略時は空の許可一覧とする。一覧は64件、各文字列は2048バイトまでとする。Originがない要求もBearerの対象になる。
+- 許可したOriginのCORS事前確認は、メソッドとヘッダー名を検証して204を返し、アプリのハンドラーを呼ばない。本体の要求でBearerが未提示・不一致なら401、不正なHost／OriginはBearerが正しくても403にする。通常のOPTIONS要求は認証を省略しない。
+- CORSのヘッダーはネイティブ側で管理し、許可したOriginからはアプリの応答ヘッダーと認証エラーを読み取れるようにする。ブラウザーのfetchは既定のcredentials設定、または`omit`を使う。Cookieを送る`include`には対応しない。[FetchのCORSとcredentials](https://fetch.spec.whatwg.org/#cors-protocol-and-credentials)
+- 重複したAuthorization／Origin、不正な設定値や事前確認を拒否すること、拒否時にハンドラーが実行されないこと、認証なしで内外から共有できることを実通信で確認した。
+
+SSE／MCP、WebSocket、Windowsでの検証、全体の`npm test`は後続段階に残っている。段階ごとの実装や個別テストの成功を、全体の完了とは扱わない。
 
 ## 計画書保存時の確認
 

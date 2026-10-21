@@ -22,6 +22,78 @@ const packet = (metadata: unknown, body: Uint8Array): ArrayBuffer => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("CEF server capability modules", () => {
+  it.each(["simple", "validate"])(
+    "passes the configured Bearer and exact origins through %s mode",
+    async (mode) => {
+      const options = {
+        name: "configured",
+        port: 8765,
+        bearerToken: "test-token.A_+/-~==",
+        allowedOrigins: [
+          "asset://main",
+          "http://localhost:5173",
+          "https://app.example",
+        ] as const,
+      };
+      let received: unknown;
+      const dispatch = async (json: string): Promise<ArrayBuffer> => {
+        received = JSON.parse(json).options;
+        return packet(
+          { id: "configured", name: options.name },
+          new Uint8Array(),
+        );
+      };
+      let create: ReturnType<typeof createMuonCefServerApi>["createServer"];
+      if (mode === "simple") {
+        const namespace: Record<string, unknown> = {};
+        Object.defineProperty(namespace, "__dispatch", { value: dispatch });
+        installMuonCefServerApi(namespace, (name) => name === "createServer");
+        create = namespace.createServer as typeof create;
+      } else {
+        vi.stubGlobal(
+          "__muon_plugin_call",
+          async (_capability: string, path: string, args: unknown[]) => {
+            expect(path).toBe("muon.server.createServer");
+            return await dispatch(args[0] as string);
+          },
+        );
+        const resolver = createMuonCapabilityModuleResolver("/app", {
+          imports: [
+            { sources: ["src/**"], allow: ["muon.server.createServer"] },
+          ],
+        });
+        const id = resolver.resolveId("muon:server", "/app/src/main.ts")!.id;
+        const api = await import(
+          `data:text/javascript,${encodeURIComponent(resolver.load(id)!)}`
+        );
+        create = api.createServer;
+      }
+      await create(options);
+      expect(received).toEqual({ ...options, host: "127.0.0.1" });
+    },
+  );
+
+  it.each([
+    { bearerToken: "" },
+    { bearerToken: "test-token with spaces" },
+    { allowedOrigins: ["https://app.example/"] },
+    { allowedOrigins: ["null"] },
+  ])(
+    "preserves configured policy values for authoritative native validation: %j",
+    async (policy) => {
+      const options = { name: "invalid-policy", port: 8765, ...policy };
+      let received: unknown;
+      const api = createMuonCefServerApi(async (json) => {
+        received = JSON.parse(json).options;
+        throw new Error("Invalid server policy");
+      });
+      await expect(api.createServer(options)).rejects.toThrow(
+        "Invalid server policy",
+      );
+      expect(received).toEqual({ ...options, host: "127.0.0.1" });
+    },
+  );
+
   it("separates creation, binding, listening and closure while adapting Fetch bytes", async () => {
     const operations: string[] = [];
     let next = 0;

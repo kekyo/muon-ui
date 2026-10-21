@@ -31,6 +31,8 @@ declare global {
     readonly android?: MuonAndroidApi;
     /** Native local notifications, present only when enabled and permitted. */
     readonly notifications?: MuonNotificationsApi;
+    /** CEF-only page-owned loopback HTTP servers, present when permitted. */
+    readonly server?: MuonServerApi;
     /**
      * Optional out-of-process Node.js runtime.
      *
@@ -39,6 +41,96 @@ declare global {
      * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
+  }
+
+  /** Options for creating a page-owned native HTTP server. */
+  interface MuonServerOptions {
+    /** Nonempty name, unique within this page; maximum 128 UTF-8 bytes. */
+    readonly name: string;
+    /** Fixed TCP port between 1025 and 65535. */
+    readonly port: number;
+    /**
+     * Numeric loopback address accepted by the initial HTTP implementation.
+     * @defaultValue "127.0.0.1"
+     */
+    readonly host?: "127.0.0.1";
+  }
+
+  /** HTTP handlers attached to the current page. */
+  interface MuonServerHandlers {
+    /**
+     * Handles an HTTP request using the Fetch API.
+     * @param request - Request whose signal aborts on disconnect, detach or close.
+     * @returns The complete HTTP response, or a promise for it.
+     * @remarks Handlers run concurrently. Request and response bodies are
+     * buffered, with a 1 MiB limit. Handler errors produce a generic HTTP 500.
+     * Responses constructed from streams are buffered until completion.
+     */
+    readonly fetch: (request: Request) => Response | Promise<Response>;
+  }
+
+  /** Address returned after the server starts listening. */
+  interface MuonServerAddress {
+    /** HTTP base URL, without a trailing slash. */
+    readonly url: string;
+    /** Numeric loopback address. */
+    readonly host: string;
+    /** Listening TCP port. */
+    readonly port: number;
+  }
+
+  /** A page handler attachment, independent of the native listener. */
+  interface MuonServerBinding {
+    /**
+     * Detaches this handler set and aborts its pending requests.
+     * @returns Completion of detachment; repeated calls share one operation.
+     * @remarks The listener remains open. Requests without attached handlers
+     * receive HTTP 503 until another handler set is attached.
+     */
+    readonly detach: () => Promise<void>;
+  }
+
+  /** A page-owned native HTTP server, initially not listening. */
+  interface MuonServer {
+    /** Opaque identifier of this native server. */
+    readonly id: string;
+    /** Name supplied to createServer(). */
+    readonly name: string;
+    /**
+     * Attaches handlers to the current page.
+     * @param handlers - HTTP handlers to receive requests.
+     * @returns The attachment used to detach these handlers.
+     * @remarks Only one attachment is allowed at a time. Detach it before
+     * attaching another handler set.
+     */
+    readonly attach: (
+      handlers: MuonServerHandlers,
+    ) => Promise<MuonServerBinding>;
+    /**
+     * Starts accepting requests after handlers have been attached.
+     * @returns The listening address.
+     * @remarks An occupied port rejects this call; it can be retried after
+     * releasing the port. Calling listen() on an active listener rejects.
+     */
+    readonly listen: () => Promise<MuonServerAddress>;
+    /**
+     * Permanently closes this server and aborts pending requests.
+     * @returns Completion of closure; repeated calls share one operation.
+     * @remarks Navigation or destruction of the owning page also closes it.
+     */
+    readonly close: () => Promise<void>;
+  }
+
+  /** CEF-only loopback HTTP server operations. */
+  interface MuonServerApi {
+    /**
+     * Creates a native server owned by this page without listening yet.
+     * @param options - Unique page-local name, fixed port and loopback address.
+     * @returns The server handle to attach, listen and close.
+     * @remarks Requires the muon.server.createServer capability. This initial
+     * API supports buffered HTTP; Android, streaming and WebSocket are unsupported.
+     */
+    readonly createServer: (options: MuonServerOptions) => Promise<MuonServer>;
   }
 
   /** Values preserved when notification data is serialized and restored. */

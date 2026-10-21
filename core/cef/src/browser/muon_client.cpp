@@ -18,6 +18,7 @@
 #include "plugins/muon_plugin_metadata.h"
 #include "network/muon_network_request_handler.h"
 #include "notifications/muon_notification_rpc.h"
+#include "server/muon_server_rpc.h"
 #include "browser/muon_window_state.h"
 #include "browser/muon_window_title.h"
 #include "browser/show_dev_tools_task.h"
@@ -3859,6 +3860,7 @@ void MuonClient::InvokeRpcPlugin(const MuonRpcCallRequest& request,
   CefRefPtr<MuonClient> self(this);
   auto bound_request = request;
   BindMuonNotificationWatchOwner(bound_request, plugin_runtime_->GetFunctions());
+  BindMuonServerOwner(bound_request, plugin_runtime_->GetFunctions());
   plugin_runtime_->Invoke(
       bound_request,
       [self, completion = std::move(completion), call_key,

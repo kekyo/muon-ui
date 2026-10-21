@@ -192,6 +192,18 @@ declare module "muon:browser" {
   export const recycle: () => Promise<void>;
 }
 
+declare module "muon:server" {
+  /**
+   * Creates a page-owned CEF loopback HTTP server without listening yet.
+   * @param options - Unique page-local name, fixed port and loopback address.
+   * @returns The server handle to attach, listen and close.
+   * @remarks Requires the muon.server.createServer capability. Android is unsupported.
+   */
+  export const createServer: (
+    options: MuonServerOptions,
+  ) => Promise<MuonServer>;
+}
+
 declare module "muon:executor" {
   /** Native `void` type descriptor. */
   export const voidType: MuonAdhocType<void>;

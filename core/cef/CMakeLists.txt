@@ -792,6 +792,9 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_environment_helpers.cpp
   src/plugins/builtin/muon_builtin_environments.cpp
   src/plugins/builtin/muon_builtin_notifications.cpp
+  src/plugins/builtin/muon_builtin_server.cpp
+  src/server/muon_server_rpc.cpp
+  src/server/muon_server_service.cpp
   src/notifications/muon_notification_rpc.cpp
   src/notifications/muon_notification_model.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
@@ -1224,7 +1227,26 @@ if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_custom_target(muon_notification_renderer
     DEPENDS "${MUON_NOTIFICATION_RENDERER_DIR}/muon_notification_renderer_generated.h")
 endif()
+if(MUON_SERVER_RENDERER_HEADER)
+  set(MUON_SERVER_RENDERER_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/server-renderer")
+  configure_file("${MUON_SERVER_RENDERER_HEADER}"
+    "${MUON_SERVER_RENDERER_DIR}/muon_server_renderer_generated.h" COPYONLY)
+else()
+  set(MUON_SERVER_RENDERER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.build/server-renderer")
+  add_custom_command(
+    OUTPUT "${MUON_SERVER_RENDERER_DIR}/muon_server_renderer_generated.h"
+    COMMAND npm run build:server-renderer --workspace muon-core
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+    DEPENDS renderer/server.ts server-renderer.vite.config.ts
+      build-server-renderer.ts
+    COMMENT "Building the server renderer"
+    VERBATIM)
+endif()
+add_custom_target(muon_server_renderer
+  DEPENDS "${MUON_SERVER_RENDERER_DIR}/muon_server_renderer_generated.h")
 add_executable(${APP_NAME} ${APP_SOURCES} ${APP_HEADERS})
+add_dependencies(${APP_NAME} muon_server_renderer)
+target_include_directories(${APP_NAME} PRIVATE "${MUON_SERVER_RENDERER_DIR}")
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_dependencies(${APP_NAME} muon_notification_renderer)
   target_include_directories(${APP_NAME} PRIVATE "${MUON_NOTIFICATION_RENDERER_DIR}")
@@ -2047,6 +2069,15 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   target_link_libraries(muon_notification_rpc_test PRIVATE muon_rpc_core)
   MUON_APPLY_SANITIZERS(muon_notification_rpc_test)
   add_test(NAME notification_rpc COMMAND muon_notification_rpc_test)
+  add_executable(muon_server_rpc_test
+    ../cef-test/native/muon_server_rpc_test.cpp
+    src/server/muon_server_rpc.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_rpc_test)
+  target_compile_features(muon_server_rpc_test PRIVATE cxx_std_20)
+  target_include_directories(muon_server_rpc_test PRIVATE src)
+  target_link_libraries(muon_server_rpc_test PRIVATE muon_rpc_core)
+  MUON_APPLY_SANITIZERS(muon_server_rpc_test)
+  add_test(NAME server_rpc COMMAND muon_server_rpc_test)
   add_executable(muon_notification_model_test
     ../cef-test/native/muon_notification_model_test.cpp
     src/notifications/muon_notification_model.cpp)

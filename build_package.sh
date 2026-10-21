@@ -439,6 +439,7 @@ build_dist() {
   printf 'Preparing shared native source dependencies\n'
   bash core/cef/build_yyjson.sh
   bash core/cef/build_llhttp.sh
+  bash core/cef/build_wslay.sh
   bash core/cef/build_miniz.sh
 
   npm run build:linux-dependencies --workspace muon-ui

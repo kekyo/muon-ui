@@ -564,6 +564,13 @@ target_include_directories(muon_sha2 PUBLIC
   )
 MUON_APPLY_SANITIZERS(muon_sha2)
 
+set(MUON_SHA1_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../builder/src")
+add_library(muon_sha1 STATIC "${MUON_SHA1_SOURCE_DIR}/sha1.c")
+set_target_properties(muon_sha1 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(muon_sha1 PRIVATE c_std_99)
+target_include_directories(muon_sha1 PUBLIC "${MUON_SHA1_SOURCE_DIR}")
+MUON_APPLY_SANITIZERS(muon_sha1)
+
 add_library(yyjson STATIC
   "${YYJSON_SOURCE_DIR}/yyjson.c"
   "${YYJSON_SOURCE_DIR}/yyjson.h"
@@ -589,6 +596,33 @@ set_target_properties(muon_llhttp PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_features(muon_llhttp PRIVATE c_std_99)
 target_include_directories(muon_llhttp PUBLIC "${MUON_LLHTTP_SOURCE_DIR}/include")
 MUON_APPLY_SANITIZERS(muon_llhttp)
+
+set(MUON_WSLAY_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/src/wslay-1.1.1")
+if(NOT EXISTS "${MUON_WSLAY_SOURCE_DIR}/lib/includes/wslay/wslay.h")
+  message(FATAL_ERROR "Wslay is required. Run build_wslay.sh first.")
+endif()
+add_library(muon_wslay STATIC
+  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_event.c"
+  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_frame.c"
+  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_net.c"
+  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_queue.c"
+  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_stack.c")
+set_target_properties(muon_wslay PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(muon_wslay PRIVATE c_std_99)
+target_include_directories(muon_wslay PUBLIC "${MUON_WSLAY_SOURCE_DIR}/lib/includes")
+# The public header explicitly supports this definition instead of generated
+# wslayver.h; upstream sources and their obsolete CMake files remain untouched.
+target_compile_definitions(muon_wslay PUBLIC WSLAY_VERSION="1.1.1")
+if(WIN32)
+  target_compile_definitions(muon_wslay PRIVATE HAVE_WINSOCK2_H)
+  target_link_libraries(muon_wslay PUBLIC ws2_32)
+else()
+  target_compile_definitions(muon_wslay PRIVATE HAVE_ARPA_INET_H HAVE_NETINET_IN_H)
+endif()
+if(CMAKE_C_BYTE_ORDER STREQUAL "BIG_ENDIAN")
+  target_compile_definitions(muon_wslay PRIVATE WORDS_BIGENDIAN)
+endif()
+MUON_APPLY_SANITIZERS(muon_wslay)
 
 if(NOT MINIZ_SOURCE_DIR)
   set(MINIZ_SOURCE_DIR
@@ -810,6 +844,7 @@ set(APP_SOURCES
   src/server/muon_server_service.cpp
   src/server/muon_server_http.cpp
   src/server/muon_server_socket.cpp
+  src/server/muon_server_websocket.cpp
   src/notifications/muon_notification_rpc.cpp
   src/notifications/muon_notification_model.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
@@ -1277,7 +1312,9 @@ target_link_libraries(${APP_NAME} PRIVATE
   muon_plugin_runtime_core
   muon_rpc_core
   muon_sha2
+  muon_sha1
   muon_llhttp
+  muon_wslay
   libcef_dll_wrapper
   libcef_lib
   yyjson
@@ -2100,9 +2137,18 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_http_test)
   target_compile_features(muon_server_http_test PRIVATE cxx_std_20)
   target_include_directories(muon_server_http_test PRIVATE src)
-  target_link_libraries(muon_server_http_test PRIVATE muon_llhttp)
+  target_link_libraries(muon_server_http_test PRIVATE muon_llhttp muon_sha1)
   MUON_APPLY_SANITIZERS(muon_server_http_test)
   add_test(NAME server_http COMMAND muon_server_http_test)
+  add_executable(muon_server_websocket_test
+    ../cef-test/native/muon_server_websocket_test.cpp
+    src/server/muon_server_websocket.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_websocket_test)
+  target_compile_features(muon_server_websocket_test PRIVATE cxx_std_20)
+  target_include_directories(muon_server_websocket_test PRIVATE src)
+  target_link_libraries(muon_server_websocket_test PRIVATE muon_wslay)
+  MUON_APPLY_SANITIZERS(muon_server_websocket_test)
+  add_test(NAME server_websocket COMMAND muon_server_websocket_test)
   add_executable(muon_server_socket_test
     ../cef-test/native/muon_server_socket_test.cpp
     src/server/muon_server_socket.cpp)

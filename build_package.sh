@@ -18,6 +18,9 @@ MUON_CORE_VERSION_HEADER_CONTAINER="/workspace/${MUON_CORE_VERSION_HEADER_RELATI
 MUON_NOTIFICATION_RENDERER_HEADER_RELATIVE="core/cef/.build/notification-renderer/muon_notification_renderer_generated.h"
 MUON_NOTIFICATION_RENDERER_HEADER_HOST="${SCRIPT_DIR}/${MUON_NOTIFICATION_RENDERER_HEADER_RELATIVE}"
 MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER="/workspace/${MUON_NOTIFICATION_RENDERER_HEADER_RELATIVE}"
+MUON_SERVER_RENDERER_HEADER_RELATIVE="core/cef/.build/server-renderer/muon_server_renderer_generated.h"
+MUON_SERVER_RENDERER_HEADER_HOST="${SCRIPT_DIR}/${MUON_SERVER_RENDERER_HEADER_RELATIVE}"
+MUON_SERVER_RENDERER_HEADER_CONTAINER="/workspace/${MUON_SERVER_RENDERER_HEADER_RELATIVE}"
 
 usage() {
   cat <<'EOF'
@@ -222,6 +225,7 @@ build_linux_target() {
     -e "MUON_BUILDER_GIT_COMMIT_HASH=${MUON_BUILDER_GIT_COMMIT_HASH}" \
     -e "MUON_CORE_VERSION_HEADER=${MUON_CORE_VERSION_HEADER_CONTAINER}" \
     -e "MUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER}" \
+    -e "MUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_CONTAINER}" \
     -e "MUON_NODE_BRIDGE_PREBUILT=1" \
     -e "MUON_TRA_FFIC_ROOT=/workspace-deps/tra-ffic" \
     -e "MUON_CARDIO_ROOT=/workspace-deps/cardio" \
@@ -274,9 +278,11 @@ build_windows_targets() {
   npm run build:target --workspace muon-builder -- dist Release windows-i686
   npm run build:target --workspace muon-builder -- dist Release windows-amd64
   npm run build:target --workspace muon-core -- dist Release windows-i686 \
-    "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}"
+    "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" \
+    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}"
   npm run build:target --workspace muon-core -- dist Release windows-amd64 \
-    "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}"
+    "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" \
+    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}"
 }
 
 stage_targets() {
@@ -425,8 +431,15 @@ build_dist() {
   [[ -f "${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" ]] ||
     fail "Notification renderer header was not generated: ${MUON_NOTIFICATION_RENDERER_HEADER_HOST}"
 
+  printf 'Building shared server renderer\n'
+  npm run build:server-renderer --workspace muon-core
+  [[ -f "${MUON_SERVER_RENDERER_HEADER_HOST}" ]] ||
+    fail "Server renderer header was not generated: ${MUON_SERVER_RENDERER_HEADER_HOST}"
+
   printf 'Preparing shared native source dependencies\n'
   bash core/cef/build_yyjson.sh
+  bash core/cef/build_llhttp.sh
+  bash core/cef/build_wslay.sh
   bash core/cef/build_miniz.sh
 
   npm run build:linux-dependencies --workspace muon-ui

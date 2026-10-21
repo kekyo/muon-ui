@@ -9,6 +9,7 @@ import { dirname, join, relative } from "node:path";
 import { getMuonAndroidBuiltinFunctionPaths } from "../../core/android/function-paths.js";
 
 declare const __MUON_NOTIFICATION_RENDERER_SOURCE__: string;
+declare const __MUON_SERVER_RENDERER_SOURCE__: string;
 
 /**
  * Import-side capability rule for muon plugin virtual modules.
@@ -211,6 +212,7 @@ const moduleNamePattern =
   /^[A-Za-z_$][A-Za-z0-9_$]*:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/u;
 const jsIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const defaultMuonCapabilityFunctionPaths = [
+  "muon.server.createServer",
   "muon.browser.reload",
   "muon.browser.hardReload",
   "muon.browser.toggleFullscreen",
@@ -1325,6 +1327,9 @@ const createModuleSource = (rule: ResolvedRule): string => {
     if (rule.namespace === "muon.notifications") {
       return `export const ${exportName} = __muonNotifications[${JSON.stringify(exportName)}];`;
     }
+    if (rule.namespace === "muon.server") {
+      return `export const ${exportName} = __muonServer[${JSON.stringify(exportName)}];`;
+    }
     if (
       rule.namespace === "muon.environments" &&
       exportName === "getConfigValues"
@@ -1372,6 +1377,7 @@ if (typeof __muonCall !== "function") {
 }
 
 ${rule.backend === "cef" && rule.namespace === "muon.notifications" ? `${__MUON_NOTIFICATION_RENDERER_SOURCE__}\nconst __muonNotifications = MuonNotificationRenderer.createMuonCefNotificationsApi(async (name, args) => await __muonCall(${JSON.stringify(rule.id)}, 'muon.notifications.' + name, args));\n` : ""}
+${rule.backend === "cef" && rule.namespace === "muon.server" ? `${__MUON_SERVER_RENDERER_SOURCE__}\nconst __muonServer = MuonServerRenderer.createMuonCefServerApi(async (json, body, owner) => await __muonCall(${JSON.stringify(rule.id)}, 'muon.server.createServer', [json, body, owner]));\n` : ""}
 ${usesBrowserContextMenuHelpers ? `${createBrowserContextMenuHelpers()}\n\n` : ""}
 ${usesBrowserTrayHelpers ? `${createBrowserTrayHelpers()}\n\n` : ""}
 ${exports.join("\n\n")}

@@ -10,6 +10,7 @@ import screwUp from "screw-up";
 import { defineConfig } from "vitest/config";
 import type { UserConfig } from "vite";
 import { buildMuonNotificationRenderer } from "../core/common/build-notification-renderer.mjs";
+import { buildMuonServerRenderer } from "../core/cef/build-server-renderer.ts";
 
 import muonNodePackageJson from "../node/package.json" with { type: "json" };
 
@@ -20,6 +21,9 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
 
   return {
     define: {
+      __MUON_SERVER_RENDERER_SOURCE__: JSON.stringify(
+        await buildMuonServerRenderer(),
+      ),
       __MUON_NOTIFICATION_RENDERER_SOURCE__: JSON.stringify(
         await buildMuonNotificationRenderer(),
       ),

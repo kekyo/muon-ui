@@ -8,6 +8,7 @@ import screwUp from "screw-up";
 import { defineConfig } from "vitest/config";
 import type { UserConfig } from "vite";
 import { buildMuonNotificationRenderer } from "../common/build-notification-renderer.mjs";
+import { buildMuonServerRenderer } from "../cef/build-server-renderer.ts";
 
 const isValgrindRun = process.env.MUON_TEST_USE_VALGRIND === "1";
 // Local launcher startup may legitimately use its 120-second runtime staging
@@ -16,6 +17,9 @@ const testTimeout = isValgrindRun ? 600000 : 180000;
 
 export default defineConfig(async (): Promise<UserConfig> => ({
   define: {
+    __MUON_SERVER_RENDERER_SOURCE__: JSON.stringify(
+      await buildMuonServerRenderer(),
+    ),
     __MUON_NOTIFICATION_RENDERER_SOURCE__: JSON.stringify(
       await buildMuonNotificationRenderer(),
     ),

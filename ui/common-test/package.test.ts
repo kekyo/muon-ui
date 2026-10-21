@@ -573,14 +573,12 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
       'import { appendFileSync } from "node:fs";\nappendFileSync("sdk-stages.log", JSON.stringify({ script: process.argv[1].split("/").pop(), targets: process.argv.slice(2) }) + "\\n");\n',
     );
   }
-  await writeExecutableScript(
-    join(root, "core/cef", "build_yyjson.sh"),
-    "#!/usr/bin/env bash\nset -euo pipefail\n",
-  );
-  await writeExecutableScript(
-    join(root, "core/cef", "build_miniz.sh"),
-    "#!/usr/bin/env bash\nset -euo pipefail\n",
-  );
+  for (const dependency of ["yyjson", "llhttp", "wslay", "miniz"]) {
+    await writeExecutableScript(
+      join(root, "core/cef", `build_${dependency}.sh`),
+      "#!/usr/bin/env bash\nset -euo pipefail\n",
+    );
+  }
   return root;
 };
 

@@ -375,6 +375,16 @@ CEF内蔵サービスにサーバー、ハンドラー登録、要求・接続�
 
 新しい通信部分にWebSocketを実装し、ドライバーで接続、text／binaryの送受信、切断を観測する。`attach()`へのWebSocketハンドラー登録と接続ハンドルを実装する。HTTPと同じHost／Origin／認証ポリシーを適用し、ブラウザー内から認証付きで接続する手段も検証する。フレーム解析のライブラリを採用する場合は、保守状況、公開API、Linux／Windowsのビルドを確認し、公式コードを変更せずに使う。
 
+フレーム処理はWslay 1.1.1を固定して組み込む。WslayはI/Oを行わず、呼出元が用意する受送信のコールバックを使うため、cardioのTCP層へ接続できる。公式の公開APIとヘッダーコメントを確認し、変更していないソースがLinuxのgccとWindows向けMinGWで警告なしにコンパイルできることを確認した。公式リポジトリーの最新コミットは2022年8月であり、活発な更新を前提にはしない。フレーム処理を独立した部品にし、境界条件を検証して採用する。[Wslayの説明](https://tatsuhiro-t.github.io/wslay/)、[固定する版](https://github.com/tatsuhiro-t/wslay/tree/release-1.1.1)、[更新履歴](https://github.com/tatsuhiro-t/wslay/commits/master/)
+
+この段階は、次の単位で進める。通常のMCP SDK接続を確認した後は、実Codexの接続試験と独立したフレーム処理の実装を並行できる。
+
+1. フレーム処理と実行可能なネイティブテストを追加する。text／binary、分割受信、fragmentの再構成、UTF-8、不正なmaskや長さ、ping／pong、close、上限超過を確認する。メッセージは1 MiBまでとし、受信結果と送信キューにも件数・バイト数の上限を設ける。送信結果は最大64 KiBずつTCP層へ渡す。
+2. HTTP Upgrade、認証、ページとの通信を接続する。`attach()`の`websocket`へ`accept`、`open`、`message`、`close`を登録する。`accept`はRequestを受け取り、拒否を示す`false`か、選択するprotocolを任意に指定したオブジェクトを返す。接続ハンドルには`id`、`protocol`、非同期の`send()`と`close()`を設ける。textはstring、binaryはUint8Arrayで受け取る。同じ接続のメッセージ処理は順序を保ち、アプリが処理するまで受信の進行を抑える。
+3. CEF内と外部のクライアントで往復、認証拒否、例外、明示停止、ページ破棄を検証する。外部クライアントはAuthorizationのBearerを使える。標準のブラウザーWebSocketでは、subprotocol候補に`muon.auth`と`muon.bearer.<tokenのbase64url表現>`を渡す方式を追加する。認証用の値はUpgrade前にネイティブ側で検証して取り除き、応答のprotocolやアプリの候補には含めない。アプリがprotocolを指定しなければ`muon.auth`を選ぶ。URLへ資格情報を入れず、通常のHost／Origin検証も維持する。
+
+初版では圧縮などの拡張を交渉しない。close codeはWslayが受信できる1000～1011のうち1004・1005・1006を除く値と、3000～4999を扱い、それ以外は送信時にも拒否する。理由はUTF-8で123バイトまでとする。1012～1014などの追加コードも対応済みとは説明しない。[Wslayのclose code検証](https://github.com/tatsuhiro-t/wslay/blob/release-1.1.1/lib/wslay_event.c#L554-L558)、[closeの公開API](https://tatsuhiro-t.github.io/wslay/man/wslay_event_queue_close.html)
+
 完了条件はCEF内と外部のクライアントで対応範囲のメッセージを往復でき、不許可の接続をUpgrade前に拒否することである。終了、切断、処理中の例外でリソースを解放し、提供できないsubprotocolやclose code等を利用文書で区別する。採用した通信部分で必要な用途を満たせない場合は、代替案を計画へ反映してから続ける。
 
 ### 段階5 対象環境と利用文書
@@ -454,7 +464,13 @@ Linuxではネイティブテスト60件とテストドライバーのビルド�
 
 rendererの単体テスト35件とネイティブテスト60件が成功した。実CEFでもsimple／validateの両モードで、SSEイベントの逐次受信、通常の要求との並行処理、8 MiBの全バイト比較、正常終了、途中エラー、接続リセット時のreader取消、登録解除とページ遷移時のストリーム終了を確認した。製品のasset Originからの認証付きHTTPも両モードで成功した。
 
-MCP、WebSocket、Windows実機での検証、全体の`npm test`は後続段階に残っている。段階ごとの実装や個別テストの成功を、全体の完了とは扱わない。
+MCPドライバーには公式TypeScript SDKの`@modelcontextprotocol/server`と`@modelcontextprotocol/client` 2.3.1、Zod 4.6.7を採用した。`createMcpHandler`をFetch形式のハンドラーへ接続し、`read_state`と`write_state`で画面の状態を読み書きする。要求ごとにMCPサーバーを作成するSDKの方式に合わせ、アプリの状態はその外側に保持する。[SDKのWeb標準サーバー](https://ts.sdk.modelcontextprotocol.io/v2/serving/web-standard.html)
+
+SDKを使う契約テスト1件と、実CEFのsimple／validate・Bearerあり／なしの4ケースが成功した。外部Nodeクライアントとasset内のブラウザークライアントが同じ状態を読み書きし、Playwright MCPで画面への反映を確認した。ブラウザークライアントはプロトコル`2026-07-28`を指定し、SSE応答も確認した。この検証で、ブラウザーのRequest生成時にOrigin／Hostが除かれる問題を再現して修正した。受信ヘッダーは独立したHeadersとして公開し、`clone()`でも保持する。[Fetchの要求ヘッダー制約](https://fetch.spec.whatwg.org/#forbidden-request-header)
+
+Codex CLI 0.163.0でも、Bearerあり／なしの両方で、状態取得、1回の書込み、再取得が成功した。別のSDKクライアントとPlaywright MCPでも変更後の状態を確認した。Bearerは子プロセスの環境変数から渡し、接続設定はその起動だけに適用する。CLIの既定の承認設定では書込みが拒否されたため、実装検証として許可されたテスト画面の`write_state`だけに、起動時の`approval_mode="approve"`を指定した。サーバーのBearer認証とクライアントの操作承認は別の条件になる。[Codexのツール承認設定](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)
+
+WebSocket、Windows実機での検証、全体の`npm test`は残っている。段階ごとの実装や個別テストの成功を、全体の完了とは扱わない。
 
 ## 計画書保存時の確認
 

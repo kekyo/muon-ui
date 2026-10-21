@@ -215,7 +215,11 @@ describe("CEF server capability modules", () => {
                 requestId: "request-1",
                 method: "POST",
                 url: "http://127.0.0.1:8765/echo",
-                headers: [["content-type", "application/octet-stream"]],
+                headers: [
+                  ["content-type", "application/octet-stream"],
+                  ["host", "127.0.0.1:8765"],
+                  ["origin", "asset://main"],
+                ],
               },
               new Uint8Array([0, 255, 3]),
             );
@@ -253,6 +257,16 @@ describe("CEF server capability modules", () => {
         expect(request.headers.get("content-type")).toBe(
           "application/octet-stream",
         );
+        const cloned = request.clone();
+        for (const received of [request, cloned]) {
+          expect(received.headers.get("host")).toBe("127.0.0.1:8765");
+          expect(received.headers.get("origin")).toBe("asset://main");
+        }
+        cloned.headers.set("x-clone-only", "changed");
+        expect(request.headers.has("x-clone-only")).toBe(false);
+        expect([...new Uint8Array(await cloned.arrayBuffer())]).toEqual([
+          0, 255, 3,
+        ]);
         return new Response(await request.arrayBuffer(), {
           status: 201,
           headers: { "x-result": "echo" },

@@ -20,7 +20,9 @@
     "test:windows-notifications": "MUON_E2E_WINDOWS_TARGET=windows-i686 vitest run notifications-windows.test.ts && MUON_E2E_WINDOWS_TARGET=windows-amd64 vitest run notifications-windows.test.ts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
     "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "@playwright/mcp": "^0.0.83",
     "@types/node": ">=24.0.0",
     "@types/pngjs": "^6.0.5",
@@ -35,6 +37,7 @@
     "typescript": ">=5.9.0",
     "vite": ">=7.0.0",
     "vitest": ">=4.0.0",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "zod": "^4.6.7"
   }
 }

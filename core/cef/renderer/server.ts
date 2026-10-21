@@ -109,6 +109,23 @@ const abortBinding = (binding: BindingState): void => {
   for (const request of binding.requests.values()) request.controller.abort();
 };
 
+const preserveReceivedHeaders = (
+  request: Request,
+  headers: Headers
+): Request => {
+  // Browser Request construction filters outbound-only forbidden headers such
+  // as Host and Origin. This is an inbound request already checked by native
+  // policy, so expose the received Headers and preserve them when cloning.
+  // Keep the standard clone operation for body, signal and consumed-body rules.
+  const clone = request.clone.bind(request);
+  return Object.defineProperties(request, {
+    headers: { value: headers },
+    clone: {
+      value: () => preserveReceivedHeaders(clone(), new Headers(headers)),
+    },
+  });
+};
+
 /**
  * Adapts the single authorized native operation to the public server API.
  * @param call - Native dispatch accepting metadata, bytes and an owner placeholder.
@@ -199,14 +216,17 @@ export const createMuonCefServerApi = (
         signal.addEventListener('abort', cancelReader, { once: true });
         try {
           if (!binding.active || signal.aborted) return;
-          const request = new Request(event.url, {
-            method: event.method,
-            headers: event.headers,
-            signal,
-            ...(event.method === 'GET' || event.method === 'HEAD'
-              ? {}
-              : { body }),
-          });
+          const request = preserveReceivedHeaders(
+            new Request(event.url, {
+              method: event.method,
+              headers: event.headers,
+              signal,
+              ...(event.method === 'GET' || event.method === 'HEAD'
+                ? {}
+                : { body }),
+            }),
+            new Headers(event.headers)
+          );
           const response = await handlers.fetch(request);
           if (!(response instanceof Response) || response.status < 200)
             throw new TypeError('Server handler must return an HTTP Response');

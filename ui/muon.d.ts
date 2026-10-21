@@ -223,14 +223,14 @@ declare global {
     readonly close: () => Promise<void>;
   }
 
-  /** CEF-only loopback HTTP server operations. */
+  /** CEF-only loopback HTTP and WebSocket server operations. */
   interface MuonServerApi {
     /**
      * Creates a native server owned by this page without listening yet.
      * @param options - Unique page-local name, fixed port and loopback address.
      * @returns The server handle to attach, listen and close.
      * @remarks Requires the muon.server.createServer capability. HTTP responses
-     * support streaming, including SSE. Android and WebSocket are unsupported.
+     * support streaming, including SSE. Android is unsupported.
      */
     readonly createServer: (options: MuonServerOptions) => Promise<MuonServer>;
   }

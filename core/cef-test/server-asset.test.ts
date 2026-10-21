@@ -8,7 +8,7 @@ import { EventEmitter, once } from "node:events";
 import { watch } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
-import { createServer } from "node:net";
+import { createConnection as connectTcp, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -267,13 +267,19 @@ await filesystem.writeTextFile(${JSON.stringify(readyPath)}, 'ready', 'utf8', un
         window.binding = await window.server.attach({
           fetch: () => new Response('HTTP still works'),
           websocket: {
-            accept: request => {
+            accept: async request => {
               window.wsRequests.push([...request.headers]);
               const path = new URL(request.url).pathname;
+              if (path === '/wait-accept') { await window.waitForClientAbort(request.signal); return false; }
+              if (path === '/wait-open') return {};
               return path === '/chat' ? {protocol: 'chat'} : path === '/echo' ? {} : false;
             },
-            open: socket => { window.lastSocket = socket; },
+            open: async socket => {
+              window.lastSocket = socket;
+              if (new URL(socket.request.url).pathname === '/wait-open') await window.waitForClientAbort(socket.request.signal);
+            },
             message: async (socket, data) => {
+              if (data === 'wait-abort') { await window.waitForClientAbort(socket.request.signal); return; }
               if (data === 'close') { await socket.close(3001, '完了'); return; }
               if (data === 'throw') throw new Error('private handler detail');
               if (data === 'path') { await socket.send(new URL(socket.request.url).pathname); return; }
@@ -467,6 +473,76 @@ await filesystem.writeTextFile(${JSON.stringify(readyPath)}, 'ready', 'utf8', un
         reason: "Handler failed",
         wasClean: true,
       });
+
+      for (const phase of ["message", "open", "accept"] as const) {
+        await evaluate(`
+          window.abortWaitEntered = new Promise(resolve => window.enterAbortWait = resolve);
+          window.clientAbortObserved = new Promise(resolve => window.observeClientAbort = resolve);
+          window.waitForClientAbort = async signal => {
+            const aborted = new Promise(resolve => {
+              if (signal.aborted) resolve();
+              else signal.addEventListener('abort', resolve, {once: true});
+            });
+            window.enterAbortWait();
+            await aborted;
+            window.observeClientAbort(signal.aborted);
+          };
+          return true;
+        `);
+        const raw = connectTcp({ host: "127.0.0.1", port: serverAddress.port });
+        raw.on("error", () => {});
+        raw.resume();
+        try {
+          await once(raw, "connect");
+          const path = phase === "message" ? "/echo" : `/wait-${phase}`;
+          const handshake = Buffer.from(
+            [
+              `GET ${path} HTTP/1.1`,
+              `Host: 127.0.0.1:${serverAddress.port}`,
+              "Connection: Upgrade",
+              "Upgrade: websocket",
+              "Sec-WebSocket-Version: 13",
+              "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+              `Authorization: Bearer ${token}`,
+              "",
+              "",
+            ].join("\r\n"),
+          );
+          const text = Buffer.from("wait-abort");
+          const mask = Buffer.from([17, 34, 51, 68]);
+          const frame =
+            phase === "message"
+              ? Buffer.concat([
+                  Buffer.from([0x81, 0x80 | text.length]),
+                  mask,
+                  text.map(
+                    (value, index) => value ^ mask[index % mask.length]!,
+                  ),
+                ])
+              : Buffer.alloc(0);
+          raw.write(Buffer.concat([handshake, frame]));
+          expect(
+            await evaluate("await window.abortWaitEntered; return true;"),
+          ).toBe(true);
+          const reset = once(raw, "close");
+          raw.resetAndDestroy();
+          await reset;
+          // This awaits the signal, not elapsed time or a fixed sleep. The MCP
+          // request deadline diagnoses a handler stranded after peer reset.
+          try {
+            expect(
+              await evaluate("return await window.clientAbortObserved;"),
+            ).toBe(true);
+          } catch (error) {
+            throw new Error(
+              `The ${phase} handler did not observe the peer TCP reset`,
+              { cause: error },
+            );
+          }
+        } finally {
+          raw.destroy();
+        }
+      }
 
       const detached = await connect("/echo", ["muon.auth", credential]);
       expect(await exchange(detached, "before detach")).toBe("before detach");

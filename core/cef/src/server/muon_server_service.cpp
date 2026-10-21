@@ -50,6 +50,7 @@ struct ServerConnection {
   bool websocket_ready = false;
   bool websocket_sending = false;
   bool websocket_timer_started = false;
+  bool websocket_input_closed = false;
 };
 struct ServerRequest {
   std::shared_ptr<ServerConnection> connection;
@@ -339,6 +340,23 @@ static cardio::promise<void> MonitorServerConnection(std::shared_ptr<ServerConne
   }
   if (failed) co_await connection->socket->close();
 }
+static cardio::promise<ServerBytes> ReadServerWebSocket(
+    std::shared_ptr<ServerConnection> connection) {
+  try {
+    // Keep one bounded read outstanding while page handlers are pending. Its
+    // coroutine owns the buffer until socket closure has canceled the read.
+    auto buffer = std::array<uint8_t, 16 * 1024>{};
+    const auto size = co_await connection->socket->read(buffer);
+    if (!size) throw std::runtime_error("WebSocket transport ended");
+    co_return ServerBytes(buffer.begin(), buffer.begin() + size);
+  } catch (...) {
+    connection->websocket_input_closed = true;
+    const auto error = std::current_exception();
+    if (connection->response) connection->response->try_reject(error);
+    if (connection->websocket_ack) connection->websocket_ack->try_reject(error);
+    throw;
+  }
+}
 static cardio::promise<void> DrainServerWebSocket(std::shared_ptr<ServerConnection> connection) {
   // cardio awaits expose the stored value by reference; move the RAII handle
   // out before the temporary promise is released.
@@ -364,7 +382,8 @@ static void StartServerWebSocketTimeout(const std::shared_ptr<ServerConnection>&
 static cardio::promise<void> DeliverServerWebSocket(
     std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection,
     const std::string& type, bool binary, const ServerBytes& body) {
-  if (!state->binding || state->binding->token != connection->binding)
+  if (!state->binding || state->binding->token != connection->binding ||
+      connection->websocket_input_closed)
     throw cardio::canceled_exception();
   connection->websocket_ack = std::make_shared<cardio::promise_source<void>>();
   auto pending = connection->websocket_ack->get_promise();
@@ -377,18 +396,20 @@ static cardio::promise<void> DeliverServerWebSocket(
 }
 static cardio::promise<void> RunServerWebSocket(
     std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection,
-    ServerBytes initial) {
+    ServerBytes initial, cardio::promise<ServerBytes>& input) {
   co_await DeliverServerWebSocket(state, connection, "ws_open", false, {});
-  auto buffer = std::array<uint8_t, 16 * 1024>{};
   while (connection->websocket->status().read_enabled) {
     auto messages = std::vector<MuonServerWebSocketMessage>{};
     if (!initial.empty()) {
       messages = connection->websocket->receive(initial);
       initial.clear();
     } else {
-      const auto size = co_await connection->socket->read(buffer);
-      if (!size) break;
-      messages = connection->websocket->receive(std::span(buffer.data(), size));
+      const auto bytes = std::move(co_await input);
+      messages = connection->websocket->receive(bytes);
+      // Read ahead only once. Buffered data waits for the current callbacks,
+      // preserving backpressure while detecting an otherwise idle peer reset.
+      if (connection->websocket->status().read_enabled)
+        input = ReadServerWebSocket(connection);
     }
     co_await DrainServerWebSocket(connection);
     if (connection->websocket->status().close_sent) StartServerWebSocketTimeout(connection);
@@ -401,6 +422,7 @@ static cardio::promise<void> RunServerConnection(
     std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection) {
   auto acknowledged = std::shared_ptr<cardio::promise_source<void>>{};
   auto monitor = cardio::resolved();
+  auto websocket_input = cardio::resolved(ServerBytes{});
   auto clean_websocket = false;
   try {
     const auto parser = CreateMuonServerHttpParser();
@@ -458,7 +480,8 @@ static cardio::promise<void> RunServerConnection(
             QuoteServerString(incoming.upgrade ? "ws_request" : "request") + ",\"requestId\":" +
             QuoteServerString(connection->request_id) + ",\"method\":" + QuoteServerString(incoming.method) +
             ",\"url\":" + QuoteServerString(target) + ",\"headers\":" + header_json + "}", incoming.body));
-        if (!incoming.upgrade) monitor = MonitorServerConnection(connection);
+        if (incoming.upgrade) websocket_input = ReadServerWebSocket(connection);
+        else monitor = MonitorServerConnection(connection);
         response = co_await pending;
       }
     }
@@ -472,7 +495,7 @@ static cardio::promise<void> RunServerConnection(
     if (response.upgraded) connection->websocket_ready = true;
     if (acknowledged) acknowledged->try_resolve();
     if (response.upgraded) {
-      co_await RunServerWebSocket(state, connection, std::move(remaining));
+      co_await RunServerWebSocket(state, connection, std::move(remaining), websocket_input);
       const auto status = connection->websocket->status();
       clean_websocket = status.close_received && status.close_sent;
     } else co_await stream_finished;
@@ -484,6 +507,8 @@ static cardio::promise<void> RunServerConnection(
   // Closing cancels the monitor before its buffer and socket can be released.
   co_await connection->socket->close();
   co_await monitor;
+  try { co_await websocket_input; }
+  catch (...) { /* The read failure or cancellation has already ended this connection. */ }
   if (!connection->request_id.empty() && state->requests.erase(connection->request_id)) {
     if (state->binding && state->binding->token == connection->binding) {
       if (connection->websocket) {

@@ -446,6 +446,10 @@ export const createMuonCefServerApi = (
         const fields = { binding: binding.id, requestId: event.requestId };
         let state = binding.websockets.get(event.requestId);
         if (event.type === 'ws_close') {
+          // Closure can race with delivery of ws_open after a successful
+          // upgrade. Abort the accepted request even before a handle exists.
+          binding.requests.get(event.requestId)?.controller.abort();
+          binding.requests.delete(event.requestId);
           await state?.notifyClose({
             code: event.code,
             reason: event.reason,

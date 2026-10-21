@@ -45,7 +45,10 @@ beforeAll(async () => {
   cdpHost = (await discoverWindowsTestNetwork(agent)).cdpHost;
   await stageWindowsRuntimeDirectory(
     agent,
-    resolve("../..", target.releaseRuntimeDirectory),
+    resolve(
+      "../..",
+      process.env.MUON_TEST_WINDOWS_RUNTIME ?? target.releaseRuntimeDirectory,
+    ),
     runtime,
   );
   await agent.files.writeFile(

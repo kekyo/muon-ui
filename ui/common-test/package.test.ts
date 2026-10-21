@@ -573,14 +573,12 @@ const createFakePackageBuildRoot = async (): Promise<string> => {
       'import { appendFileSync } from "node:fs";\nappendFileSync("sdk-stages.log", JSON.stringify({ script: process.argv[1].split("/").pop(), targets: process.argv.slice(2) }) + "\\n");\n',
     );
   }
-  await writeExecutableScript(
-    join(root, "core/cef", "build_yyjson.sh"),
-    "#!/usr/bin/env bash\nset -euo pipefail\n",
-  );
-  await writeExecutableScript(
-    join(root, "core/cef", "build_miniz.sh"),
-    "#!/usr/bin/env bash\nset -euo pipefail\n",
-  );
+  for (const dependency of ["yyjson", "llhttp", "wslay", "miniz"]) {
+    await writeExecutableScript(
+      join(root, "core/cef", `build_${dependency}.sh`),
+      "#!/usr/bin/env bash\nset -euo pipefail\n",
+    );
+  }
   return root;
 };
 
@@ -809,7 +807,7 @@ describe("muon-ui package root export", () => {
     await expect(verify()).rejects.toThrow("libcef.so");
   });
 
-  it("builds packages with an unbuilt SDK, vendored native dependencies, and a host-built notification renderer", async () => {
+  it("builds packages with an unbuilt SDK, vendored native dependencies, and host-built renderers", async () => {
     const root = await createFakePackageBuildRoot();
     const binDirectory = join(root, "bin");
     const containerLog = join(root, "container.log");
@@ -835,10 +833,14 @@ fi
 if [[ "\${1:-}" == "run" ]]; then
   printf '%s\\n' "$@" >> "\${MUON_FAKE_CONTAINER_LOG:?}"
   notification_header=""
+  server_header=""
   for arg in "$@"; do
     case "\${arg}" in
       MUON_NOTIFICATION_RENDERER_HEADER=*)
         notification_header="\${arg#MUON_NOTIFICATION_RENDERER_HEADER=}"
+        ;;
+      MUON_SERVER_RENDERER_HEADER=*)
+        server_header="\${arg#MUON_SERVER_RENDERER_HEADER=}"
         ;;
     esac
   done
@@ -853,6 +855,15 @@ if [[ "\${1:-}" == "run" ]]; then
   fi
   if [[ "$(<"\${host_header}")" != 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' ]]; then
     printf 'Unexpected prebuilt notification renderer content\\n' >&2
+    exit 1
+  fi
+  if [[ "\${server_header}" != "/workspace/core/cef/.build/server-renderer/muon_server_renderer_generated.h" ]]; then
+    printf 'Missing prebuilt server renderer path\\n' >&2
+    exit 1
+  fi
+  host_header="\${PWD}/\${server_header#/workspace/}"
+  if [[ ! -f "\${host_header}" ]] || [[ "$(<"\${host_header}")" != 'static constexpr char kMuonServerSetupScript[] = "host-built server renderer";' ]]; then
+    printf 'Server renderer was not generated before starting the container\\n' >&2
     exit 1
   fi
   exit 0
@@ -878,6 +889,10 @@ fi
 if [[ "$*" == "run build:notification-renderer --workspace muon-core" ]]; then
   mkdir -p core/cef/.build/notification-renderer
   printf '%s\\n' 'static constexpr char kMuonNotificationSetupScript[] = "host-built notification renderer";' > core/cef/.build/notification-renderer/muon_notification_renderer_generated.h
+fi
+if [[ "$*" == "run build:server-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/server-renderer
+  printf '%s\\n' 'static constexpr char kMuonServerSetupScript[] = "host-built server renderer";' > core/cef/.build/server-renderer/muon_server_renderer_generated.h
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; then
   output_path=""
@@ -1034,6 +1049,11 @@ if [[ "$*" == "run build:notification-renderer --workspace muon-core" ]]; then
   exit 0
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "build:linux-dependencies" ]]; then
+  exit 0
+fi
+if [[ "$*" == "run build:server-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/server-renderer
+  printf '%s\\n' 'static constexpr char kMuonServerSetupScript[] = "host-built server renderer";' > core/cef/.build/server-renderer/muon_server_renderer_generated.h
   exit 0
 fi
 printf 'Unexpected fake npm invocation: %s\\n' "$*" >&2
@@ -1279,6 +1299,47 @@ exit 1
     }
 
     expect(missingTargets).toEqual([]);
+  });
+
+  it("provides CEF HTTP server globals and capability module types", async () => {
+    await expect(
+      runTypeScriptConsumer(`import type {} from "muon-ui";
+import { createServer } from "muon:server";
+
+const allowedOrigins = ["asset://main", "http://localhost:5173"] as const;
+const options: MuonServerOptions = {
+  name: "automation", port: 8765, bearerToken: "example-token", allowedOrigins,
+};
+const server: MuonServer = await createServer(options);
+const binding: MuonServerBinding = await server.attach({
+  fetch: async (request) => {
+    const signal: AbortSignal = request.signal;
+    return new Response(await request.arrayBuffer(), { status: 200 });
+  },
+});
+const address: MuonServerAddress = await server.listen();
+const name: string = server.name;
+const id: string = server.id;
+const host: string = address.host;
+await binding.detach();
+await server.close();
+await window.muon.server?.createServer({
+  name: "simple", host: "127.0.0.1", port: 8766,
+  bearerToken: "example-token", allowedOrigins,
+});
+await createServer({ name: "unauthenticated", port: 8767 });
+// @ts-expect-error A fixed port is mandatory.
+await createServer({ name: "missing-port" });
+// @ts-expect-error Initial servers bind only numeric loopback addresses.
+await createServer({ name: "public", port: 8765, host: "0.0.0.0" });
+// @ts-expect-error Bearer tokens are strings.
+await createServer({ name: "invalid-token", port: 8765, bearerToken: 42 });
+// @ts-expect-error Allowed origins must be an array.
+await createServer({ name: "invalid-origins", port: 8765, allowedOrigins: "asset://main" });
+// @ts-expect-error HTTP handlers return Response objects.
+await server.attach({ fetch: () => "hello" });
+`),
+    ).resolves.toBeUndefined();
   });
 
   it("provides muon globals through root TypeScript imports", async () => {

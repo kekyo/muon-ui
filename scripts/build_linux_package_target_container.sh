@@ -40,6 +40,7 @@ require_env MUON_BUILDER_VERSION
 require_env MUON_BUILDER_GIT_COMMIT_HASH
 require_env MUON_CORE_VERSION_HEADER
 require_env MUON_NOTIFICATION_RENDERER_HEADER
+require_env MUON_SERVER_RENDERER_HEADER
 require_env MUON_TRA_FFIC_ROOT
 require_env MUON_CARDIO_ROOT
 
@@ -63,6 +64,8 @@ require_command node
 cd /workspace
 [[ -f "${MUON_NOTIFICATION_RENDERER_HEADER}" ]] ||
   fail "Missing host-generated notification renderer: ${MUON_NOTIFICATION_RENDERER_HEADER}"
+[[ -f "${MUON_SERVER_RENDERER_HEADER}" ]] ||
+  fail "Missing host-generated server renderer: ${MUON_SERVER_RENDERER_HEADER}"
 
 export MUON_BUILDER_VERSION
 export MUON_BUILDER_GIT_COMMIT_HASH
@@ -72,6 +75,7 @@ bash builder/build.sh dist Release "${MUON_PACKAGE_TARGET}"
 rm -rf "core/cef/.build/dist/${MUON_PACKAGE_TARGET}"
 bash core/cef/build.sh dist Release "${MUON_PACKAGE_TARGET}" \
   "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER}" \
+  "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER}" \
   "-DTRA_FFIC_ROOT=${MUON_TRA_FFIC_ROOT}" \
   "-DCARDIO_ROOT=${MUON_CARDIO_ROOT}"
 

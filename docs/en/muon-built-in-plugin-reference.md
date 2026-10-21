@@ -12,6 +12,10 @@ For example, for `window.muon.executor.spawn`, first allow `muon.executor.spawn`
 import { spawn } from "muon:executor";
 ```
 
+## HTTP and WebSocket servers on CEF
+
+`window.muon.server.createServer(options)` creates a loopback server owned by the current page. In validate mode, import from `muon:server` and allow `muon.server.createServer`. HTTP handlers use Request/Response, while WebSocket handlers use connection handles. Optional Bearer authentication is supported, and applications can provide MCP endpoints on top of HTTP. Android is not supported. See the [Japanese guide to setup, authentication, lifetime, and MCP](../ja/local-server.md).
+
 ## Notifications and Android features
 
 Use `muon.notifications` for local notifications on Android, Windows, and Linux. Android system bars, notification permissions and channels, and OS settings screens are under `muon.android`. The CEF backend does not expose `muon.android`.

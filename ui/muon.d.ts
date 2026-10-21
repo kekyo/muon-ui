@@ -31,6 +31,8 @@ declare global {
     readonly android?: MuonAndroidApi;
     /** Native local notifications, present only when enabled and permitted. */
     readonly notifications?: MuonNotificationsApi;
+    /** CEF-only page-owned loopback HTTP servers, present when permitted. */
+    readonly server?: MuonServerApi;
     /**
      * Optional out-of-process Node.js runtime.
      *
@@ -39,6 +41,198 @@ declare global {
      * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
+  }
+
+  /** Options for creating a page-owned native HTTP server. */
+  interface MuonServerOptions {
+    /** Nonempty name, unique within this page; maximum 128 UTF-8 bytes. */
+    readonly name: string;
+    /** Fixed TCP port between 1025 and 65535. */
+    readonly port: number;
+    /**
+     * Numeric loopback address accepted by the initial HTTP implementation.
+     * @defaultValue "127.0.0.1"
+     */
+    readonly host?: "127.0.0.1";
+    /**
+     * Secret required in Authorization: Bearer on every application request.
+     * @remarks Must contain 1 to 4096 ASCII characters using RFC 6750 b64token
+     * syntax: letters, digits, -._~+/, followed only by optional = padding.
+     * An empty token is invalid. CORS preflight requests are checked separately
+     * without the token. When omitted, local processes need no credentials.
+     * @defaultValue No Bearer authentication.
+     */
+    readonly bearerToken?: string;
+    /**
+     * Exact origins permitted to access this server from a browser.
+     * @remarks Entries must be http, https or asset origins. Wildcards,
+     * the opaque origin "null", paths, queries and fragments are rejected.
+     * Values are matched exactly and are not normalized. Requests without
+     * an Origin header remain permitted, subject to Bearer authentication.
+     * @defaultValue An empty list.
+     */
+    readonly allowedOrigins?: readonly string[];
+  }
+
+  /** HTTP handlers attached to the current page. */
+  interface MuonServerHandlers {
+    /**
+     * Handles an HTTP request using the Fetch API.
+     * @param request - Request whose signal aborts on detected transport failure,
+     * handler detach or server close.
+     * @returns An HTTP response, or a promise for it; its body may be a stream.
+     * @remarks Handlers run concurrently. Request bodies are buffered with a
+     * 1 MiB limit. Response bytes are sent incrementally, waiting for native
+     * send capacity before reading more. There is no total response size limit.
+     * Errors before a response starts produce a generic HTTP 500. Stream or
+     * transport errors after it starts terminate the incomplete response.
+     * Disconnect, detach and close cancel the response reader; arbitrary
+     * application work must observe the request signal to stop cooperatively.
+     * TCP receive EOF alone permits a half-closed client to receive its response;
+     * an idle stream detects a lost peer when a later send fails.
+     */
+    readonly fetch: (request: Request) => Response | Promise<Response>;
+    /** Optional RFC 6455 WebSocket upgrade and connection handlers. */
+    readonly websocket?: MuonServerWebSocketHandlers;
+  }
+
+  /** A WebSocket accepted by the current page's server binding. */
+  interface MuonServerWebSocket {
+    /** Opaque connection identifier. */
+    readonly id: string;
+    /** The same Request passed to accept, with credentials removed.
+     * Its signal aborts when the connection or its owning binding closes.
+     */
+    readonly request: Request;
+    /** Negotiated subprotocol, or an empty string. */
+    readonly protocol: string;
+    /**
+     * Sends one text or binary message of at most 1 MiB.
+     * @param data - UTF-8 text or raw binary bytes.
+     * @returns After all message bytes are accepted by the OS.
+     * @remarks Await each send before starting another. OS acceptance does not
+     * confirm peer receipt. Sending on a closing connection rejects.
+     */
+    readonly send: (data: string | Uint8Array) => Promise<void>;
+    /**
+     * Sends a close frame without waiting for the peer's reply.
+     * @param code - 1000..1011 except 1004/1005/1006, or 3000..4999; defaults to 1000.
+     * @param reason - UTF-8 reason of at most 123 bytes; defaults to empty.
+     * @returns After the close frame is accepted by the OS.
+     * @remarks Await an outstanding send first. A peer that does not complete
+     * the close handshake is disconnected after five seconds.
+     */
+    readonly close: (code?: number, reason?: string) => Promise<void>;
+  }
+
+  /** Observed closure, including abnormal transport or ownership loss. */
+  interface MuonServerWebSocketCloseEvent {
+    /** Peer code, 1005 for no code, or 1006 if no valid peer close arrived. */
+    readonly code: number;
+    /** Peer reason, or empty for abnormal closure. */
+    readonly reason: string;
+    /** Whether both close frames were exchanged successfully. */
+    readonly wasClean: boolean;
+  }
+
+  /** Handlers for connections that passed native Host, Origin and Bearer checks. */
+  interface MuonServerWebSocketHandlers {
+    /**
+     * Accepts an upgrade or rejects it with HTTP 403.
+     * @param request - Upgrade request with private credentials removed.
+     * @returns False to reject, or options selecting an offered subprotocol.
+     * @remarks An omitted protocol selects muon.auth for browser Bearer
+     * connections, otherwise none. Exceptions produce a generic HTTP 500.
+     */
+    readonly accept: (
+      request: Request,
+    ) =>
+      | false
+      | { readonly protocol?: string }
+      | Promise<false | { readonly protocol?: string }>;
+    /** Runs after the handshake is sent, before any message callbacks. */
+    readonly open?: (socket: MuonServerWebSocket) => void | Promise<void>;
+    /**
+     * Receives text or binary messages of at most 1 MiB.
+     * @param socket - Connection that received the message.
+     * @param data - Validated UTF-8 text or binary bytes.
+     * @returns After application handling finishes.
+     * @remarks Callbacks are awaited in order per connection. Other connections
+     * proceed independently. Handler errors initiate closure with code 1011.
+     */
+    readonly message?: (
+      socket: MuonServerWebSocket,
+      data: string | Uint8Array,
+    ) => void | Promise<void>;
+    /** Runs once after closure; detach and server close report code 1006. */
+    readonly close?: (
+      socket: MuonServerWebSocket,
+      event: MuonServerWebSocketCloseEvent,
+    ) => void | Promise<void>;
+  }
+
+  /** Address returned after the server starts listening. */
+  interface MuonServerAddress {
+    /** HTTP base URL, without a trailing slash. */
+    readonly url: string;
+    /** Numeric loopback address. */
+    readonly host: string;
+    /** Listening TCP port. */
+    readonly port: number;
+  }
+
+  /** A page handler attachment, independent of the native listener. */
+  interface MuonServerBinding {
+    /**
+     * Detaches this handler set and aborts its pending requests.
+     * @returns Completion of detachment; repeated calls share one operation.
+     * @remarks The listener remains open. Requests without attached handlers
+     * receive HTTP 503 until another handler set is attached.
+     */
+    readonly detach: () => Promise<void>;
+  }
+
+  /** A page-owned native HTTP server, initially not listening. */
+  interface MuonServer {
+    /** Opaque identifier of this native server. */
+    readonly id: string;
+    /** Name supplied to createServer(). */
+    readonly name: string;
+    /**
+     * Attaches handlers to the current page.
+     * @param handlers - HTTP handlers to receive requests.
+     * @returns The attachment used to detach these handlers.
+     * @remarks Only one attachment is allowed at a time. Detach it before
+     * attaching another handler set.
+     */
+    readonly attach: (
+      handlers: MuonServerHandlers,
+    ) => Promise<MuonServerBinding>;
+    /**
+     * Starts accepting requests after handlers have been attached.
+     * @returns The listening address.
+     * @remarks An occupied port rejects this call; it can be retried after
+     * releasing the port. Calling listen() on an active listener rejects.
+     */
+    readonly listen: () => Promise<MuonServerAddress>;
+    /**
+     * Permanently closes this server and aborts pending requests.
+     * @returns Completion of closure; repeated calls share one operation.
+     * @remarks Navigation or destruction of the owning page also closes it.
+     */
+    readonly close: () => Promise<void>;
+  }
+
+  /** CEF-only loopback HTTP and WebSocket server operations. */
+  interface MuonServerApi {
+    /**
+     * Creates a native server owned by this page without listening yet.
+     * @param options - Unique page-local name, fixed port and loopback address.
+     * @returns The server handle to attach, listen and close.
+     * @remarks Requires the muon.server.createServer capability. HTTP responses
+     * support streaming, including SSE. Android is unsupported.
+     */
+    readonly createServer: (options: MuonServerOptions) => Promise<MuonServer>;
   }
 
   /** Values preserved when notification data is serialized and restored. */

@@ -6,8 +6,11 @@
 import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer, request } from "node:http";
-import { createServer as reservePort } from "node:net";
+import { createServer, request, type IncomingMessage } from "node:http";
+import {
+  createServer as reservePort,
+  createConnection as connectTcp,
+} from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -186,7 +189,19 @@ it.each(["simple", "validate"] as const)(
       window.server = await window.serverApi.createServer({name: 'driver', port: ${port}});
       window.value = 0;
       window.slowStarted = new Promise(resolve => { window.markSlowStarted = resolve; });
+      window.cancelStarted = new Promise(resolve => { window.markCancelStarted = resolve; });
+      window.cancelled = new Promise(resolve => { window.markCancelled = resolve; });
       window.binding = await window.server.attach({fetch: async request => {
+        if (new URL(request.url).pathname === '/cancel') {
+          window.markCancelStarted();
+          await new Promise(resolve => request.signal.addEventListener('abort', () => { window.markCancelled(); resolve(); }, {once:true}));
+          return new Response('cancelled');
+        }
+        if (new URL(request.url).pathname === '/bulk') {
+          const bytes = new Uint8Array(1024 * 1024);
+          for (let i=0; i<bytes.length; i++) bytes[i] = i % 251;
+          return new Response(bytes);
+        }
         if (new URL(request.url).pathname === '/slow') {
           window.markSlowStarted();
           await new Promise(resolve => { window.finishSlow = resolve; });
@@ -233,6 +248,46 @@ it.each(["simple", "validate"] as const)(
       expect([...new Uint8Array(await binary.arrayBuffer())]).toEqual([
         0, 255, 128, 10,
       ]);
+      const paused = await new Promise<IncomingMessage>(
+        (resolveResponse, reject) => {
+          const call = request(`http://127.0.0.1:${port}/bulk`, (response) => {
+            response.pause();
+            resolveResponse(response);
+          });
+          call.on("error", reject);
+          call.end();
+        },
+      );
+      // A second connection completes while the first response is unread.
+      expect(await send({})).toBe(200);
+      const chunks: Buffer[] = [];
+      for await (const chunk of paused) chunks.push(Buffer.from(chunk));
+      const actual = Buffer.concat(chunks);
+      const expected = Buffer.alloc(1024 * 1024);
+      for (let i = 0; i < expected.length; i++) expected[i] = i % 251;
+      expect(actual.equals(expected)).toBe(true);
+      const halfClosed = connectTcp({
+        host: "127.0.0.1",
+        port,
+        allowHalfOpen: true,
+      });
+      await once(halfClosed, "connect");
+      halfClosed.end(`GET /state HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`);
+      const halfClosedChunks: Buffer[] = [];
+      for await (const chunk of halfClosed)
+        halfClosedChunks.push(Buffer.from(chunk));
+      expect(Buffer.concat(halfClosedChunks).toString()).toContain(
+        '{"value":42}',
+      );
+      const cancelled = connectTcp({ host: "127.0.0.1", port });
+      await once(cancelled, "connect");
+      cancelled.write(
+        `GET /cancel HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`,
+      );
+      await evaluate("async () => await window.cancelStarted");
+      cancelled.resetAndDestroy();
+      await evaluate("async () => await window.cancelled");
+      expect(await send({})).toBe(200);
       expect(await send({ Host: "attacker.example" })).toBe(403);
       expect(await send({ Origin: "https://attacker.example" })).toBe(403);
       expect(await send({ Origin: "null" })).toBe(403);

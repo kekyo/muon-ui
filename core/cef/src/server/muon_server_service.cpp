@@ -4,10 +4,11 @@
  * https://github.com/kekyo/muon-ui
  */
 #include "server/muon_server_service.h"
-#include "muon_cardio_post.h"
+#include "server/muon_server_http.h"
+#include "server/muon_server_socket.h"
 #include "muon_json_helpers.h"
 #include "include/cef_parser.h"
-#include "include/cef_server.h"
+#include <array>
 #include <algorithm>
 #include <deque>
 #include <map>
@@ -20,10 +21,23 @@ using ServerHeaders = std::vector<std::pair<std::string, std::string>>;
 static constexpr size_t kMaxServerBody = 1024 * 1024;
 static constexpr size_t kMaxServerRequests = 32;
 
+struct ServerResponse {
+  int status;
+  ServerHeaders headers;
+  ServerBytes body;
+  std::shared_ptr<cardio::promise_source<void>> sent;
+};
+struct ServerConnection {
+  uint64_t id;
+  std::shared_ptr<MuonServerSocket> socket;
+  std::string request_id;
+  std::shared_ptr<cardio::promise_source<ServerResponse>> response;
+  bool responding = false;
+};
 struct ServerRequest {
-  int connection;
+  std::shared_ptr<ServerConnection> connection;
   std::string method;
-  CefServer::HeaderMap response_headers;
+  ServerHeaders response_headers;
 };
 struct ServerBinding {
   std::string token;
@@ -31,7 +45,6 @@ struct ServerBinding {
   std::shared_ptr<cardio::promise_source<ServerBytes>> waiting;
 };
 struct ServerState {
-  cardio::dispatcher* dispatcher;
   std::string id;
   std::string owner;
   std::string name;
@@ -43,16 +56,17 @@ struct ServerState {
   std::unique_ptr<ServerBinding> binding;
   uint64_t next_binding = 0;
   uint64_t next_request = 0;
+  uint64_t next_connection = 0;
   std::map<std::string, ServerRequest> requests;
-  std::set<int> connections;
-  CefRefPtr<CefServer> server;
-  bool starting = false;
+  std::map<uint64_t, std::shared_ptr<ServerConnection>> connections;
+  std::shared_ptr<MuonServerListener> listener;
+  bool accepting = false;
   bool closing = false;
-  std::shared_ptr<cardio::promise_source<void>> started;
+  bool stopping_io = false;
   std::vector<std::shared_ptr<cardio::promise_source<void>>> stopped;
 };
 struct ServerServiceState {
-  cardio::dispatcher* dispatcher;
+  std::shared_ptr<MuonServerSockets> sockets;
   uint64_t next_server = 0;
   bool stopping = false;
   std::map<std::string, std::shared_ptr<ServerState>> servers;
@@ -113,30 +127,34 @@ static bool IsServerOrigin(const std::string& origin) {
   const auto serialized = scheme + "://" + host + (port.empty() ? "" : ":" + port);
   return origin == serialized;
 }
-static CefServer::HeaderMap ServerResponseHeaders(const std::string& origin) {
-  auto headers = CefServer::HeaderMap{{"Connection", "close"}, {"Vary", "Origin"}};
+static ServerHeaders ServerResponseHeaders(const std::string& origin) {
+  auto headers = ServerHeaders{{"Connection", "close"}, {"Vary", "Origin"}};
   if (!origin.empty()) {
-    headers.emplace("Access-Control-Allow-Origin", origin);
+    headers.emplace_back("Access-Control-Allow-Origin", origin);
     // Cookies and credentialed CORS are not enabled. Explicit Authorization
     // headers work with the default fetch credentials mode.
-    headers.emplace("Access-Control-Expose-Headers", "*");
+    headers.emplace_back("Access-Control-Expose-Headers", "*");
   }
   return headers;
 }
-static void ServerError(const std::shared_ptr<ServerState>& state,
-                        int connection, int status,
-                        CefServer::HeaderMap headers = ServerResponseHeaders("")) {
-  if (state->server && state->connections.contains(connection)) {
-    headers.emplace("Cache-Control", "no-store");
-    if (status == 401) headers.emplace("WWW-Authenticate", "Bearer");
-    state->server->SendHttpResponse(connection, status, "text/plain", 0, headers);
+static ServerResponse ServerErrorResponse(int status, ServerHeaders headers = ServerResponseHeaders("")) {
+  headers.emplace_back("Cache-Control", "no-store");
+  if (status == 401) headers.emplace_back("WWW-Authenticate", "Bearer");
+  return {status, std::move(headers), {}, {}};
+}
+static void ServerError(const std::shared_ptr<ServerState>&,
+                        const std::shared_ptr<ServerConnection>& connection, int status,
+                        ServerHeaders headers = ServerResponseHeaders("")) {
+  if (connection->response && !connection->responding) {
+    connection->responding = true;
+    connection->response->try_resolve(ServerErrorResponse(status, std::move(headers)));
   }
 }
 
 struct ServerAccess {
   // Zero delegates to the page; a nonzero status completes natively.
   int status;
-  CefServer::HeaderMap headers;
+  ServerHeaders headers;
 };
 static bool HasServerBearer(const std::string& authorization, const std::string& token) {
   const auto separator = authorization.find(' ');
@@ -198,10 +216,10 @@ static ServerAccess CheckServerAccess(const ServerState& state,
         start = end + 1;
       } while (true);
       // Explicitly list Authorization; CORS does not treat it as a wildcard.
-      response.emplace("Access-Control-Allow-Headers", requested_headers);
+      response.emplace_back("Access-Control-Allow-Headers", requested_headers);
     }
-    response.emplace("Access-Control-Allow-Methods", requested_method);
-    response.emplace("Vary", "Access-Control-Request-Method, Access-Control-Request-Headers");
+    response.emplace_back("Access-Control-Allow-Methods", requested_method);
+    response.emplace_back("Vary", "Access-Control-Request-Method, Access-Control-Request-Headers");
     return {204, std::move(response)};
   }
   if (!state.bearer_token.empty() &&
@@ -219,6 +237,11 @@ static void QueueServerEvent(const std::shared_ptr<ServerState>& state, ServerBy
     binding.events.push_back(std::move(event));
   }
 }
+static void CheckServerStopped(const std::shared_ptr<ServerState>& state) {
+  if (!state->closing || state->accepting || state->stopping_io || !state->connections.empty()) return;
+  auto stopped = std::move(state->stopped);
+  for (const auto& pending : stopped) pending->resolve();
+}
 static void DetachServer(const std::shared_ptr<ServerState>& state) {
   if (state->binding && state->binding->waiting) {
     auto pending = std::move(state->binding->waiting);
@@ -227,140 +250,143 @@ static void DetachServer(const std::shared_ptr<ServerState>& state) {
   state->binding.reset();
   for (const auto& [id, request] : state->requests) {
     (void)id;
-    ServerError(state, request.connection, 503, request.response_headers);
+    if (request.connection->responding)
+      cardio::fire_and_forget(request.connection->socket->close());
+    else ServerError(state, request.connection, 503, request.response_headers);
   }
   state->requests.clear();
+}
+static cardio::promise<void> StopServerIo(std::shared_ptr<ServerState> state) {
+  // Take the snapshot before awaiting: connection tasks remove themselves.
+  const auto connections = state->connections;
+  if (state->listener) co_await state->listener->close();
+  state->listener.reset();
+  for (const auto& [id, connection] : connections) {
+    (void)id;
+    if (connection->response)
+      connection->response->try_reject(std::make_exception_ptr(cardio::canceled_exception()));
+    co_await connection->socket->close();
+  }
+  state->stopping_io = false;
+  CheckServerStopped(state);
 }
 static void BeginServerClose(const std::shared_ptr<ServerState>& state) {
   if (state->closing) return;
   state->closing = true;
+  state->stopping_io = true;
   DetachServer(state);
-  if (state->server) state->server->Shutdown();
+  cardio::fire_and_forget(StopServerIo(state));
 }
 static cardio::promise<void> CloseServer(std::shared_ptr<ServerState> state) {
   BeginServerClose(state);
-  if (!state->server && !state->starting) co_return;
+  if (!state->accepting && !state->stopping_io && state->connections.empty()) co_return;
   auto source = std::make_shared<cardio::promise_source<void>>();
   auto pending = source->get_promise();
   state->stopped.push_back(source);
   co_await pending;
 }
-
-// CEF callbacks copy borrowed request data before crossing to the owning
-// dispatcher. No JavaScript callback or mutable service state runs on CEF's
-// dedicated server thread.
-class MuonHttpServerHandler final : public CefServerHandler {
- public:
-  explicit MuonHttpServerHandler(std::shared_ptr<ServerState> state) : state_(std::move(state)) {}
-  void OnServerCreated(CefRefPtr<CefServer> server) override {
-    const bool running = server->IsRunning();
-    Post([state = state_, server, running] {
-      if (running) state->server = server;
-      if (running && state->closing) server->Shutdown();
-      if (running) {
-        state->starting = false;
-        auto pending = std::move(state->started);
-        if (state->closing) pending->reject(std::make_exception_ptr(std::runtime_error("Server closed during startup")));
-        else pending->resolve();
-      }
-      // A failed start completes in OnServerDestroyed, so retry cannot overlap
-      // the failed server's lifetime.
-    });
+static cardio::promise<void> WriteServerResponse(
+    std::shared_ptr<ServerConnection> connection, const ServerResponse& response) {
+  auto header = "HTTP/1.1 " + std::to_string(response.status) + " Response\r\n";
+  for (const auto& [name, value] : response.headers) header += name + ": " + value + "\r\n";
+  header += "Content-Length: " + std::to_string(response.body.size()) + "\r\n\r\n";
+  co_await connection->socket->write(std::span(
+      reinterpret_cast<const uint8_t*>(header.data()), header.size()));
+  if (!response.body.empty()) co_await connection->socket->write(response.body);
+}
+static cardio::promise<void> MonitorServerConnection(std::shared_ptr<ServerConnection> connection) {
+  try {
+    auto bytes = std::array<uint8_t, 1>{};
+    const auto size = co_await connection->socket->read(bytes);
+    // EOF can be shutdown(SHUT_WR): the peer may still receive our response.
+    // No HTTP keep-alive/pipelining is advertised, so further input is rejected.
+    if (size) throw std::runtime_error("Unexpected input after HTTP request");
+  } catch (...) {
+    if (connection->response) connection->response->try_reject(std::current_exception());
   }
-  void OnServerDestroyed(CefRefPtr<CefServer>) override {
-    Post([state = state_] {
-      state->server = nullptr;
-      state->starting = false;
-      state->connections.clear();
-      if (state->started) {
-        auto pending = std::move(state->started);
-        pending->reject(std::make_exception_ptr(std::runtime_error("Cannot listen on the requested loopback port")));
-      }
-      auto stopped = std::move(state->stopped);
-      for (const auto& pending : stopped) pending->resolve();
-    });
-  }
-  void OnClientConnected(CefRefPtr<CefServer>, int connection) override {
-    Post([state = state_, connection] {
-      state->connections.insert(connection);
-      if (state->closing || state->connections.size() > kMaxServerRequests)
-        state->server->CloseConnection(connection);
-    });
-  }
-  void OnClientDisconnected(CefRefPtr<CefServer>, int connection) override {
-    Post([state = state_, connection] {
-      state->connections.erase(connection);
-      for (auto it = state->requests.begin(); it != state->requests.end();) {
-        if (it->second.connection == connection) {
-          QueueServerEvent(state, ServerEnvelope("{\"type\":\"disconnect\",\"requestId\":" + QuoteServerString(it->first) + "}"));
-          it = state->requests.erase(it);
-        } else ++it;
-      }
-    });
-  }
-  void OnHttpRequest(CefRefPtr<CefServer>, int connection,
-                     const CefString&, CefRefPtr<CefRequest> request) override {
-    auto headers = ServerHeaders{};
-    CefRequest::HeaderMap incoming;
-    request->GetHeaderMap(incoming);
-    for (const auto& [name, value] : incoming) headers.emplace_back(name.ToString(), value.ToString());
-    auto body = ServerBytes{};
-    bool oversized = false;
-    if (auto post = request->GetPostData()) {
-      CefPostData::ElementVector elements;
-      post->GetElements(elements);
-      for (const auto& element : elements) {
-        if (element->GetType() != PDE_TYPE_BYTES) { oversized = true; break; }
-        const auto size = element->GetBytesCount();
-        if (size > kMaxServerBody - body.size()) { oversized = true; break; }
-        const auto offset = body.size();
-        body.resize(offset + size);
-        element->GetBytes(size, body.data() + offset);
+}
+static cardio::promise<void> RunServerConnection(
+    std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection) {
+  auto acknowledged = std::shared_ptr<cardio::promise_source<void>>{};
+  auto monitor = cardio::resolved();
+  try {
+    const auto parser = CreateMuonServerHttpParser();
+    auto buffer = std::array<uint8_t, 16 * 1024>{};
+    auto parsed = MuonServerHttpParseResult{0, 0, {}};
+    while (!parsed.request && !parsed.error_status) {
+      const auto size = co_await connection->socket->read(buffer);
+      parsed = size ? parser->consume(std::span(buffer.data(), size)) : parser->finish();
+    }
+    auto response = ServerErrorResponse(parsed.error_status ? parsed.error_status : 400);
+    if (parsed.request && !state->closing) {
+      const auto& incoming = *parsed.request;
+      auto access = CheckServerAccess(*state, incoming.method, incoming.headers);
+      const auto target = incoming.target.starts_with("/") ? state->url + incoming.target : incoming.target;
+      if (access.status) response = ServerErrorResponse(access.status, std::move(access.headers));
+      else if (!target.starts_with(state->url + "/") || incoming.upgrade)
+        response = ServerErrorResponse(400, std::move(access.headers));
+      else if (!state->binding || state->requests.size() >= kMaxServerRequests ||
+          state->binding->events.size() >= kMaxServerRequests * 2)
+        response = ServerErrorResponse(503, std::move(access.headers));
+      else {
+        auto header_json = std::string("[");
+        for (const auto& [name, value] : incoming.headers) {
+          if (header_json.size() > 1) header_json += ',';
+          header_json += '[' + QuoteServerString(name) + ',' + QuoteServerString(value) + ']';
+        }
+        header_json += ']';
+        connection->request_id = std::to_string(++state->next_request);
+        connection->response = std::make_shared<cardio::promise_source<ServerResponse>>();
+        auto pending = connection->response->get_promise();
+        state->requests.emplace(connection->request_id,
+            ServerRequest{connection, incoming.method, std::move(access.headers)});
+        QueueServerEvent(state, ServerEnvelope("{\"type\":\"request\",\"requestId\":" +
+            QuoteServerString(connection->request_id) + ",\"method\":" + QuoteServerString(incoming.method) +
+            ",\"url\":" + QuoteServerString(target) + ",\"headers\":" + header_json + "}", incoming.body));
+        monitor = MonitorServerConnection(connection);
+        response = co_await pending;
       }
     }
-    Post([state = state_, connection, headers = std::move(headers),
-          body = std::move(body), oversized, method = request->GetMethod().ToString(),
-          path = request->GetURL().ToString()] {
-      if (!state->connections.contains(connection) || state->closing) return;
-      auto access = CheckServerAccess(*state, method, headers);
-      if (access.status) { ServerError(state, connection, access.status, access.headers); return; }
-      if (oversized) { ServerError(state, connection, 413, access.headers); return; }
-      if (!state->binding || state->requests.size() >= kMaxServerRequests ||
-          state->binding->events.size() >= kMaxServerRequests * 2) {
-        ServerError(state, connection, 503, access.headers); return;
-      }
-      if (std::any_of(state->requests.begin(), state->requests.end(),
-          [connection](const auto& entry) { return entry.second.connection == connection; })) {
-        state->server->CloseConnection(connection); return;
-      }
-      if (!path.starts_with(state->url + "/")) { ServerError(state, connection, 400, access.headers); return; }
-      auto header_json = std::string("[");
-      for (const auto& [name, value] : headers) {
-        if (header_json.size() > 1) header_json += ',';
-        header_json += '[' + QuoteServerString(name) + ',' + QuoteServerString(value) + ']';
-      }
-      header_json += ']';
-      const auto request_id = std::to_string(++state->next_request);
-      state->requests.emplace(request_id, ServerRequest{connection, method, std::move(access.headers)});
-      QueueServerEvent(state, ServerEnvelope("{\"type\":\"request\",\"requestId\":" +
-          QuoteServerString(request_id) + ",\"method\":" + QuoteServerString(method) +
-          ",\"url\":" + QuoteServerString(path) +
-          ",\"headers\":" + header_json + "}", body));
-    });
+    acknowledged = response.sent;
+    co_await WriteServerResponse(connection, response);
+    if (acknowledged) acknowledged->try_resolve();
+  } catch (...) {
+    if (acknowledged) acknowledged->try_reject(std::current_exception());
   }
-  void OnWebSocketRequest(CefRefPtr<CefServer>, int, const CefString&,
-                         CefRefPtr<CefRequest>, CefRefPtr<CefCallback> callback) override { callback->Cancel(); }
-  void OnWebSocketConnected(CefRefPtr<CefServer>, int) override {}
-  void OnWebSocketMessage(CefRefPtr<CefServer>, int, const void*, size_t) override {}
- private:
-  void Post(std::function<void()> callback) {
-    muon_internal::FireAndForgetOnDispatcher(state_->dispatcher, std::move(callback));
+  // Closing cancels the monitor before its buffer and socket can be released.
+  co_await connection->socket->close();
+  co_await monitor;
+  if (!connection->request_id.empty() && state->requests.erase(connection->request_id)) {
+    QueueServerEvent(state, ServerEnvelope("{\"type\":\"disconnect\",\"requestId\":" +
+        QuoteServerString(connection->request_id) + "}"));
   }
-  std::shared_ptr<ServerState> state_;
-  IMPLEMENT_REFCOUNTING(MuonHttpServerHandler);
-};
+  state->connections.erase(connection->id);
+  CheckServerStopped(state);
+}
+static cardio::promise<void> AcceptServerConnections(std::shared_ptr<ServerState> state) {
+  try {
+    while (!state->closing) {
+      auto socket = co_await state->listener->accept();
+      if (state->closing || state->connections.size() >= kMaxServerRequests) {
+        co_await socket->close();
+        continue;
+      }
+      auto connection = std::make_shared<ServerConnection>();
+      connection->id = ++state->next_connection;
+      connection->socket = std::move(socket);
+      state->connections.emplace(connection->id, connection);
+      cardio::fire_and_forget(RunServerConnection(state, connection));
+    }
+  } catch (...) {
+    // Listener cancellation is expected during close. Unexpected accept errors
+    // stop this server as well, rather than leaving a nonfunctional listener.
+    if (!state->closing) BeginServerClose(state);
+  }
+  state->accepting = false;
+  CheckServerStopped(state);
+}
 
-static void RespondToServerRequest(const std::shared_ptr<ServerState>& state,
+static cardio::promise<void> RespondToServerRequest(const std::shared_ptr<ServerState>& state,
                                   yyjson_val* root, const ServerBytes& body) {
   const auto request_id = RequiredServerString(root, "requestId");
   const auto found = state->requests.find(request_id);
@@ -385,17 +411,19 @@ static void RespondToServerRequest(const std::shared_ptr<ServerState>& state,
     const auto lower = LowerServerHeader(name);
     if (lower == "content-type") content_type = value;
     else if (lower != "content-length" && lower != "transfer-encoding" && lower != "connection" &&
-        !lower.starts_with("access-control-")) extra.emplace(name, value);
+        !lower.starts_with("access-control-")) extra.emplace_back(name, value);
   }
   const auto connection = found->second.connection;
+  if (connection->responding) throw std::runtime_error("Server response has already started");
   const auto code = static_cast<int>(yyjson_get_uint(status));
   const auto no_body = found->second.method == "HEAD" || code == 204 || code == 205 || code == 304;
-  state->server->SendHttpResponse(connection, code, content_type, no_body ? 0 : body.size(), extra);
-  if (!no_body && !body.empty()) {
-    state->server->SendRawData(connection, body.data(), body.size());
-    state->server->CloseConnection(connection);
-  }
-  state->requests.erase(found);
+  extra.emplace_back("Content-Type", content_type);
+  auto sent = std::make_shared<cardio::promise_source<void>>();
+  auto pending = sent->get_promise();
+  connection->responding = true;
+  connection->response->resolve(ServerResponse{code, std::move(extra), no_body ? ServerBytes{} : body, sent});
+  co_await pending;
+  state->requests.erase(request_id);
 }
 
 static cardio::promise<ServerBytes> DispatchServer(
@@ -423,7 +451,6 @@ static cardio::promise<ServerBytes> DispatchServer(
     }
     if (service->servers.size() >= 32) throw std::runtime_error("Server capacity is full");
     auto state = std::make_shared<ServerState>();
-    state->dispatcher = service->dispatcher;
     state->id = std::to_string(++service->next_server);
     state->owner = owner;
     state->name = name;
@@ -479,12 +506,10 @@ static cardio::promise<ServerBytes> DispatchServer(
     co_return ServerEnvelope("null");
   }
   if (operation == "listen") {
-    if (state->server || state->starting) throw std::runtime_error("Server is already listening or starting");
-    state->starting = true;
-    state->started = std::make_shared<cardio::promise_source<void>>();
-    auto pending = state->started->get_promise();
-    CefServer::CreateServer(state->host, state->port, 16, new MuonHttpServerHandler(state));
-    co_await pending;
+    if (state->listener || state->accepting) throw std::runtime_error("Server is already listening or starting");
+    state->listener = service->sockets->listen(state->port);
+    state->accepting = true;
+    cardio::fire_and_forget(AcceptServerConnections(state));
     co_return ServerEnvelope("{\"url\":" + QuoteServerString(state->url) + ",\"host\":" + QuoteServerString(state->host) + ",\"port\":" + std::to_string(state->port) + "}");
   }
   if (operation == "next") {
@@ -500,7 +525,7 @@ static cardio::promise<ServerBytes> DispatchServer(
   }
   if (operation == "respond") {
     try {
-      RespondToServerRequest(state, root, body);
+      co_await RespondToServerRequest(state, root, body);
     } catch (...) {
       // A malformed application response must not strand an accepted request.
       // Expired requests and bindings never affect another request or binding.
@@ -537,10 +562,11 @@ static cardio::promise<void> StopServerService(std::shared_ptr<ServerServiceStat
   for (const auto& [id, state] : states) { (void)id; BeginServerClose(state); }
   for (const auto& [id, state] : states) { (void)id; co_await CloseServer(state); }
   service->servers.clear();
+  co_await service->sockets->stop();
 }
 std::shared_ptr<MuonServerService> CreateMuonServerService() {
   auto state = std::make_shared<ServerServiceState>();
-  state->dispatcher = &cardio::get_current_dispatcher();
+  state->sockets = CreateMuonServerSockets();
   return std::make_shared<MuonServerService>(MuonServerService{
       [state](std::string json, ServerBytes body, std::string owner) {
         return DispatchServer(state, std::move(json), std::move(body), std::move(owner));

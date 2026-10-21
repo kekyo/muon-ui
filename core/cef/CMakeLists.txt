@@ -577,6 +577,19 @@ target_include_directories(yyjson PUBLIC
   )
 MUON_APPLY_SANITIZERS(yyjson)
 
+set(MUON_LLHTTP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/src/llhttp-9.4.3")
+if(NOT EXISTS "${MUON_LLHTTP_SOURCE_DIR}/include/llhttp.h")
+  message(FATAL_ERROR "llhttp is required. Run build_llhttp.sh first.")
+endif()
+add_library(muon_llhttp STATIC
+  "${MUON_LLHTTP_SOURCE_DIR}/src/api.c"
+  "${MUON_LLHTTP_SOURCE_DIR}/src/http.c"
+  "${MUON_LLHTTP_SOURCE_DIR}/src/llhttp.c")
+set_target_properties(muon_llhttp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(muon_llhttp PRIVATE c_std_99)
+target_include_directories(muon_llhttp PUBLIC "${MUON_LLHTTP_SOURCE_DIR}/include")
+MUON_APPLY_SANITIZERS(muon_llhttp)
+
 if(NOT MINIZ_SOURCE_DIR)
   set(MINIZ_SOURCE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/.deps/src/miniz-3.1.1"
@@ -795,6 +808,8 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_server.cpp
   src/server/muon_server_rpc.cpp
   src/server/muon_server_service.cpp
+  src/server/muon_server_http.cpp
+  src/server/muon_server_socket.cpp
   src/notifications/muon_notification_rpc.cpp
   src/notifications/muon_notification_model.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
@@ -1262,6 +1277,7 @@ target_link_libraries(${APP_NAME} PRIVATE
   muon_plugin_runtime_core
   muon_rpc_core
   muon_sha2
+  muon_llhttp
   libcef_dll_wrapper
   libcef_lib
   yyjson
@@ -2078,6 +2094,27 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   target_link_libraries(muon_server_rpc_test PRIVATE muon_rpc_core)
   MUON_APPLY_SANITIZERS(muon_server_rpc_test)
   add_test(NAME server_rpc COMMAND muon_server_rpc_test)
+  add_executable(muon_server_http_test
+    ../cef-test/native/muon_server_http_test.cpp
+    src/server/muon_server_http.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_http_test)
+  target_compile_features(muon_server_http_test PRIVATE cxx_std_20)
+  target_include_directories(muon_server_http_test PRIVATE src)
+  target_link_libraries(muon_server_http_test PRIVATE muon_llhttp)
+  MUON_APPLY_SANITIZERS(muon_server_http_test)
+  add_test(NAME server_http COMMAND muon_server_http_test)
+  add_executable(muon_server_socket_test
+    ../cef-test/native/muon_server_socket_test.cpp
+    src/server/muon_server_socket.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_socket_test)
+  target_compile_features(muon_server_socket_test PRIVATE cxx_std_20)
+  target_include_directories(muon_server_socket_test PRIVATE src)
+  target_link_libraries(muon_server_socket_test PRIVATE muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
+  if(WIN32)
+    target_link_libraries(muon_server_socket_test PRIVATE ws2_32)
+  endif()
+  MUON_APPLY_SANITIZERS(muon_server_socket_test)
+  add_test(NAME server_socket COMMAND muon_server_socket_test)
   add_executable(muon_notification_model_test
     ../cef-test/native/muon_notification_model_test.cpp
     src/notifications/muon_notification_model.cpp)

@@ -22,7 +22,7 @@ struct MuonServerService {
       std::string, std::vector<uint8_t>, std::string)> dispatch;
   /** Releases this page's handlers and asynchronously closes its listeners. */
   std::function<void(const std::string&)> release_owner;
-  /** Stops accepting commands and awaits destruction of every CEF server. */
+  /** Stops accepting commands and awaits every listener and connection. */
   std::function<cardio::promise<void>()> stop;
 };
 

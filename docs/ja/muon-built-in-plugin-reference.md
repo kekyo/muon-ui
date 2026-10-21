@@ -13,6 +13,10 @@ Android WebViewバックエンドは、この章にあるデスクトップAPI�
 import { spawn } from "muon:executor";
 ```
 
+## CEF版のHTTP・WebSocketサーバー
+
+`window.muon.server.createServer(options)`は、作成元ページに属するloopbackサーバーを作成します。validateモードのimport元は`muon:server`、必要な許可は`muon.server.createServer`です。HTTPはFetch形式、WebSocketは接続ハンドルで扱います。任意のBearer認証を指定でき、MCPの公開にも利用できます。Androidには対応しません。[起動例・認証・生存期間・MCP連携](./local-server.md)
+
 ## 通知とAndroid固有機能
 
 Android・Windows・Linuxのローカル通知は`muon.notifications`で操作します。Androidのシステムバー、通知権限・チャンネル、OS設定画面は`muon.android`以下にあります。CEF版には`muon.android`を公開しません。

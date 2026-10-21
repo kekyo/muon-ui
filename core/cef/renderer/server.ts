@@ -29,7 +29,9 @@ export interface ServerOptions {
 
 /** Handlers attached to the current page. */
 export interface ServerHandlers {
-  /** Handles one HTTP request; its signal aborts when the request is cancelled. */
+  /** Handles one HTTP request; response bodies are streamed with backpressure.
+   * The request signal aborts on detected transport failure, detach or closure.
+   */
   readonly fetch: (request: Request) => Response | Promise<Response>;
 }
 
@@ -107,46 +109,13 @@ const abortBinding = (binding: BindingState): void => {
   for (const request of binding.requests.values()) request.controller.abort();
 };
 
-const readResponse = async (
-  response: Response,
-  pending: PendingRequest
-): Promise<ArrayBuffer> => {
-  if (!response.body) return new ArrayBuffer(0);
-  const reader = response.body.getReader();
-  pending.reader = reader;
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (!pending.controller.signal.aborted) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      if (chunk.value.byteLength > 1024 * 1024 - length) {
-        await reader.cancel();
-        throw new RangeError('Server response body exceeds 1 MiB');
-      }
-      chunks.push(chunk.value);
-      length += chunk.value.byteLength;
-    }
-    const bytes = new Uint8Array(length);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return bytes.buffer;
-  } finally {
-    pending.reader = undefined;
-    reader.releaseLock();
-  }
-};
-
 /**
  * Adapts the single authorized native operation to the public server API.
  * @param call - Native dispatch accepting metadata, bytes and an owner placeholder.
  * @returns The page-owned HTTP server factory.
  * @remarks The browser replaces the owner placeholder with the authenticated
- * renderer owner. Request handlers run concurrently; bodies are buffered in this
- * initial HTTP implementation, including Responses constructed from streams.
+ * renderer owner. Request handlers run concurrently. Response bodies are read
+ * incrementally, awaiting native acceptance before sending more bytes.
  */
 export const createMuonCefServerApi = (
   call: (json: string, body: ArrayBuffer, owner: string) => Promise<ArrayBuffer>
@@ -212,6 +181,12 @@ export const createMuonCefServerApi = (
         pending: PendingRequest
       ): Promise<void> => {
         const signal = pending.controller.signal;
+        const requestFields = {
+          binding: binding.id,
+          requestId: event.requestId,
+        };
+        let responding = false;
+        let completed = false;
         // Cancellation must unblock a response reader even if its producer never
         // completes. Cancelling the stream cannot cancel arbitrary handler work.
         const cancelReader = async (): Promise<void> => {
@@ -224,54 +199,101 @@ export const createMuonCefServerApi = (
         signal.addEventListener('abort', cancelReader, { once: true });
         try {
           if (!binding.active || signal.aborted) return;
-          let response: Response;
-          let bytes: ArrayBuffer;
-          try {
-            const request = new Request(event.url, {
-              method: event.method,
-              headers: event.headers,
-              signal,
-              ...(event.method === 'GET' || event.method === 'HEAD'
-                ? {}
-                : { body }),
-            });
-            response = await handlers.fetch(request);
-            if (!(response instanceof Response) || response.status < 200)
-              throw new TypeError(
-                'Server handler must return an HTTP Response'
-              );
-            if (!binding.active || signal.aborted) {
-              try {
-                await response.body?.cancel();
-              } catch {
-                /* The body may already be consumed. */
-              }
-              return;
+          const request = new Request(event.url, {
+            method: event.method,
+            headers: event.headers,
+            signal,
+            ...(event.method === 'GET' || event.method === 'HEAD'
+              ? {}
+              : { body }),
+          });
+          const response = await handlers.fetch(request);
+          if (!(response instanceof Response) || response.status < 200)
+            throw new TypeError('Server handler must return an HTTP Response');
+          if (!binding.active || signal.aborted) {
+            try {
+              await response.body?.cancel();
+            } catch {
+              /* The body may already be consumed. */
             }
-            bytes = await readResponse(response, pending);
-          } catch {
-            response = new Response('Internal Server Error', { status: 500 });
-            bytes = await response.arrayBuffer();
+            return;
           }
-          if (!binding.active || signal.aborted) return;
           const headers: [string, string][] = [];
           response.headers.forEach((value, name) =>
             headers.push([name, value])
           );
-          await operation(
-            'respond',
-            {
-              binding: binding.id,
-              requestId: event.requestId,
-              status: response.status,
-              headers,
-            },
-            bytes
-          );
+          const fields = { ...requestFields, status: response.status, headers };
+          if (response.body) pending.reader = response.body.getReader();
+          if (
+            !pending.reader ||
+            event.method === 'HEAD' ||
+            response.status === 204 ||
+            response.status === 205 ||
+            response.status === 304
+          ) {
+            responding = true;
+            await operation('respond', fields, new ArrayBuffer(0));
+            completed = true;
+            await cancelReader();
+            return;
+          }
+
+          // Treat an attempted start as committed: it may have written headers
+          // before reporting failure, so a later HTTP 500 would corrupt the wire.
+          responding = true;
+          await operation('start', fields, new ArrayBuffer(0));
+          while (binding.active && !signal.aborted) {
+            const chunk = await pending.reader.read();
+            if (!binding.active || signal.aborted) return;
+            if (chunk.done) {
+              await operation('finish', requestFields, new ArrayBuffer(0));
+              completed = true;
+              return;
+            }
+            if (!(chunk.value instanceof Uint8Array))
+              throw new TypeError('Server response streams must contain bytes');
+            for (
+              let offset = 0;
+              offset < chunk.value.byteLength;
+              offset += 65536
+            ) {
+              if (!binding.active || signal.aborted) return;
+              const bytes = new Uint8Array(
+                chunk.value.subarray(offset, offset + 65536)
+              );
+              await operation('write', requestFields, bytes.buffer);
+            }
+          }
         } catch {
-          // A disconnect or detach can invalidate a response after the local
-          // signal check. Native ownership checks decide whether it is accepted.
+          if (!responding && binding.active && !signal.aborted) {
+            try {
+              responding = true;
+              await operation(
+                'respond',
+                {
+                  ...requestFields,
+                  status: 500,
+                  headers: [['content-type', 'text/plain;charset=UTF-8']],
+                },
+                new TextEncoder().encode('Internal Server Error').buffer
+              );
+              completed = true;
+            } catch {
+              /* The request may have disconnected during the fallback. */
+            }
+          }
         } finally {
+          if (responding && !completed) {
+            try {
+              await operation('abort', requestFields, new ArrayBuffer(0));
+            } catch {
+              /* A disconnect or detach may already have removed the request. */
+            }
+          }
+          if (!completed) await cancelReader();
+          const reader = pending.reader;
+          pending.reader = undefined;
+          reader?.releaseLock();
           signal.removeEventListener('abort', cancelReader);
           binding.requests.delete(event.requestId);
         }

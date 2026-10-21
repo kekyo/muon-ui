@@ -19,6 +19,68 @@ const packet = (metadata: unknown, body: Uint8Array): ArrayBuffer => {
   return bytes.buffer;
 };
 
+const signal = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+};
+
+const responseDriver = async (
+  fetch: (request: Request) => Response | Promise<Response>,
+  receive: (
+    metadata: Record<string, unknown>,
+    body: ArrayBuffer,
+  ) => Promise<void>,
+  method: string,
+) => {
+  let next = 0;
+  let releaseEvent!: (value: ArrayBuffer) => void;
+  const api = createMuonCefServerApi(async (json, body) => {
+    const metadata = JSON.parse(json);
+    if (metadata.operation === "create")
+      return packet({ id: "server", name: "server" }, new Uint8Array());
+    if (metadata.operation === "attach")
+      return packet({ binding: "binding" }, new Uint8Array());
+    if (metadata.operation === "next") {
+      if (next++ === 0)
+        return packet(
+          {
+            type: "request",
+            requestId: "request",
+            method,
+            url: "http://127.0.0.1:8765/events",
+            headers: [],
+          },
+          new Uint8Array(),
+        );
+      return await new Promise<ArrayBuffer>((resolve) => {
+        releaseEvent = resolve;
+      });
+    }
+    if (metadata.operation === "close" || metadata.operation === "detach")
+      releaseEvent?.(packet(null, new Uint8Array()));
+    else {
+      expect(metadata.id).toBe("server");
+      expect(metadata.binding).toBe("binding");
+      expect(metadata.requestId).toBe("request");
+      await receive(metadata, body);
+    }
+    return packet(null, new Uint8Array());
+  });
+  const server = await api.createServer({ name: "server", port: 8765 });
+  const binding = await server.attach({ fetch });
+  return {
+    server,
+    binding,
+    disconnect: () =>
+      releaseEvent(
+        packet({ type: "disconnect", requestId: "request" }, new Uint8Array()),
+      ),
+  };
+};
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("CEF server capability modules", () => {
@@ -96,6 +158,9 @@ describe("CEF server capability modules", () => {
 
   it("separates creation, binding, listening and closure while adapting Fetch bytes", async () => {
     const operations: string[] = [];
+    let responseStatus = 0;
+    let responseHeaders: [string, string][] = [];
+    const responseBody: number[] = [];
     let next = 0;
     let releaseWait!: (value: ArrayBuffer) => void;
     const wait = new Promise<ArrayBuffer>((resolve) => {
@@ -156,11 +221,17 @@ describe("CEF server capability modules", () => {
             );
           return await wait;
         }
-        if (request.operation === "respond")
+        if (request.operation === "start") {
+          responseStatus = request.status;
+          responseHeaders = request.headers;
+        }
+        if (request.operation === "write")
+          responseBody.push(...new Uint8Array(args[1] as ArrayBuffer));
+        if (request.operation === "finish")
           finish({
-            status: request.status,
-            headers: request.headers,
-            body: [...new Uint8Array(args[1] as ArrayBuffer)],
+            status: responseStatus,
+            headers: responseHeaders,
+            body: responseBody,
           });
         if (request.operation === "detach" || request.operation === "close")
           releaseWait(packet(null, new Uint8Array()));
@@ -268,7 +339,7 @@ describe("CEF server capability modules", () => {
     },
   );
 
-  it.each(["exception", "oversized body"])(
+  it.each(["exception", "invalid response"])(
     "returns a generic 500 for a handler %s",
     async (failure) => {
       let releaseWait!: (value: ArrayBuffer) => void;
@@ -316,7 +387,7 @@ describe("CEF server capability modules", () => {
         fetch: () => {
           if (failure === "exception")
             throw new Error("sensitive application error");
-          return new Response(new Uint8Array(1024 * 1024 + 1));
+          return {} as Response;
         },
       });
       expect(await response).toEqual({
@@ -364,7 +435,7 @@ describe("CEF server capability modules", () => {
           releaseEvent = resolve;
         });
       }
-      if (operation.operation === "respond") {
+      if (operation.operation === "finish") {
         responses.push(operation.requestId);
         if (operation.requestId === "fast") finishFast();
       }
@@ -462,6 +533,316 @@ describe("CEF server capability modules", () => {
       expect(signal?.aborted).toBe(true);
       await server.close();
       expect(responses).toEqual([]);
+    },
+  );
+
+  it("sends headers before waiting for the producer and delivers bytes before stream completion", async () => {
+    const started = signal();
+    const allowRead = signal();
+    const reading = signal();
+    const written = signal();
+    const finished = signal();
+    const operations: string[] = [];
+    const chunks: number[][] = [];
+    let producer!: ReadableStreamDefaultController<Uint8Array>;
+    const driver = await responseDriver(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              start: (controller) => {
+                producer = controller;
+              },
+              pull: () => {
+                reading.resolve();
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          {
+            headers: {
+              "content-type": "text/event-stream",
+              "mcp-session-id": "session",
+            },
+          },
+        ),
+      async (metadata, body) => {
+        const operation = String(metadata.operation);
+        operations.push(operation);
+        if (operation === "start") {
+          expect(metadata.headers).toEqual(
+            expect.arrayContaining([
+              ["content-type", "text/event-stream"],
+              ["mcp-session-id", "session"],
+            ]),
+          );
+          started.resolve();
+          await allowRead.promise;
+        }
+        if (operation === "write") {
+          chunks.push([...new Uint8Array(body)]);
+          written.resolve();
+        }
+        if (operation === "finish") finished.resolve();
+      },
+      "GET",
+    );
+    try {
+      await Promise.race([started.promise, reading.promise]);
+      expect(operations).toEqual(["start"]);
+      allowRead.resolve();
+      await reading.promise;
+      producer.enqueue(new Uint8Array([0, 255, 13, 10]));
+      await written.promise;
+      expect(chunks).toEqual([[0, 255, 13, 10]]);
+      expect(operations).toEqual(["start", "write"]);
+      producer.close();
+      await finished.promise;
+      expect(operations).toEqual(["start", "write", "finish"]);
+    } finally {
+      allowRead.resolve();
+      await driver.server.close();
+    }
+  });
+
+  it("streams responses larger than 1 MiB in ordered writes of at most 64 KiB", async () => {
+    const data = Uint8Array.from(
+      { length: 1024 * 1024 + 257 },
+      (_, index) => index * 17 + index / 251,
+    );
+    const completed = signal();
+    const operations: string[] = [];
+    const chunks: Uint8Array[] = [];
+    const driver = await responseDriver(
+      () => new Response(data),
+      async (metadata, body) => {
+        const operation = String(metadata.operation);
+        operations.push(operation);
+        if (operation === "write") chunks.push(new Uint8Array(body));
+        if (operation === "finish" || operation === "respond")
+          completed.resolve();
+      },
+      "GET",
+    );
+    try {
+      await completed.promise;
+      expect(operations[0]).toBe("start");
+      expect(operations.at(-1)).toBe("finish");
+      expect(chunks.map((chunk) => chunk.length)).toEqual([
+        ...Array(16).fill(65536),
+        257,
+      ]);
+      const received = new Uint8Array(data.length);
+      let offset = 0;
+      for (const chunk of chunks) {
+        received.set(chunk, offset);
+        offset += chunk.length;
+      }
+      expect(received).toEqual(data);
+    } finally {
+      await driver.server.close();
+    }
+  });
+
+  it("awaits every native write before sending the next slice or reading the next producer chunk", async () => {
+    const writing = signal();
+    const releaseWrite = signal();
+    const finished = signal();
+    const chunks: Uint8Array[] = [];
+    let pulls = 0;
+    const first = Uint8Array.from(
+      { length: 2 * 65536 + 3 },
+      (_, index) => index % 251,
+    );
+    const driver = await responseDriver(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull: (controller) => {
+                pulls++;
+                if (pulls === 1) controller.enqueue(first);
+                else {
+                  controller.enqueue(new Uint8Array([254]));
+                  controller.close();
+                }
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+        ),
+      async (metadata, body) => {
+        if (metadata.operation === "write") {
+          chunks.push(new Uint8Array(body));
+          if (chunks.length === 1) {
+            writing.resolve();
+            await releaseWrite.promise;
+          }
+        }
+        if (metadata.operation === "finish") finished.resolve();
+      },
+      "GET",
+    );
+    try {
+      await writing.promise;
+      expect(pulls).toBe(1);
+      expect(chunks).toHaveLength(1);
+      releaseWrite.resolve();
+      await finished.promise;
+      expect(pulls).toBe(2);
+      expect(chunks.map((chunk) => chunk.length)).toEqual([65536, 65536, 3, 1]);
+      expect(chunks[0]).toEqual(first.slice(0, 65536));
+      expect(chunks[1]).toEqual(first.slice(65536, 2 * 65536));
+      expect(chunks[2]).toEqual(first.slice(2 * 65536));
+      expect(chunks[3]).toEqual(new Uint8Array([254]));
+    } finally {
+      releaseWrite.resolve();
+      await driver.server.close();
+    }
+  });
+
+  it.each(["start", "read", "write", "finish"])(
+    "aborts an incomplete response after %s fails without replacing it with HTTP 500",
+    async (failure) => {
+      const aborted = signal();
+      const cancelled = signal();
+      const operations: string[] = [];
+      let pulls = 0;
+      const driver = await responseDriver(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>(
+              {
+                pull: (controller) => {
+                  if (failure === "read")
+                    throw new Error("sensitive producer error");
+                  if (pulls++ === 0)
+                    controller.enqueue(new Uint8Array([1, 2, 3]));
+                  else controller.close();
+                },
+                cancel: () => cancelled.resolve(),
+              },
+              { highWaterMark: 0 },
+            ),
+          ),
+        async (metadata) => {
+          const operation = String(metadata.operation);
+          operations.push(operation);
+          if (operation === failure) throw new Error("native send failed");
+          if (operation === "abort" || operation === "respond")
+            aborted.resolve();
+        },
+        "GET",
+      );
+      try {
+        await aborted.promise;
+        if (failure === "start" || failure === "write") {
+          await cancelled.promise;
+          expect(pulls).toBe(failure === "start" ? 0 : 1);
+        }
+        expect(operations[0]).toBe("start");
+        expect(operations.at(-1)).toBe("abort");
+        expect(operations).not.toContain("respond");
+        if (failure !== "finish") expect(operations).not.toContain("finish");
+      } finally {
+        await driver.server.close();
+      }
+    },
+  );
+
+  it.each(["disconnect", "detach"])(
+    "cancels the producer while a native write waits on %s",
+    async (action) => {
+      const writing = signal();
+      const releaseWrite = signal();
+      const cancelled = signal();
+      const aborted = signal();
+      const operations: string[] = [];
+      let pulls = 0;
+      const driver = await responseDriver(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>(
+              {
+                pull: (controller) => {
+                  pulls++;
+                  controller.enqueue(new Uint8Array([1, 2, 3]));
+                },
+                cancel: () => {
+                  cancelled.resolve();
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+          ),
+        async (metadata) => {
+          const operation = String(metadata.operation);
+          operations.push(operation);
+          if (operation === "write") {
+            writing.resolve();
+            await releaseWrite.promise;
+          }
+          if (operation === "abort") aborted.resolve();
+        },
+        "GET",
+      );
+      try {
+        await writing.promise;
+        if (action === "disconnect") driver.disconnect();
+        else await driver.binding.detach();
+        await cancelled.promise;
+        expect(pulls).toBe(1);
+        releaseWrite.resolve();
+        await aborted.promise;
+        expect(operations).toEqual(["start", "write", "abort"]);
+      } finally {
+        releaseWrite.resolve();
+        await driver.server.close();
+      }
+    },
+  );
+
+  it.each([
+    { method: "HEAD", status: 200, body: true },
+    { method: "GET", status: 200, body: false },
+    { method: "GET", status: 204, body: false },
+    { method: "GET", status: 205, body: false },
+    { method: "GET", status: 304, body: false },
+  ])(
+    "uses an empty response without consuming a body for $method $status (body=$body)",
+    async (testCase) => {
+      const completed = signal();
+      const cancelled = signal();
+      const pulled = vi.fn();
+      const operations: string[] = [];
+      const driver = await responseDriver(
+        () =>
+          new Response(
+            testCase.body
+              ? new ReadableStream<Uint8Array>(
+                  { pull: pulled, cancel: () => cancelled.resolve() },
+                  { highWaterMark: 0 },
+                )
+              : null,
+            { status: testCase.status },
+          ),
+        async (metadata, body) => {
+          operations.push(String(metadata.operation));
+          expect(metadata.operation).toBe("respond");
+          expect(metadata.status).toBe(testCase.status);
+          expect(body.byteLength).toBe(0);
+          completed.resolve();
+        },
+        testCase.method,
+      );
+      try {
+        await completed.promise;
+        if (testCase.body) await cancelled.promise;
+        expect(operations).toEqual(["respond"]);
+        expect(pulled).not.toHaveBeenCalled();
+      } finally {
+        await driver.server.close();
+      }
     },
   );
 

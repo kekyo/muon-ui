@@ -78,11 +78,18 @@ declare global {
   interface MuonServerHandlers {
     /**
      * Handles an HTTP request using the Fetch API.
-     * @param request - Request whose signal aborts on disconnect, detach or close.
-     * @returns The complete HTTP response, or a promise for it.
-     * @remarks Handlers run concurrently. Request and response bodies are
-     * buffered, with a 1 MiB limit. Handler errors produce a generic HTTP 500.
-     * Responses constructed from streams are buffered until completion.
+     * @param request - Request whose signal aborts on detected transport failure,
+     * handler detach or server close.
+     * @returns An HTTP response, or a promise for it; its body may be a stream.
+     * @remarks Handlers run concurrently. Request bodies are buffered with a
+     * 1 MiB limit. Response bytes are sent incrementally, waiting for native
+     * send capacity before reading more. There is no total response size limit.
+     * Errors before a response starts produce a generic HTTP 500. Stream or
+     * transport errors after it starts terminate the incomplete response.
+     * Disconnect, detach and close cancel the response reader; arbitrary
+     * application work must observe the request signal to stop cooperatively.
+     * TCP receive EOF alone permits a half-closed client to receive its response;
+     * an idle stream detects a lost peer when a later send fails.
      */
     readonly fetch: (request: Request) => Response | Promise<Response>;
   }
@@ -145,8 +152,8 @@ declare global {
      * Creates a native server owned by this page without listening yet.
      * @param options - Unique page-local name, fixed port and loopback address.
      * @returns The server handle to attach, listen and close.
-     * @remarks Requires the muon.server.createServer capability. This initial
-     * API supports buffered HTTP; Android, streaming and WebSocket are unsupported.
+     * @remarks Requires the muon.server.createServer capability. HTTP responses
+     * support streaming, including SSE. Android and WebSocket are unsupported.
      */
     readonly createServer: (options: MuonServerOptions) => Promise<MuonServer>;
   }

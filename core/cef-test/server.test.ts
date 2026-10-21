@@ -192,6 +192,27 @@ it.each(["simple", "validate"] as const)(
       window.cancelStarted = new Promise(resolve => { window.markCancelStarted = resolve; });
       window.cancelled = new Promise(resolve => { window.markCancelled = resolve; });
       window.binding = await window.server.attach({fetch: async request => {
+        if (new URL(request.url).pathname === '/events') {
+          window.eventsCancelled = new Promise(resolve => { window.markEventsCancelled = resolve; });
+          const body = new ReadableStream({
+            start(controller) {
+              window.events = controller;
+              controller.enqueue(new TextEncoder().encode('data: first\\n\\n'));
+            },
+            cancel() { window.markEventsCancelled(); }
+          });
+          return new Response(body, {headers:{'Content-Type':'text/event-stream'}});
+        }
+        if (new URL(request.url).pathname === '/large-stream') {
+          let offset = 0;
+          return new Response(new ReadableStream({pull(controller) {
+            if (offset === 8 * 1024 * 1024) { controller.close(); return; }
+            const bytes = new Uint8Array(65536);
+            for (let i=0; i<bytes.length; i++) bytes[i] = (offset+i) % 251;
+            offset += bytes.length;
+            controller.enqueue(bytes);
+          }}));
+        }
         if (new URL(request.url).pathname === '/cancel') {
           window.markCancelStarted();
           await new Promise(resolve => request.signal.addEventListener('abort', () => { window.markCancelled(); resolve(); }, {once:true}));
@@ -288,14 +309,95 @@ it.each(["simple", "validate"] as const)(
       cancelled.resetAndDestroy();
       await evaluate("async () => await window.cancelled");
       expect(await send({})).toBe(200);
+      const events = await fetch(`http://127.0.0.1:${port}/events`, {
+        signal: AbortSignal.timeout(30000),
+      });
+      expect(events.headers.get("content-type")).toBe("text/event-stream");
+      const eventReader = events.body!.getReader();
+      const firstEvent = await eventReader.read();
+      expect(new TextDecoder().decode(firstEvent.value)).toBe(
+        "data: first\n\n",
+      );
+      expect(await send({})).toBe(200);
+      await evaluate(
+        "() => window.events.enqueue(new TextEncoder().encode('data: second\\n\\n'))",
+      );
+      const secondEvent = await eventReader.read();
+      expect(new TextDecoder().decode(secondEvent.value)).toBe(
+        "data: second\n\n",
+      );
+      await evaluate("() => window.events.close()");
+      expect((await eventReader.read()).done).toBe(true);
+      const large = await fetch(`http://127.0.0.1:${port}/large-stream`);
+      const largeReader = large.body!.getReader();
+      let largeOffset = 0;
+      while (true) {
+        const chunk = await largeReader.read();
+        if (chunk.done) break;
+        expect(
+          chunk.value.every((byte, i) => byte === (largeOffset + i) % 251),
+        ).toBe(true);
+        largeOffset += chunk.value.length;
+      }
+      expect(largeOffset).toBe(8 * 1024 * 1024);
+      const failedEvents = await new Promise<IncomingMessage>(
+        (resolveResponse, reject) => {
+          const call = request(
+            `http://127.0.0.1:${port}/events`,
+            resolveResponse,
+          );
+          call.on("error", reject);
+          call.end();
+        },
+      );
+      expect(failedEvents.headers["transfer-encoding"]).toBe("chunked");
+      const failedReader = failedEvents[Symbol.asyncIterator]();
+      expect((await failedReader.next()).done).toBe(false);
+      await evaluate(
+        "() => window.events.error(new Error('driver stream failed'))",
+      );
+      await expect(failedReader.next()).rejects.toThrow();
+      expect(failedEvents.complete).toBe(false);
+      expect(await send({})).toBe(200);
+      const resetStream = connectTcp({ host: "127.0.0.1", port });
+      await once(resetStream, "connect");
+      const streamData = new Promise<void>((resolveData, reject) => {
+        let received = "";
+        resetStream.on("error", reject);
+        resetStream.on("data", (chunk: Buffer) => {
+          received += chunk.toString();
+          if (received.includes("data: first\n\n")) resolveData();
+        });
+      });
+      resetStream.write(
+        `GET /events HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`,
+      );
+      await streamData;
+      resetStream.resetAndDestroy();
+      await evaluate("async () => await window.eventsCancelled");
+      expect(await send({})).toBe(200);
       expect(await send({ Host: "attacker.example" })).toBe(403);
       expect(await send({ Origin: "https://attacker.example" })).toBe(403);
       expect(await send({ Origin: "null" })).toBe(403);
       const slowResponse = fetch(`http://127.0.0.1:${port}/slow`);
       await evaluate("async () => await window.slowStarted");
+      const detachedEvents = await new Promise<IncomingMessage>(
+        (resolveResponse, reject) => {
+          const call = request(
+            `http://127.0.0.1:${port}/events`,
+            resolveResponse,
+          );
+          call.on("error", reject);
+          call.end();
+        },
+      );
+      const detachedReader = detachedEvents[Symbol.asyncIterator]();
+      expect((await detachedReader.next()).done).toBe(false);
       // Another request completes while the first handler awaits application work.
       expect(await send({})).toBe(200);
       await evaluate("async () => await window.binding.detach()");
+      await expect(detachedReader.next()).rejects.toThrow();
+      await evaluate("async () => await window.eventsCancelled");
       expect((await slowResponse).status).toBe(503);
       expect(await send({})).toBe(503);
       await evaluate(
@@ -455,13 +557,30 @@ it.each(["simple", "validate"] as const)(
       await evaluate("async () => await window.server.close()");
       await evaluate(`async () => {
       window.server = await window.serverApi.createServer({name: 'driver', port: ${port}});
-      await window.server.attach({fetch: () => new Response('reload')});
+      await window.server.attach({fetch: () => new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode('before navigation')); }
+      }))});
       await window.server.listen();
     }`);
+      const navigationResponse = await new Promise<IncomingMessage>(
+        (resolveResponse, reject) => {
+          const call = request(
+            `http://127.0.0.1:${port}/navigation`,
+            resolveResponse,
+          );
+          call.on("error", reject);
+          call.end();
+        },
+      );
+      const navigationReader = navigationResponse[Symbol.asyncIterator]();
+      expect((await navigationReader.next()).value?.toString()).toBe(
+        "before navigation",
+      );
       await client.callTool({
         name: "browser_navigate",
         arguments: { url: `${origin}/next` },
       });
+      await expect(navigationReader.next()).rejects.toThrow();
       // A native operation in the new context provides a completion barrier after
       // releasing the old page, without a fixed sleep.
       await evaluate(`async () => {

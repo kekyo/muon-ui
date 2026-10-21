@@ -9,6 +9,7 @@
 #include "muon_json_helpers.h"
 #include "include/cef_parser.h"
 #include <array>
+#include <charconv>
 #include <algorithm>
 #include <deque>
 #include <map>
@@ -26,6 +27,7 @@ struct ServerResponse {
   ServerHeaders headers;
   ServerBytes body;
   std::shared_ptr<cardio::promise_source<void>> sent;
+  bool streaming = false;
 };
 struct ServerConnection {
   uint64_t id;
@@ -33,6 +35,9 @@ struct ServerConnection {
   std::string request_id;
   std::shared_ptr<cardio::promise_source<ServerResponse>> response;
   bool responding = false;
+  std::shared_ptr<cardio::promise_source<void>> stream_end;
+  bool writing = false;
+  bool stream_complete = false;
 };
 struct ServerRequest {
   std::shared_ptr<ServerConnection> connection;
@@ -250,9 +255,11 @@ static void DetachServer(const std::shared_ptr<ServerState>& state) {
   state->binding.reset();
   for (const auto& [id, request] : state->requests) {
     (void)id;
-    if (request.connection->responding)
+    if (request.connection->responding) {
+      if (request.connection->stream_end)
+        request.connection->stream_end->try_reject(std::make_exception_ptr(cardio::canceled_exception()));
       cardio::fire_and_forget(request.connection->socket->close());
-    else ServerError(state, request.connection, 503, request.response_headers);
+    } else ServerError(state, request.connection, 503, request.response_headers);
   }
   state->requests.clear();
 }
@@ -265,6 +272,8 @@ static cardio::promise<void> StopServerIo(std::shared_ptr<ServerState> state) {
     (void)id;
     if (connection->response)
       connection->response->try_reject(std::make_exception_ptr(cardio::canceled_exception()));
+    if (connection->stream_end)
+      connection->stream_end->try_reject(std::make_exception_ptr(cardio::canceled_exception()));
     co_await connection->socket->close();
   }
   state->stopping_io = false;
@@ -289,12 +298,14 @@ static cardio::promise<void> WriteServerResponse(
     std::shared_ptr<ServerConnection> connection, const ServerResponse& response) {
   auto header = "HTTP/1.1 " + std::to_string(response.status) + " Response\r\n";
   for (const auto& [name, value] : response.headers) header += name + ": " + value + "\r\n";
-  header += "Content-Length: " + std::to_string(response.body.size()) + "\r\n\r\n";
+  header += response.streaming ? "Transfer-Encoding: chunked\r\n\r\n" :
+      "Content-Length: " + std::to_string(response.body.size()) + "\r\n\r\n";
   co_await connection->socket->write(std::span(
       reinterpret_cast<const uint8_t*>(header.data()), header.size()));
   if (!response.body.empty()) co_await connection->socket->write(response.body);
 }
 static cardio::promise<void> MonitorServerConnection(std::shared_ptr<ServerConnection> connection) {
+  auto failed = false;
   try {
     auto bytes = std::array<uint8_t, 1>{};
     const auto size = co_await connection->socket->read(bytes);
@@ -302,8 +313,11 @@ static cardio::promise<void> MonitorServerConnection(std::shared_ptr<ServerConne
     // No HTTP keep-alive/pipelining is advertised, so further input is rejected.
     if (size) throw std::runtime_error("Unexpected input after HTTP request");
   } catch (...) {
+    failed = true;
     if (connection->response) connection->response->try_reject(std::current_exception());
+    if (connection->stream_end) connection->stream_end->try_reject(std::current_exception());
   }
+  if (failed) co_await connection->socket->close();
 }
 static cardio::promise<void> RunServerConnection(
     std::shared_ptr<ServerState> state, std::shared_ptr<ServerConnection> connection) {
@@ -349,7 +363,13 @@ static cardio::promise<void> RunServerConnection(
     }
     acknowledged = response.sent;
     co_await WriteServerResponse(connection, response);
+    auto stream_finished = cardio::resolved();
+    if (response.streaming) {
+      connection->stream_end = std::make_shared<cardio::promise_source<void>>();
+      stream_finished = connection->stream_end->get_promise();
+    }
     if (acknowledged) acknowledged->try_resolve();
+    co_await stream_finished;
   } catch (...) {
     if (acknowledged) acknowledged->try_reject(std::current_exception());
   }
@@ -387,7 +407,7 @@ static cardio::promise<void> AcceptServerConnections(std::shared_ptr<ServerState
 }
 
 static cardio::promise<void> RespondToServerRequest(const std::shared_ptr<ServerState>& state,
-                                  yyjson_val* root, const ServerBytes& body) {
+                                  yyjson_val* root, const ServerBytes& body, bool streaming) {
   const auto request_id = RequiredServerString(root, "requestId");
   const auto found = state->requests.find(request_id);
   if (found == state->requests.end()) throw std::runtime_error("Server request is no longer active");
@@ -417,13 +437,56 @@ static cardio::promise<void> RespondToServerRequest(const std::shared_ptr<Server
   if (connection->responding) throw std::runtime_error("Server response has already started");
   const auto code = static_cast<int>(yyjson_get_uint(status));
   const auto no_body = found->second.method == "HEAD" || code == 204 || code == 205 || code == 304;
+  if (streaming && (no_body || !body.empty()))
+    throw std::runtime_error("Invalid streaming HTTP response");
   extra.emplace_back("Content-Type", content_type);
   auto sent = std::make_shared<cardio::promise_source<void>>();
   auto pending = sent->get_promise();
   connection->responding = true;
-  connection->response->resolve(ServerResponse{code, std::move(extra), no_body ? ServerBytes{} : body, sent});
+  connection->response->resolve(ServerResponse{code, std::move(extra), no_body ? ServerBytes{} : body, sent, streaming});
   co_await pending;
-  state->requests.erase(request_id);
+  if (!streaming) state->requests.erase(request_id);
+}
+
+static cardio::promise<void> AbortServerStream(std::shared_ptr<ServerConnection> connection) {
+  const auto canceled = std::make_exception_ptr(cardio::canceled_exception());
+  if (connection->response) connection->response->try_reject(canceled);
+  if (connection->stream_end) connection->stream_end->try_reject(canceled);
+  co_await connection->socket->close();
+}
+static cardio::promise<void> WriteServerChunk(std::shared_ptr<ServerState> state,
+    const std::string& request_id, const ServerBytes& body, bool finish) {
+  const auto found = state->requests.find(request_id);
+  if (found == state->requests.end()) throw std::runtime_error("Server request is no longer active");
+  const auto connection = found->second.connection;
+  if (!connection->stream_end || connection->stream_complete || connection->writing)
+    throw std::runtime_error("HTTP stream is unavailable or already writing");
+  if ((!finish && (body.empty() || body.size() > 64 * 1024)) || (finish && !body.empty()))
+    throw std::runtime_error("HTTP stream chunks must contain 1 to 65536 bytes");
+  connection->writing = true;
+  try {
+    auto frame = ServerBytes{};
+    if (finish) frame = {'0', '\r', '\n', '\r', '\n'};
+    else {
+      auto size = std::array<char, 16>{};
+      const auto converted = std::to_chars(size.data(), size.data() + size.size(), body.size(), 16);
+      frame.insert(frame.end(), size.data(), converted.ptr);
+      frame.insert(frame.end(), {'\r', '\n'});
+      frame.insert(frame.end(), body.begin(), body.end());
+      frame.insert(frame.end(), {'\r', '\n'});
+    }
+    co_await connection->socket->write(frame);
+    connection->writing = false;
+    if (finish) {
+      connection->stream_complete = true;
+      state->requests.erase(request_id);
+      connection->stream_end->try_resolve();
+    }
+  } catch (...) {
+    connection->writing = false;
+    connection->stream_end->try_reject(std::current_exception());
+    throw;
+  }
 }
 
 static cardio::promise<ServerBytes> DispatchServer(
@@ -523,9 +586,29 @@ static cardio::promise<ServerBytes> DispatchServer(
     auto pending = state->binding->waiting->get_promise();
     co_return co_await pending;
   }
-  if (operation == "respond") {
+  if (operation == "write" || operation == "finish" || operation == "abort") {
+    const auto request_id = RequiredServerString(root, "requestId");
+    const auto request = state->requests.find(request_id);
+    if (request == state->requests.end()) {
+      if (operation == "abort") co_return ServerEnvelope("null");
+      throw std::runtime_error("Server request is no longer active");
+    }
+    const auto connection = request->second.connection;
+    if (operation == "abort") co_await AbortServerStream(connection);
+    else {
+      auto failure = std::exception_ptr{};
+      try { co_await WriteServerChunk(state, request_id, body, operation == "finish"); }
+      catch (...) { failure = std::current_exception(); }
+      if (failure) {
+        co_await AbortServerStream(connection);
+        std::rethrow_exception(failure);
+      }
+    }
+    co_return ServerEnvelope("null");
+  }
+  if (operation == "respond" || operation == "start") {
     try {
-      co_await RespondToServerRequest(state, root, body);
+      co_await RespondToServerRequest(state, root, body, operation == "start");
     } catch (...) {
       // A malformed application response must not strand an accepted request.
       // Expired requests and bindings never affect another request or binding.

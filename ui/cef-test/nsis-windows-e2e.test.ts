@@ -381,9 +381,13 @@ const createRemoteFakeLinuxPackageDist = async (
   return packageDirectory;
 };
 
-const createMuonPackCliScript = (packageDirectory: string): string => `
+const createMuonPackCliScript = (
+  packageDirectory: string,
+  nodePath: string,
+): string => `
 $ErrorActionPreference = 'Stop'
 $cliPath = Join-Path $PWD 'node_modules\\muon-ui\\dist\\cli.cjs'
+$nodePath = ${quotePowerShellString(nodePath)}
 $packageDirectory = ${quotePowerShellString(packageDirectory)}
 $arguments = @(
   $cliPath,
@@ -394,7 +398,7 @@ $arguments = @(
   '--package-directory',
   $packageDirectory
 )
-& node @arguments
+& $nodePath @arguments
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
 }
@@ -1674,7 +1678,10 @@ Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA ${quote
         windowsAgent,
         remoteDirectory,
         "muon-pack-linux",
-        createMuonPackCliScript(packageDirectory),
+        createMuonPackCliScript(
+          packageDirectory,
+          windowsE2eEnvironment.nodePath,
+        ),
         120000,
       );
       expect(

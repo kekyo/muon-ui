@@ -46,6 +46,9 @@ it.skipIf(runtime === undefined).each(schemaModes)(
             ? process.env.DBUS_SESSION_BUS_ADDRESS
             : `unix:path=${directory}/absent-bus`,
         GIO_USE_VFS: "local",
+        // The chooser does not require a session-specific IM daemon.
+        // The probe separately selects and loads each bundled module below.
+        GTK_IM_MODULE: "gtk-im-context-simple",
         XDG_DATA_HOME: directory,
       };
       if (schemaMode === "none" || schemaMode === "old") {
@@ -93,7 +96,7 @@ it.skipIf(runtime === undefined).each(schemaModes)(
           executable,
           [schemaMode, picture, id],
           {
-            env: { ...childEnvironment, GTK_IM_MODULE: id },
+            env: childEnvironment,
           },
         );
         console.info(`${schemaMode}/${id}:\n${stdout}${stderr}`);
@@ -111,6 +114,7 @@ it.skipIf(runtime === undefined).each(schemaModes)(
             "fonts: antialias=1 hintstyle=hintfull rgba=bgr",
           );
         expect(stdout).toContain("file chooser: shown");
+        expect(stdout).toContain("file chooser: selected=1");
         expect(stdout).toContain("image: decoded=1");
         expect(stdout).toContain(`input: ${id} bundled=1`);
         if (schemaMode === "portal" && wayland) {

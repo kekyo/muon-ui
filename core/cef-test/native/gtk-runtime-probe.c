@@ -38,6 +38,44 @@ static gboolean check_input_module(const char *id, const char *filename) {
     return loaded;
 }
 
+typedef struct {
+    GMainLoop *loop;
+    const char *filename;
+    gboolean selected;
+    guint timeout;
+} file_selection;
+
+static void selection_changed(GtkFileChooser *chooser, gpointer data) {
+    file_selection *selection = data;
+    gchar *filename = gtk_file_chooser_get_filename(chooser);
+    selection->selected = g_strcmp0(filename, selection->filename) == 0;
+    g_free(filename);
+    if (selection->selected) g_main_loop_quit(selection->loop);
+}
+
+static gboolean selection_timeout(gpointer data) {
+    file_selection *selection = data;
+    selection->timeout = 0;
+    g_main_loop_quit(selection->loop);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean select_file(GtkFileChooser *chooser, const char *filename) {
+    file_selection selection = {g_main_loop_new(NULL, FALSE), filename, FALSE, 0};
+    gulong handler = g_signal_connect(chooser, "selection-changed", G_CALLBACK(selection_changed), &selection);
+    // Folder loading is asynchronous. Wait for the requested selection;
+    // the timeout only bounds a broken chooser, never signals success.
+    selection.timeout = g_timeout_add_seconds(60, selection_timeout, &selection);
+    gtk_file_chooser_select_filename(chooser, filename);
+    selection_changed(chooser, &selection);
+    if (!selection.selected) g_main_loop_run(selection.loop);
+    if (selection.timeout != 0) g_source_remove(selection.timeout);
+    g_signal_handler_disconnect(chooser, handler);
+    g_main_loop_unref(selection.loop);
+    printf("file chooser: selected=%d\n", selection.selected);
+    return selection.selected;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "new";
     const char *interface_id = "org.gnome.desktop.interface";
@@ -79,6 +117,7 @@ int main(int argc, char **argv) {
     gtk_container_add(GTK_CONTAINER(window), chooser);
     gtk_widget_show_all(window);
     printf("file chooser: shown\n");
+    if (argc > 2) valid = select_file(GTK_FILE_CHOOSER(chooser), argv[2]) && valid;
     gtk_widget_destroy(window);
     if (argc > 2) {
         GError *error = NULL;

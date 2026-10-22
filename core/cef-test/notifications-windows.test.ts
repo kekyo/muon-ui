@@ -73,7 +73,8 @@ beforeAll(async () => {
     ["scripts/stage-muon-builder.mjs"],
     { cwd: resolve("../../ui"), maxBuffer: 16 * 1024 * 1024 },
   );
-  cdpHost = (await discoverWindowsTestNetwork(agent)).cdpHost;
+  cdpHost = (await discoverWindowsTestNetwork(agent, environment.nodePath))
+    .cdpHost;
   await stageWindowsRuntimeDirectory(
     agent,
     resolve("../..", target.releaseRuntimeDirectory),

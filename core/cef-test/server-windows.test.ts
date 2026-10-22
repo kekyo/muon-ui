@@ -42,7 +42,8 @@ beforeAll(async () => {
   const connected = await connectWindowsAgent(environment, target);
   if (connected.status !== "connected") throw new Error(connected.reason);
   agent = connected.agent;
-  cdpHost = (await discoverWindowsTestNetwork(agent)).cdpHost;
+  cdpHost = (await discoverWindowsTestNetwork(agent, environment.nodePath))
+    .cdpHost;
   await stageWindowsRuntimeDirectory(
     agent,
     resolve(
@@ -165,7 +166,7 @@ describeWindowsE2e(`Windows loopback server (${target.target})`, () => {
       const assets = win32.join(directory, "assets", "main");
       await remote.files.mkdir(assets, { recursive: true });
       const portsProcess = await remote.processes.launchManaged({
-        path: "node.exe",
+        path: environment.nodePath,
         arguments: [
           "--input-type=module",
           "-e",
@@ -354,7 +355,7 @@ describeWindowsE2e(`Windows loopback server (${target.target})`, () => {
           Buffer.from(JSON.stringify({ endpoint, token })),
         );
         const external = await remote.processes.launchManaged({
-          path: "node.exe",
+          path: environment.nodePath,
           arguments: [clientPath, clientConfig],
           workingDirectory: directory,
           captureStdout: true,

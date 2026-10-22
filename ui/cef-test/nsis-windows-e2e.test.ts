@@ -1446,7 +1446,10 @@ Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:APPDATA ${quote
           ),
           relayPath,
         );
-        const network = await discoverWindowsTestNetwork(windowsAgent);
+        const network = await discoverWindowsTestNetwork(
+          windowsAgent,
+          windowsE2eEnvironment.nodePath,
+        );
         const relay = await windowsAgent.processes.launchManaged({
           path: relayPath,
           arguments: ["0", String(cdpPort)],

@@ -11,6 +11,8 @@ export interface WindowsE2eEnvironment {
   section: string;
   /** Optional HTTP fixture address override for routed test networks. */
   httpHost: string | undefined;
+  /** Executable used for test-only Node.js helper processes on Windows. */
+  nodePath: string;
   /** Directory on the selected Windows machine for test artifacts. */
   workDir: string;
 }
@@ -41,6 +43,7 @@ export const resolveWindowsE2eEnvironment = (
 ): WindowsE2eEnvironment => ({
   section: env.MUON_E2E_AGENT_SECTION?.trim() || "win11",
   httpHost: env.MUON_E2E_REMOTE_HTTP_HOST?.trim() || undefined,
+  nodePath: env.MUON_E2E_REMOTE_NODE_PATH?.trim() || "node.exe",
   workDir: env.MUON_E2E_REMOTE_WORK_DIR?.trim() || String.raw`C:\muon-e2e`,
 });
 

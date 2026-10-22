@@ -91,7 +91,7 @@ Tests use the `win11` section unless you specify another section, for example by
 
 Remote tests are skipped only when the SDK cannot establish a connection, such as when the configuration file is missing. The skip reason is printed. Build, transfer, and assertion errors after a successful connection fail the tests. Connections are released during local builds and when each suite finishes.
 
-Set `MUON_E2E_REMOTE_WORK_DIR` to change the remote working directory. Screen tests discover the IPv4 routes for CDP and HTTP automatically. Networks requiring a different return address for the HTTP fixture server can override it with `MUON_E2E_REMOTE_HTTP_HOST`.
+Set `MUON_E2E_REMOTE_WORK_DIR` to change the remote working directory. If Node.js is not on the remote machine's PATH, set `MUON_E2E_REMOTE_NODE_PATH` to the executable used by test helper processes. Screen tests discover the IPv4 routes for CDP and HTTP automatically. Networks requiring a different return address for the HTTP fixture server can override it with `MUON_E2E_REMOTE_HTTP_HOST`.
 
 ## Package generation
 

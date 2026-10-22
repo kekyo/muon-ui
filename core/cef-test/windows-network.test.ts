@@ -17,9 +17,11 @@ import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.js";
 
 it("discovers the selected machine and the HTTP return route, then releases its probe", async () => {
   let released = false;
+  let launchedPath = "";
   const agent = {
     processes: {
       launchManaged: async (options: RemoteManagedProcessLaunchOptions) => {
+        launchedPath = options.path;
         const child = spawn(process.execPath, [...(options.arguments ?? [])]);
         let stdout = "";
         let stderr = "";
@@ -43,7 +45,10 @@ it("discovers the selected machine and the HTTP return route, then releases its 
       },
     },
   } as unknown as RemoteAgent;
-  const result = await discoverWindowsTestNetwork(agent);
+  const result = await discoverWindowsTestNetwork(
+    agent,
+    String.raw`C:\test\node.exe`,
+  );
   const localAddresses = Object.values(networkInterfaces()).flatMap((entries) =>
     (entries ?? [])
       .filter((entry) => entry.family === "IPv4")
@@ -51,6 +56,7 @@ it("discovers the selected machine and the HTTP return route, then releases its 
   );
   expect(localAddresses).toContain(result.cdpHost);
   expect(localAddresses).toContain(result.httpHost);
+  expect(launchedPath).toBe(String.raw`C:\test\node.exe`);
   expect(released).toBe(true);
 });
 
@@ -68,7 +74,7 @@ it("releases a probe when startup fails", async () => {
       }),
     },
   } as unknown as RemoteAgent;
-  await expect(discoverWindowsTestNetwork(agent)).rejects.toThrow(
+  await expect(discoverWindowsTestNetwork(agent, "node.exe")).rejects.toThrow(
     "probe startup failed",
   );
   expect(released).toBe(true);

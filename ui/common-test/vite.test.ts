@@ -3034,14 +3034,29 @@ describe("muon Vite plugin", () => {
     );
     await wait(() => existsSync(join(outputDirectory, "ready")));
 
-    await Promise.race([
-      server.close(),
-      delay(5000).then(() => {
-        throw new Error(
-          "Vite server close did not finish after stopping muon.",
-        );
-      }),
-    ]);
+    const argumentsText = await readFile(
+      join(outputDirectory, "args.txt"),
+      "utf8",
+    );
+    const overrideConfigPath = argumentsText.trim().split("\n").at(-1)!;
+    await access(overrideConfigPath);
+    const timeout = new AbortController();
+    try {
+      await Promise.race([
+        server.close(),
+        (async () => {
+          await delay(5000, timeout.signal);
+          throw new Error(
+            "Vite server close did not finish after stopping muon.",
+          );
+        })(),
+      ]);
+    } finally {
+      timeout.abort();
+    }
+    await expect(access(dirname(overrideConfigPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(warnings).toEqual([]);
   });
 

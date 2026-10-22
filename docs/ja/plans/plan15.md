@@ -216,6 +216,7 @@ amd64・ARMhf・ARM64のELF依存監査では、依存先やシンボルの問�
 | キーボード入力 | 同梱GTKの入力欄で、X11とWeston Waylandの両方から`muon123`を入力・確定できた。 |
 | IBusの日本語変換 | 同じ入力欄へ`nihongo`をキー入力し、`にほんご`、`日本語`、確定済みの`日本語`の順に変化することをX11とWeston Waylandで確認した。 |
 | Fcitx5の日本語変換 | 同梱GTKと`im-fcitx5.so`を使い、Fcitx5とMozcによる同じ変換・確定をX11とWeston Waylandで確認した。 |
+| Fcitx4の日本語変換 | 同梱GTKと`im-fcitx.so`を使い、Fcitx4とMozcによる変換・確定をX11とKWin Waylandで確認した。X11ではCEFページ内の変換・確定も確認した。 |
 | CEFページ内の日本語変換 | X11ではFcitx5とMozc、隔離したGNOME WaylandではIBusとMozcを使い、配布ランタイムのHTML入力欄の変換イベントと確定値`日本語`をPlaywright MCPで検証した。 |
 | KDE Plasma Wayland | Ubuntu 24.04の独立したPlasmaセッションで、同梱GTKのファイル選択とSVG読み込み、CEFページの描画、英数字入力、Fcitx5とMozcによる日本語変換、タイトルバーからの正常終了を確認した。 |
 
@@ -243,7 +244,11 @@ ARM64ではCEFのCDP接続先も開いたが、MCPによる画面検証の前に
 
 ARMhfもCDPへの接続後、MCPでDOMや画面を確認する前にGPUプロセスの起動失敗で終了した。ログには`error_code=1002`、再試行後の`GPU process isn't usable`、シグナル5による終了が記録されている。ARMhfのCEF画面検証も未完了であり、ARM64と同じ原因とは断定していない。
 
-GTKのファイル選択テストでは特定の入力デーモンへ依存しない入力コンテキストを使い、各外部モジュールのロードを別に検証する。GNOMEのibusセッションでFcitx4をファイル選択にも使用した試行では、[FcitxのD-Bus接続処理](https://github.com/fcitx/fcitx/blob/4.2.9.7/src/lib/fcitx-gclient/fcitxconnection.c)から警告が出た。Fcitx4のデーモンはこのホストに導入されておらず、デーモンを含むFcitx4実環境での操作確認は未実施である。
+GTKのファイル選択テストでは特定の入力デーモンへ依存しない入力コンテキストを使い、各外部モジュールのロードを別に検証する。GNOMEのibusセッションでFcitx4をファイル選択にも使用した試行では、[FcitxのD-Bus接続処理](https://github.com/fcitx/fcitx/blob/4.2.9.7/src/lib/fcitx-gclient/fcitxconnection.c)から警告が出た。ホストにはFcitx4のデーモンがないため、操作確認には別のコンテナーを用意した。
+
+そのコンテナーでは、Ubuntu 24.04のFcitx 4.2.9.9とMozc 2.28.4715.102を使った。D-Busと設定・保存先を分離し、Fcitx4の[制御コマンド](https://github.com/fcitx/fcitx/blob/4d8c957e9ff97645a6f63dfa54bf1071c8982d08/src/module/dbus/dbusremote.c)でMozcを有効にした。同梱GTKの入力欄へ実キー入力で`nihongo`、Space、Enterを送り、変換中の`にほんご`と`日本語`、確定済みの`日本語`をX11とKWin Waylandで確認した。Wayland側は`DISPLAY`が空で`GdkWaylandDisplay`を使用し、両方のメモリーマップから同梱GTKと`im-fcitx.so`の読み込みを確認した。Waylandの画像は、[GTKが報告する表示完了](https://docs.gtk.org/gdk3/method.FrameTimings.get_presentation_time.html)を待って取得し、確定結果を目視でも確認した。これはGTK入力モジュールとD-Busによる変換の検証であり、Waylandのtext-inputプロトコルによるCEF入力や候補ウインドウの位置を確認したものではない。
+
+X11では同じFcitx4を使い、配布ランタイムのCEFページ内でも変換と確定が成功した。Playwright MCPで`compositionupdate`の`にほんご`と`日本語`、`compositionend`と入力欄の値`日本語`を検証した。プロセスは同梱GTKと`im-fcitx.so`を使用し、画面でも確定結果を確認した。Fcitx4の各試験用コンテナーは終了時に削除され、ホストの入力設定は変更していない。
 
 ### 公開起動経路と更新
 
@@ -314,7 +319,7 @@ CDPの追加調査では、必要なNode.jsを元々存在しなかった同じ�
 | 完了条件 | 結果 |
 | --- | --- |
 | 通常のWaylandで配布ランタイムとChronical Decadeを起動する | 達成。GNOME Waylandで起動・描画・通常終了を確認した。 |
-| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 一部未確認。新旧設定と設定なし、X11、Weston、GNOME、KDE Plasma、GTK入力欄のIBus・Fcitx5変換、X11・GNOME Wayland・KDE WaylandのCEFページ内の日本語変換は確認した。Fcitx4の日本語変換操作は未確認である。 |
+| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 達成。新旧設定と設定なし、X11、Weston、GNOME、KDE Plasma、GTK入力欄のIBus・Fcitx4・Fcitx5変換、X11・GNOME Wayland・KDE WaylandのCEFページ内の日本語変換を、上記の各条件で確認した。 |
 | Viteの診断と非ゼロ終了を確認する | 達成。終了コード・シグナル・起動失敗と、出力の保持を検証した。 |
 | 正常終了、再起動、独立動作、Viteからの停止を確認する | 達成。回帰テストと配布物の公開起動経路で確認した。 |
 | 準備済みの旧ランタイムを更新する | 達成。`.muon`を手動で削除せずに更新できた。 |

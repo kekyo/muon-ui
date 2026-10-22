@@ -215,16 +215,21 @@ amd64・ARMhf・ARM64のELF依存監査では、依存先やシンボルの問�
 | 入力モジュール | ibus、Fcitx4、Fcitx5をそれぞれ独立したプロセスでロードし、実際に配布物の共有ライブラリーを使用したことを確認した。 |
 | キーボード入力 | 同梱GTKの入力欄で、X11とWeston Waylandの両方から`muon123`を入力・確定できた。 |
 | IBusの日本語変換 | 同じ入力欄へ`nihongo`をキー入力し、`にほんご`、`日本語`、確定済みの`日本語`の順に変化することをX11とWeston Waylandで確認した。 |
+| Fcitx5の日本語変換 | 同梱GTKと`im-fcitx5.so`を使い、Fcitx5とMozcによる同じ変換・確定をX11とWeston Waylandで確認した。 |
 
 ファイル選択はフォルダーの非同期読み込みと選択変更の通知を待ち、返されたパスを検証する。一定時間の生存を成功条件にはしていない。画像はSVGを読み込み、寸法と画素値を検証する。
 
 入力モジュールのロード成功は、日本語の変換操作ができたという意味ではない。IBusは別の小さな入力用プローブで実際の変換を検証し、プロセスのメモリーマップから同梱GTKと`im-ibus.so`の使用を確認した。Westonでは隔離した実行ディレクトリーを使うため、既存IBusへの接続先をテストの環境変数`IBUS_ADDRESS`で指定した。[IBusの接続先探索](https://ibus.github.io/docs/ibus-1.4/ibus-ibusshare.html#ibus-get-address)に従うテスト設定であり、製品の起動設定やデスクトップ設定は変更していない。この結果はGTK入力欄の確認であり、CEFページ内の日本語入力全般を確認したものではない。
 
+2026年10月23日には、Fcitx5 5.1.7とMozc 2.28.4715.102でも実際の変換を確認した。試験用のD-Busセッションと設定・保存先を分離し、キー入力から`にほんご`、`日本語`、確定済みの`日本語`までの変化を検証した。入力メソッドが接続されるまで待ってからMozcへ切り替え、文字列を直接入力欄へ設定する方法は使っていない。X11とWeston Waylandの両方で成功し、メモリーマップでも同梱GTKと`im-fcitx5.so`を確認した。Wayland側は`DISPLAY`が空で、`GdkWaylandDisplay`だった。試験用のFcitx5とMozcは終了後に残っていない。
+
+このWayland試験は、[FcitxのGTK入力モジュール](https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland#Gtk3_.2F_Gtk4)からD-Bus経由で変換する経路を確認した。Weston既定の画面キーボードとFcitxの入力パネルが競合したため、[Westonの入力メソッド設定](https://gitlab.freedesktop.org/wayland/weston/-/blob/13.0.0/compositor/text-backend.c)に従い、試験専用設定で画面キーボードを起動しないようにした。Fcitx側もWaylandプロトコルを使う入力受付を無効にし、GTKモジュール用のD-Bus接続を使用した。CEFページ内の日本語変換、Waylandのtext-inputプロトコルによる入力、候補ウインドウの描画位置は、この結果の確認範囲に含めない。
+
 ARM64ではCEFのCDP接続先も開いたが、MCPによる画面検証の前にGPUプロセスが`error_code=1002`で繰り返し失敗し、終了した。同じUbuntu 20.04コンテナー、QEMU、Xvfbの条件でGTKとGDKだけを元の3.24.20に戻しても再現した。この比較では原因をQEMUと断定できず、ARM64のCEF画面検証は未完了とする。新旧GTK/GDKのELFヘッダーと属性には、追加の命令セット要件を示す差分はなかった。
 
 ARMhfもCDPへの接続後、MCPでDOMや画面を確認する前にGPUプロセスの起動失敗で終了した。ログには`error_code=1002`、再試行後の`GPU process isn't usable`、シグナル5による終了が記録されている。ARMhfのCEF画面検証も未完了であり、ARM64と同じ原因とは断定していない。
 
-GTKのファイル選択テストでは特定の入力デーモンへ依存しない入力コンテキストを使い、各外部モジュールのロードを別に検証する。GNOMEのibusセッションでFcitx4をファイル選択にも使用した試行では、[FcitxのD-Bus接続処理](https://github.com/fcitx/fcitx/blob/4.2.9.7/src/lib/fcitx-gclient/fcitxconnection.c)から警告が出た。デーモンを含むFcitx実環境での操作確認は未実施である。
+GTKのファイル選択テストでは特定の入力デーモンへ依存しない入力コンテキストを使い、各外部モジュールのロードを別に検証する。GNOMEのibusセッションでFcitx4をファイル選択にも使用した試行では、[FcitxのD-Bus接続処理](https://github.com/fcitx/fcitx/blob/4.2.9.7/src/lib/fcitx-gclient/fcitxconnection.c)から警告が出た。Fcitx4のデーモンはこのホストに導入されておらず、デーモンを含むFcitx4実環境での操作確認は未実施である。
 
 ### 公開起動経路と更新
 
@@ -295,7 +300,7 @@ CDPの追加調査では、必要なNode.jsを元々存在しなかった同じ�
 | 完了条件 | 結果 |
 | --- | --- |
 | 通常のWaylandで配布ランタイムとChronical Decadeを起動する | 達成。GNOME Waylandで起動・描画・通常終了を確認した。 |
-| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 一部未確認。新旧設定と設定なし、X11、Weston、GNOME、GTK入力欄のIBus変換は確認した。KDE Plasmaの実セッション、CEFページ内やFcitx系の日本語変換操作は未確認である。 |
+| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 一部未確認。新旧設定と設定なし、X11、Weston、GNOME、GTK入力欄のIBus・Fcitx5変換は確認した。KDE Plasmaの実セッション、CEFページ内やFcitx4の日本語変換操作は未確認である。 |
 | Viteの診断と非ゼロ終了を確認する | 達成。終了コード・シグナル・起動失敗と、出力の保持を検証した。 |
 | 正常終了、再起動、独立動作、Viteからの停止を確認する | 達成。回帰テストと配布物の公開起動経路で確認した。 |
 | 準備済みの旧ランタイムを更新する | 達成。`.muon`を手動で削除せずに更新できた。 |

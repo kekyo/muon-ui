@@ -8,7 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev libgbm-dev libglib2.0-dev libgtk-3-dev libnss3-dev libpcre2-dev \
     libssl-dev libx11-dev libxcb1-dev libxcomposite-dev libxdamage-dev \
     libxext-dev libxfixes-dev libxkbcommon-dev libxrandr-dev libxrender-dev \
-    libxss-dev libxtst-dev make ninja-build patch pkg-config python3-pip \
+    libxss-dev libxtst-dev libwayland-dev wayland-protocols libxml2-utils \
+    make ninja-build patch pkg-config python3-pip \
     tar xz-utils zlib1g-dev xvfb xauth fonts-dejavu-core dbus-x11 \
     && rm -rf /var/lib/apt/lists/*
 ENV CC=gcc-10 CXX=g++-10
@@ -48,7 +49,29 @@ RUN pip3 install --no-cache-dir meson==1.3.2 \
     && mkdir -p /opt/muon-baseline/share/licenses/glib \
     && cp /tmp/glib-${GLIB_VERSION}/COPYING /opt/muon-baseline/share/licenses/glib/ \
     && rm -rf /tmp/glib.tar.xz /tmp/glib-${GLIB_VERSION} /tmp/glib-build
-# Keep input methods and the GTK module caches from this same baseline.
+ENV PKG_CONFIG_PATH=/opt/muon-gtk/lib/pkgconfig:/opt/muon-baseline/lib/pkgconfig
+ENV LD_LIBRARY_PATH=/opt/muon-gtk/lib:/opt/muon-baseline/lib
+ENV PATH=/opt/muon-gtk/bin:/opt/muon-baseline/bin:${PATH}
+ARG GTK_VERSION=3.24.52
+ARG GTK_SHA256=80931fa472a77b9a164f6740e3c0b444fac6770054632d35a7ff9d679e5e7b9f
+# Preserve the baseline ABI while using upstream's current Wayland settings support.
+RUN apt-get update && apt-get install -y --no-install-recommends libcups2-dev libcolord-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /tmp/gtk.tar.xz https://download.gnome.org/sources/gtk/3.24/gtk-${GTK_VERSION}.tar.xz \
+    && echo "${GTK_SHA256}  /tmp/gtk.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/gtk.tar.xz -C /tmp \
+    && meson setup /tmp/gtk-build /tmp/gtk-${GTK_VERSION} \
+      --prefix=/opt/muon-gtk --libdir=lib --buildtype=release \
+      -Dx11_backend=true -Dwayland_backend=true -Dbuiltin_immodules=none \
+      -Dprint_backends=cups,file,lpr -Dcolord=yes \
+      -Dtests=false -Dinstalled_tests=false -Ddemos=false -Dexamples=false \
+      -Dintrospection=false -Dgtk_doc=false -Dman=false \
+    && meson compile -C /tmp/gtk-build -j ${BUILD_JOBS} \
+    && meson install -C /tmp/gtk-build \
+    && mkdir -p /opt/muon-gtk/share/licenses/gtk \
+    && cp /tmp/gtk-${GTK_VERSION}/COPYING /opt/muon-gtk/share/licenses/gtk/ \
+    && rm -rf /tmp/gtk.tar.xz /tmp/gtk-${GTK_VERSION} /tmp/gtk-build
+# Keep external input methods and non-GTK module caches from this same baseline.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ibus-gtk3 fcitx-frontend-gtk3 fcitx5-frontend-gtk3 \
     && rm -rf /var/lib/apt/lists/*
@@ -63,6 +86,4 @@ RUN case "$(dpkg --print-architecture)" in \
     && echo "${node_sha256}  /tmp/node.tar.xz" | sha256sum -c - \
     && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
     && rm /tmp/node.tar.xz
-RUN node --input-type=module -e 'import {writeFileSync} from "node:fs"; const [version,sha256]=process.argv.slice(1); writeFileSync("/opt/muon-baseline/source.json", JSON.stringify({glib:{name:"GLib",version,prefix:"/opt/muon-baseline",url:`https://download.gnome.org/sources/glib/2.74/glib-${version}.tar.xz`,sha256,license:"/opt/muon-baseline/share/licenses/glib/COPYING"}},null,2)+"\n");' "${GLIB_VERSION}" "${GLIB_SHA256}"
-ENV PKG_CONFIG_PATH=/opt/muon-baseline/lib/pkgconfig
-ENV LD_LIBRARY_PATH=/opt/muon-baseline/lib
+RUN node --input-type=module -e 'import {writeFileSync} from "node:fs"; const [glibVersion,glibSha256,gtkVersion,gtkSha256]=process.argv.slice(1); writeFileSync("/opt/muon-baseline/source.json", JSON.stringify({glib:{name:"GLib",version:glibVersion,prefix:"/opt/muon-baseline",url:`https://download.gnome.org/sources/glib/2.74/glib-${glibVersion}.tar.xz`,sha256:glibSha256,license:"/opt/muon-baseline/share/licenses/glib/COPYING"},gtk:{name:"GTK",version:gtkVersion,prefix:"/opt/muon-gtk",url:`https://download.gnome.org/sources/gtk/3.24/gtk-${gtkVersion}.tar.xz`,sha256:gtkSha256,license:"/opt/muon-gtk/share/licenses/gtk/COPYING"}},null,2)+"\n");' "${GLIB_VERSION}" "${GLIB_SHA256}" "${GTK_VERSION}" "${GTK_SHA256}"

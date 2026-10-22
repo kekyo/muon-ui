@@ -37,6 +37,10 @@ if (process.platform === "linux" && existsSync(moduleRoot)) {
     GTK_IM_MODULE_FILE: join(moduleRoot, "gtk-immodules.cache"),
     GDK_PIXBUF_MODULE_FILE: join(moduleRoot, "gdk-pixbuf-loaders.cache"),
     MUON_LINUX_MODULE_ROOT: moduleRoot,
+    XDG_DATA_DIRS:
+      join(moduleRoot, "share") +
+      ":" +
+      (process.env.XDG_DATA_DIRS || "/usr/local/share:/usr/share"),
     LD_LIBRARY_PATH:
       runtimeDirectory +
       (environment.LD_LIBRARY_PATH ? `:${environment.LD_LIBRARY_PATH}` : ""),

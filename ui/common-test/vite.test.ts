@@ -4798,6 +4798,7 @@ require("node:fs").writeFileSync(${JSON.stringify(capturedPath)}, JSON.stringify
             GDK_PIXBUF_MODULE_FILE: "/host/gdk-pixbuf-loaders.cache",
             MUON_LINUX_MODULE_ROOT: "/host/linux",
             LD_LIBRARY_PATH: libraryPath,
+            XDG_DATA_DIRS: libraryPath,
             GTK_IM_MODULE: "ibus",
             MUON_TEST_CUSTOM_ENV: "preserved",
           };
@@ -4881,6 +4882,9 @@ require("node:fs").writeFileSync(${JSON.stringify(capturedPath)}, JSON.stringify
                     MUON_LINUX_MODULE_ROOT: join(captured.runtime, "linux"),
                     LD_LIBRARY_PATH:
                       captured.runtime + (libraryPath ? `:${libraryPath}` : ""),
+                    XDG_DATA_DIRS: `${join(captured.runtime, "linux/share")}:${
+                      libraryPath || "/usr/local/share:/usr/share"
+                    }`,
                   }
                 : {}),
             });

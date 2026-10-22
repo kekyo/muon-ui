@@ -1367,6 +1367,19 @@ static int launch_core(const char *runtime_dir, const char *core_path,
         _exit(1);
       }
       free(library_path);
+      // GTK's own chooser schemas are required even without GNOME installed.
+      const char *data_dirs = getenv("XDG_DATA_DIRS");
+      if (data_dirs == NULL || data_dirs[0] == '\0')
+        data_dirs = "/usr/local/share:/usr/share";
+      const size_t data_size = strlen(module_root) + strlen(data_dirs) + 8;
+      char *data_path = (char *)malloc(data_size);
+      if (data_path == NULL) _exit(1);
+      snprintf(data_path, data_size, "%s/share:%s", module_root, data_dirs);
+      if (setenv("XDG_DATA_DIRS", data_path, 1) != 0) {
+        perror("XDG_DATA_DIRS");
+        _exit(1);
+      }
+      free(data_path);
     }
     free(module_root);
     if (setenv(MUON_LAUNCHER_PATH_ENVIRONMENT, launcher_path, 1) != 0) {

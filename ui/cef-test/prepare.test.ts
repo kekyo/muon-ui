@@ -1887,7 +1887,7 @@ describe("muon-builder", () => {
       );
     await writeFile(
       join(fixture.muonPath, "muon-core"),
-      '#!/bin/sh\nprintf "%s\\n" "$GTK_EXE_PREFIX" "$GTK_IM_MODULE_FILE" "$GDK_PIXBUF_MODULE_FILE" "$MUON_LINUX_MODULE_ROOT" "$GTK_IM_MODULE"\n',
+      '#!/bin/sh\nprintf "%s\\n" "$GTK_EXE_PREFIX" "$GTK_IM_MODULE_FILE" "$GDK_PIXBUF_MODULE_FILE" "$MUON_LINUX_MODULE_ROOT" "$GTK_IM_MODULE" "$XDG_DATA_DIRS"\n',
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
     const launcher = await writeEmbeddedLauncher(fixture, {
@@ -1901,6 +1901,7 @@ describe("muon-builder", () => {
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: join(fixture.projectPath, "data"),
         GTK_IM_MODULE: "ibus",
+        XDG_DATA_DIRS: "/custom/share:/usr/share",
       },
     });
     expect(stdout.trim().split("\n")).toEqual([
@@ -1909,6 +1910,7 @@ describe("muon-builder", () => {
       join(runtime, "linux/gdk-pixbuf-loaders.cache"),
       join(runtime, "linux"),
       "ibus",
+      `${join(runtime, "linux/share")}:/custom/share:/usr/share`,
     ]);
   });
 

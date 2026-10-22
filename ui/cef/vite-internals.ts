@@ -242,6 +242,7 @@ ${
   export GDK_PIXBUF_MODULE_FILE="$MUON_EXECUTABLE_DIRECTORY/linux/gdk-pixbuf-loaders.cache"
   export MUON_LINUX_MODULE_ROOT="$MUON_EXECUTABLE_DIRECTORY/linux"
   export LD_LIBRARY_PATH="$MUON_EXECUTABLE_DIRECTORY\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export XDG_DATA_DIRS="$MUON_EXECUTABLE_DIRECTORY/linux/share:\${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 fi
 `
     : ""

@@ -3,7 +3,14 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { Command } from "commander";
@@ -27,7 +34,10 @@ import {
   readLinuxBundleProvenance,
   type LinuxBaselineSource,
 } from "./linux-bundle-provenance.js";
-import { stageLinuxBaselineModules } from "./linux-baseline-modules.js";
+import {
+  stageLinuxBaselineModules,
+  stageLinuxGtkModules,
+} from "./linux-baseline-modules.js";
 
 interface DependencyCommandOptions {
   target: string;
@@ -99,7 +109,7 @@ try {
   if (options.bundleBaseline) {
     const configuration = JSON.parse(
       await readFile(options.bundleBaseline, "utf8"),
-    ) as { glib: LinuxBaselineSource };
+    ) as { glib: LinuxBaselineSource; gtk: LinuxBaselineSource };
     const files: string[] = [];
     const previousLibraries = await readLinuxBundleProvenance(options.runtime);
     // Remove previous generated files before resolution, otherwise $ORIGIN
@@ -118,14 +128,6 @@ try {
       options.runtime,
       [
         {
-          directory: "gtk-3.0",
-          cache: {
-            source: join(baselineLib, "gtk-3.0/3.0.0/immodules.cache"),
-            destination: "linux/gtk-immodules.cache.in",
-            owner: join(baselineLib, "libgtk-3.so.0"),
-          },
-        },
-        {
           directory: "gdk-pixbuf-2.0",
           cache: {
             source: join(baselineLib, "gdk-pixbuf-2.0/2.10.0/loaders.cache"),
@@ -143,14 +145,52 @@ try {
         },
       ],
     );
+    const gtkModules = await stageLinuxGtkModules(
+      configuration.gtk.prefix,
+      baselineLib,
+      options.runtime,
+    );
+    modules.binaries.push(...gtkModules.binaries);
+    modules.files.push(...gtkModules.files);
+    // File/color/emoji chooser settings belong to GTK, not to GNOME's optional
+    // desktop preferences. Ship exactly the schemas compiled by this GTK build.
+    const schemaSource = join(
+      configuration.gtk.prefix,
+      "share/glib-2.0/schemas/gschemas.compiled",
+    );
+    for (const [source, file, owner] of [
+      [
+        schemaSource,
+        "linux/share/glib-2.0/schemas/gschemas.compiled",
+        schemaSource,
+      ],
+      // GdkPixbuf uses GIO's MIME database to recognize even GTK's built-in
+      // PNG icons. mime.cache is generated from this distribution-owned XML.
+      [
+        "/usr/share/mime/mime.cache",
+        "linux/share/mime/mime.cache",
+        "/usr/share/mime/packages/freedesktop.org.xml",
+      ],
+      // This index enables GTK's embedded icons when no desktop theme exists.
+      [
+        "/usr/share/icons/hicolor/index.theme",
+        "linux/share/icons/hicolor/index.theme",
+        "/usr/share/icons/hicolor/index.theme",
+      ],
+    ] as const) {
+      await mkdir(dirname(join(options.runtime, file)), { recursive: true });
+      await copyFile(source, join(options.runtime, file));
+      modules.files.push({ path: owner, file });
+    }
     files.push(...modules.binaries);
     const audit = await auditLinuxDependencies({
       target,
       files,
       libraryPaths: [
         ...new Set([
-          ...files.map((path) => dirname(path)),
+          join(configuration.gtk.prefix, "lib"),
           join(configuration.glib.prefix, "lib"),
+          ...files.map((path) => dirname(path)),
           ...libraryPaths,
         ]),
       ],
@@ -185,7 +225,7 @@ try {
     await recordLinuxBundleProvenance(
       libraries,
       options.runtime,
-      [configuration.glib],
+      [configuration.glib, configuration.gtk],
       modules.files,
     );
   }

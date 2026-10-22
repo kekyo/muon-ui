@@ -80,6 +80,9 @@ export const readLinuxBundleProvenance = async (
             record.file,
           ) ||
           record.file === "linux/lib/gio/modules/giomodule.cache" ||
+          record.file === "linux/share/glib-2.0/schemas/gschemas.compiled" ||
+          record.file === "linux/share/mime/mime.cache" ||
+          record.file === "linux/share/icons/hicolor/index.theme" ||
           /^linux\/(?:gtk-immodules|gdk-pixbuf-loaders)\.cache\.in$/.test(
             record.file,
           )

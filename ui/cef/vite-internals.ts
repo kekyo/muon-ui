@@ -693,28 +693,32 @@ export const startMuonViteBrowserBridge = async ({
       await cleanup();
     }
   };
-  server.httpServer.once("close", () => {
-    void cleanup();
+  server.httpServer.once("close", async () => {
+    try {
+      await cleanup();
+    } catch (error) {
+      server.config.logger.warn(
+        `muon could not clean up after the Vite server closed: ${getErrorMessage(error)}`,
+      );
+    }
   });
-  server.httpServer.once("listening", () => {
+  server.httpServer.once("listening", async () => {
     supervisorPromise = runSupervisor();
-    void (async (): Promise<void> => {
-      await supervisorPromise;
-      if (
-        closing ||
-        serverCloseRequested ||
-        pluginOptions.exitWithServer === false
-      ) {
-        return;
-      }
-      serverCloseRequested = true;
-      try {
-        await server.close();
-      } catch (error) {
-        server.config.logger.warn(
-          `muon could not close the Vite server after muon exited: ${getErrorMessage(error)}`,
-        );
-      }
-    })();
+    await supervisorPromise;
+    if (
+      closing ||
+      serverCloseRequested ||
+      pluginOptions.exitWithServer === false
+    ) {
+      return;
+    }
+    serverCloseRequested = true;
+    try {
+      await server.close();
+    } catch (error) {
+      server.config.logger.warn(
+        `muon could not close the Vite server after muon exited: ${getErrorMessage(error)}`,
+      );
+    }
   });
 };

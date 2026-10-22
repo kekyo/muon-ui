@@ -216,6 +216,7 @@ amd64・ARMhf・ARM64のELF依存監査では、依存先やシンボルの問�
 | キーボード入力 | 同梱GTKの入力欄で、X11とWeston Waylandの両方から`muon123`を入力・確定できた。 |
 | IBusの日本語変換 | 同じ入力欄へ`nihongo`をキー入力し、`にほんご`、`日本語`、確定済みの`日本語`の順に変化することをX11とWeston Waylandで確認した。 |
 | Fcitx5の日本語変換 | 同梱GTKと`im-fcitx5.so`を使い、Fcitx5とMozcによる同じ変換・確定をX11とWeston Waylandで確認した。 |
+| CEFページ内の日本語変換 | X11上の配布ランタイムでFcitx5とMozcを使い、HTML入力欄の変換イベントと確定値`日本語`をPlaywright MCPで検証した。 |
 
 ファイル選択はフォルダーの非同期読み込みと選択変更の通知を待ち、返されたパスを検証する。一定時間の生存を成功条件にはしていない。画像はSVGを読み込み、寸法と画素値を検証する。
 
@@ -224,6 +225,10 @@ amd64・ARMhf・ARM64のELF依存監査では、依存先やシンボルの問�
 2026年10月23日には、Fcitx5 5.1.7とMozc 2.28.4715.102でも実際の変換を確認した。試験用のD-Busセッションと設定・保存先を分離し、キー入力から`にほんご`、`日本語`、確定済みの`日本語`までの変化を検証した。入力メソッドが接続されるまで待ってからMozcへ切り替え、文字列を直接入力欄へ設定する方法は使っていない。X11とWeston Waylandの両方で成功し、メモリーマップでも同梱GTKと`im-fcitx5.so`を確認した。Wayland側は`DISPLAY`が空で、`GdkWaylandDisplay`だった。試験用のFcitx5とMozcは終了後に残っていない。
 
 このWayland試験は、[FcitxのGTK入力モジュール](https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland#Gtk3_.2F_Gtk4)からD-Bus経由で変換する経路を確認した。Weston既定の画面キーボードとFcitxの入力パネルが競合したため、[Westonの入力メソッド設定](https://gitlab.freedesktop.org/wayland/weston/-/blob/13.0.0/compositor/text-backend.c)に従い、試験専用設定で画面キーボードを起動しないようにした。Fcitx側もWaylandプロトコルを使う入力受付を無効にし、GTKモジュール用のD-Bus接続を使用した。CEFページ内の日本語変換、Waylandのtext-inputプロトコルによる入力、候補ウインドウの描画位置は、この結果の確認範囲に含めない。
+
+CEFページ内は別に、X11上の配布ランタイムで確認した。Fcitx5とMozcを使い、実際のキー入力に対する`compositionupdate`で`にほんご`と`日本語`を観測した。Enterキーの後に`compositionend`と入力欄の値`日本語`をPlaywright MCPで検証し、画面でも確定結果を確認した。実行プロセスは同梱GTKと`im-fcitx5.so`をロードしていた。最初の試行では隔離環境のキーリング作成画面が起動し、変換を確認できなかったため、使い捨ての試験用プロファイルだけに[Chromiumの`--password-store=basic`](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/password_storage.md)を指定した。再試行では入力前の実ウインドウとDOMの両方でフォーカスを確認でき、変換・確定まで成功した。これは試験環境の調整であり、製品の既定設定は変更していない。
+
+WaylandのCEFページ内の日本語入力は未確認である。同梱するChromium 147の[GTK Wayland実装](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7727/ui/gtk/wayland/gtk_ui_platform_wayland.cc)は、HTML入力にGTK入力モジュールを使用せず、Waylandのtext-inputプロトコルへ委ねる。したがって、GTK入力欄での成功をCEFページ内のWayland入力へそのまま適用しない。
 
 ARM64ではCEFのCDP接続先も開いたが、MCPによる画面検証の前にGPUプロセスが`error_code=1002`で繰り返し失敗し、終了した。同じUbuntu 20.04コンテナー、QEMU、Xvfbの条件でGTKとGDKだけを元の3.24.20に戻しても再現した。この比較では原因をQEMUと断定できず、ARM64のCEF画面検証は未完了とする。新旧GTK/GDKのELFヘッダーと属性には、追加の命令セット要件を示す差分はなかった。
 
@@ -300,7 +305,7 @@ CDPの追加調査では、必要なNode.jsを元々存在しなかった同じ�
 | 完了条件 | 結果 |
 | --- | --- |
 | 通常のWaylandで配布ランタイムとChronical Decadeを起動する | 達成。GNOME Waylandで起動・描画・通常終了を確認した。 |
-| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 一部未確認。新旧設定と設定なし、X11、Weston、GNOME、GTK入力欄のIBus・Fcitx5変換は確認した。KDE Plasmaの実セッション、CEFページ内やFcitx4の日本語変換操作は未確認である。 |
+| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 一部未確認。新旧設定と設定なし、X11、Weston、GNOME、GTK入力欄のIBus・Fcitx5変換、X11のCEFページ内のFcitx5変換は確認した。KDE Plasmaの実セッション、WaylandのCEFページ内やFcitx4の日本語変換操作は未確認である。 |
 | Viteの診断と非ゼロ終了を確認する | 達成。終了コード・シグナル・起動失敗と、出力の保持を検証した。 |
 | 正常終了、再起動、独立動作、Viteからの停止を確認する | 達成。回帰テストと配布物の公開起動経路で確認した。 |
 | 準備済みの旧ランタイムを更新する | 達成。`.muon`を手動で削除せずに更新できた。 |

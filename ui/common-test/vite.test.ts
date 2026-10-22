@@ -399,6 +399,9 @@ set -euo pipefail
 printf 'discarded diagnostic\\n' >&2
 for _ in $(seq 1 70000); do printf 'x' >&2; done
 printf 'retained stdout diagnostic: ${exitCommand}\\n'
+printf '\\346' >&2
+sleep 0.05
+printf '\\227\\245\\346\\234\\254\\350\\252\\236\\343\\201\\256\\350\\250\\272\\346\\226\\255\\n' >&2
 printf '\\nretained diagnostic: ${exitCommand}\\n' >&2
 ${exitCommand}
 `,
@@ -3075,6 +3078,7 @@ describe("muon Vite plugin", () => {
       expect(diagnostic).toContain("muon runtime failed:");
       expect(diagnostic).toContain("exit code 23");
       expect(diagnostic).toContain("retained stdout diagnostic: exit 23");
+      expect(diagnostic).toContain("日本語の診断");
       expect(diagnostic).toContain("retained diagnostic: exit 23");
       expect(diagnostic).not.toContain("discarded diagnostic");
       expect(process.exitCode).toBe(1);

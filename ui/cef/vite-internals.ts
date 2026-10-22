@@ -8,6 +8,7 @@ import { constants, writeFileSync } from "node:fs";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 import { parse } from "json5";
@@ -130,7 +131,7 @@ const appendDiagnostic = (
   chunk: Buffer<ArrayBufferLike>,
 ): Buffer<ArrayBufferLike> => {
   if (chunk.byteLength >= muonDiagnosticLimit) {
-    return chunk.subarray(chunk.byteLength - muonDiagnosticLimit);
+    return Buffer.from(chunk.subarray(chunk.byteLength - muonDiagnosticLimit));
   }
   const retainedLength = Math.max(0, muonDiagnosticLimit - chunk.byteLength);
   return Buffer.concat([
@@ -492,25 +493,29 @@ const waitForMuonProcess = async (
     return await new Promise<MuonProcessResult>((resolvePromise) => {
       let diagnostic: Buffer<ArrayBufferLike> = Buffer.alloc(0);
       let error: Error | undefined = undefined;
-      const append = (
-        source: "stdout" | "stderr",
-        chunk: Buffer<ArrayBufferLike>,
-      ): void => {
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
+      const append = (source: "stdout" | "stderr", text: string): void => {
+        if (text === "") {
+          return;
+        }
         diagnostic = appendDiagnostic(
           diagnostic,
-          Buffer.concat([Buffer.from(`[${source}] `), chunk]),
+          Buffer.from(`[${source}] ${text}`),
         );
       };
       child.stdout?.on("data", (chunk: Buffer) => {
-        append("stdout", chunk);
+        append("stdout", stdoutDecoder.write(chunk));
       });
       child.stderr?.on("data", (chunk: Buffer) => {
-        append("stderr", chunk);
+        append("stderr", stderrDecoder.write(chunk));
       });
       child.once("error", (reason: Error) => {
         error = reason;
       });
       child.once("close", (code, signal) => {
+        append("stdout", stdoutDecoder.end());
+        append("stderr", stderrDecoder.end());
         resolvePromise({
           code,
           signal,
@@ -561,22 +566,6 @@ export const startMuonViteBrowserBridge = async ({
 
   const setCurrentChild = (child: ChildProcess | undefined): void => {
     currentChild = child;
-  };
-
-  const closeServerAfterMuonExit = (): void => {
-    if (
-      closing ||
-      serverCloseRequested ||
-      pluginOptions.exitWithServer === false
-    ) {
-      return;
-    }
-    serverCloseRequested = true;
-    void server.close().catch((error: unknown) => {
-      server.config.logger.warn(
-        `muon could not close the Vite server after muon exited: ${getErrorMessage(error)}`,
-      );
-    });
   };
 
   const runSupervisor = async (): Promise<void> => {
@@ -665,14 +654,16 @@ export const startMuonViteBrowserBridge = async ({
             }
           }
         }
-        if (!closing && result.code !== muonRecycleExitCode) {
-          closeServerAfterMuonExit();
-        }
       } catch (error) {
         if (!closing) {
           server.config.logger.warn(
             `muon startup failed: ${getErrorMessage(error)}`,
           );
+          if (pluginOptions.exitWithServer !== false) {
+            if (process.exitCode === undefined || process.exitCode === 0) {
+              process.exitCode = 1;
+            }
+          }
         }
         return;
       }
@@ -687,9 +678,7 @@ export const startMuonViteBrowserBridge = async ({
     cleanupPromise = (async () => {
       closing = true;
       currentChild?.kill();
-      if (!serverCloseRequested) {
-        await supervisorPromise;
-      }
+      await supervisorPromise;
       await rm(paths.temporaryDirectory, { recursive: true, force: true });
     })();
     return cleanupPromise;
@@ -708,5 +697,23 @@ export const startMuonViteBrowserBridge = async ({
   });
   server.httpServer.once("listening", () => {
     supervisorPromise = runSupervisor();
+    void (async (): Promise<void> => {
+      await supervisorPromise;
+      if (
+        closing ||
+        serverCloseRequested ||
+        pluginOptions.exitWithServer === false
+      ) {
+        return;
+      }
+      serverCloseRequested = true;
+      try {
+        await server.close();
+      } catch (error) {
+        server.config.logger.warn(
+          `muon could not close the Vite server after muon exited: ${getErrorMessage(error)}`,
+        );
+      }
+    })();
   });
 };

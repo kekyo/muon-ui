@@ -216,7 +216,7 @@ amd64・ARMhf・ARM64のELF依存監査では、依存先やシンボルの問�
 | キーボード入力 | 同梱GTKの入力欄で、X11とWeston Waylandの両方から`muon123`を入力・確定できた。 |
 | IBusの日本語変換 | 同じ入力欄へ`nihongo`をキー入力し、`にほんご`、`日本語`、確定済みの`日本語`の順に変化することをX11とWeston Waylandで確認した。 |
 | Fcitx5の日本語変換 | 同梱GTKと`im-fcitx5.so`を使い、Fcitx5とMozcによる同じ変換・確定をX11とWeston Waylandで確認した。 |
-| CEFページ内の日本語変換 | X11上の配布ランタイムでFcitx5とMozcを使い、HTML入力欄の変換イベントと確定値`日本語`をPlaywright MCPで検証した。 |
+| CEFページ内の日本語変換 | X11ではFcitx5とMozc、隔離したGNOME WaylandではIBusとMozcを使い、配布ランタイムのHTML入力欄の変換イベントと確定値`日本語`をPlaywright MCPで検証した。 |
 
 ファイル選択はフォルダーの非同期読み込みと選択変更の通知を待ち、返されたパスを検証する。一定時間の生存を成功条件にはしていない。画像はSVGを読み込み、寸法と画素値を検証する。
 
@@ -228,7 +228,9 @@ amd64・ARMhf・ARM64のELF依存監査では、依存先やシンボルの問�
 
 CEFページ内は別に、X11上の配布ランタイムで確認した。Fcitx5とMozcを使い、実際のキー入力に対する`compositionupdate`で`にほんご`と`日本語`を観測した。Enterキーの後に`compositionend`と入力欄の値`日本語`をPlaywright MCPで検証し、画面でも確定結果を確認した。実行プロセスは同梱GTKと`im-fcitx5.so`をロードしていた。最初の試行では隔離環境のキーリング作成画面が起動し、変換を確認できなかったため、使い捨ての試験用プロファイルだけに[Chromiumの`--password-store=basic`](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/password_storage.md)を指定した。再試行では入力前の実ウインドウとDOMの両方でフォーカスを確認でき、変換・確定まで成功した。これは試験環境の調整であり、製品の既定設定は変更していない。
 
-WaylandのCEFページ内の日本語入力は未確認である。同梱するChromium 147の[GTK Wayland実装](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7727/ui/gtk/wayland/gtk_ui_platform_wayland.cc)は、HTML入力にGTK入力モジュールを使用せず、Waylandのtext-inputプロトコルへ委ねる。したがって、GTK入力欄での成功をCEFページ内のWayland入力へそのまま適用しない。
+WaylandのCEFページ内も、GNOME Shell 46.0とMutter 46.2による独立したセッションで検証した。[GNOMEの入れ子起動](https://github.com/GNOME/mutter/blob/46.0/doc/building-and-running.md)を使い、Xvfb内のウインドウでWaylandセッションを動かした。D-Bus、設定、保存先、IBusの接続先は試験用に分離した。CEF側の`DISPLAY`は空で、Waylandの入力方式を切り替える起動引数も指定していない。GNOMEの一覧画面からアプリへフォーカスを移し、半角・全角キーで日本語入力を有効にしてから、`nihongo`、Space、Enterを入力した。Playwright MCPで変換中の`にほんご`と`日本語`、確定イベントと入力値`日本語`を確認し、実デスクトップの画像でも確定結果を確認した。試験終了後に、このセッションのプロセスは残っていない。
+
+同梱するChromium 147の[GTK Wayland実装](https://chromium.googlesource.com/chromium/src/+/refs/branch-heads/7727/ui/gtk/wayland/gtk_ui_platform_wayland.cc)は、HTML入力をGTK入力モジュールではなく、Waylandのtext-inputプロトコルへ委ねる。これはアプリと画面サーバーの間で変換中の文字列や確定結果を伝える仕組みである。今回の通信ログでは`text-input-v3`のフォーカス取得と有効化、`preedit_string("にほんご")`、`preedit_string("日本語")`、`commit_string("日本語")`を観測した。GNOME ShellがIBusとMozcで変換した結果がCEFへ届く経路を、GTK入力欄とは別に確認できた。候補ウインドウの位置や、GNOME以外のWayland環境で同じ操作が成立することまでは、この結果から判断しない。
 
 ARM64ではCEFのCDP接続先も開いたが、MCPによる画面検証の前にGPUプロセスが`error_code=1002`で繰り返し失敗し、終了した。同じUbuntu 20.04コンテナー、QEMU、Xvfbの条件でGTKとGDKだけを元の3.24.20に戻しても再現した。この比較では原因をQEMUと断定できず、ARM64のCEF画面検証は未完了とする。新旧GTK/GDKのELFヘッダーと属性には、追加の命令セット要件を示す差分はなかった。
 
@@ -305,7 +307,7 @@ CDPの追加調査では、必要なNode.jsを元々存在しなかった同じ�
 | 完了条件 | 結果 |
 | --- | --- |
 | 通常のWaylandで配布ランタイムとChronical Decadeを起動する | 達成。GNOME Waylandで起動・描画・通常終了を確認した。 |
-| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 一部未確認。新旧設定と設定なし、X11、Weston、GNOME、GTK入力欄のIBus・Fcitx5変換、X11のCEFページ内のFcitx5変換は確認した。KDE Plasmaの実セッション、WaylandのCEFページ内やFcitx4の日本語変換操作は未確認である。 |
+| GTKの設定環境、デスクトップ、入力、ファイル選択、画像読み込みを確認する | 一部未確認。新旧設定と設定なし、X11、Weston、GNOME、GTK入力欄のIBus・Fcitx5変換、X11とGNOME WaylandのCEFページ内の日本語変換は確認した。KDE Plasmaの実セッションとFcitx4の日本語変換操作は未確認である。 |
 | Viteの診断と非ゼロ終了を確認する | 達成。終了コード・シグナル・起動失敗と、出力の保持を検証した。 |
 | 正常終了、再起動、独立動作、Viteからの停止を確認する | 達成。回帰テストと配布物の公開起動経路で確認した。 |
 | 準備済みの旧ランタイムを更新する | 達成。`.muon`を手動で削除せずに更新できた。 |

@@ -63,3 +63,11 @@ amd64の配布ビルドでは、GCC 12が既存の`ServerEnvelope`の`std::vecto
 新しいamd64配布物で、削除確認2件とシステムGTKの機能確認1件、公開HTTPサーバー2件が成功した。`muon-core`と`libmuon-ui.so`のGTK・GDK・GLib・GIO・GObjectは、いずれもホストの`/lib/x86_64-linux-gnu/`へ解決された。ファイル選択、SVGの画素、システムibusモジュールの読み込みも確認した。builderのテスト全体も成功し、段階1の完了条件を満たした。
 
 証跡は`/tmp/muon-plan16-evidence/`に保存している。主要なログは`gtk-removal-red.log`、`build-amd64-recheck.log`、`stage-amd64-recovery.log`、`amd64-runtime-tests.log`、`builder-tests.log`である。公開起動経路、全配布形式、全体テストは引き続き実施する。
+
+### 段階2
+
+段階1を`e93db19`でコミットした後、削除確認専用のテストと旧同梱データのテスト資材を取り除いた。関連する3ファイル178件の成功を確認し、`446c53a`でコミットした。依存情報の伝搬や利用者の環境継承、システムGTKの機能を確認するテストは維持している。
+
+amd64を収録した検証用NPMパッケージ`startup-package/muon-ui-0.33.21.tgz`から、独立した利用側を作成した。X11とWeston上のWaylandの両方で、Vite、`muon run`、再起動後、配布ランチャーの各プロセスを検査し、GTK・GDK・GLib・GIO・GObjectがすべてホストの`/usr/lib/x86_64-linux-gnu/`から読み込まれることを確認した。Playwright MCPによる表示・緑の描画・終了の検証も成功した。
+
+両環境とも、旧配布版の準備済みディレクトリーを配置してから更新し、古いGTKファイルが残らないことを確認した。Waylandではファイル選択、SVG読み込み、システムibusモジュールのテストも成功した。証跡は`packaged-x11.log`と`packaged-wayland.log`にある。利用者文書の日本語と英語も更新し、段階2の完了条件を満たした。全対象を収録する最終NPMパッケージと全配布形式は段階3で検証する。

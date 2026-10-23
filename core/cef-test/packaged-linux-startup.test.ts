@@ -11,13 +11,14 @@ import {
   mkdtemp,
   readFile,
   readlink,
+  readdir,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 
@@ -215,6 +216,28 @@ const assertRuntimeEvidence = async (
     );
     const ozone = `--ozone-platform=${backend}`;
     const gdkLibrary = backend === "wayland" ? "libwayland-client" : "libX11";
+    const gtkLibraries = (maps: string): string[] =>
+      maps
+        .split("\n")
+        .flatMap(
+          (line) =>
+            line.match(
+              /\/[^\s]*\/lib(?:gtk-3|gdk-3|glib-2\.0|gio-2\.0|gobject-2\.0)\.so[^\s]*/,
+            )?.[0] ?? [],
+        );
+    const systemGtkLoaded = (maps: string): boolean => {
+      const paths = gtkLibraries(maps);
+      return (
+        [
+          "libgtk-3.so",
+          "libgdk-3.so",
+          "libglib-2.0.so",
+          "libgio-2.0.so",
+          "libgobject-2.0.so",
+        ].every((name) => paths.some((path) => path.includes(name))) &&
+        paths.every((path) => /^\/(?:usr\/)?lib\//.test(path))
+      );
+    };
     last = JSON.stringify(
       processes.map(({ pid, command, executable, maps }) => ({
         pid,
@@ -223,26 +246,27 @@ const assertRuntimeEvidence = async (
         // GTK links both backend libraries. This confirms the runtime loader
         // source, but is not by itself a backend selection assertion.
         backendLibraryMapped: maps.includes(gdkLibrary),
-        bundledGtkLoaded: maps.includes(`${dirname(executable)}/libgtk-3.so.0`),
+        systemGtkLoaded: systemGtkLoaded(maps),
+        gtkLibraries: [...new Set(gtkLibraries(maps))],
       })),
     );
     if (
       muon !== undefined &&
-      muon.maps.includes(`${dirname(muon.executable)}/libgtk-3.so.0`) &&
+      systemGtkLoaded(muon.maps) &&
       cef.some((process) => process.command.includes(ozone))
     ) {
       console.info(
-        `Packaged ${backend} runtime evidence (CEF cmdline and bundled GTK maps): ${last}`,
+        `Packaged ${backend} runtime evidence (CEF cmdline and system GTK maps): ${last}`,
       );
       console.info(
-        `GDK ${backend} is selected by the mutually exclusive display environment and successful GTK startup; linux-gtk-runtime.test.ts verifies the GdkDisplay type for this bundled runtime separately.`,
+        `GDK ${backend} is selected by the mutually exclusive display environment and successful GTK startup; linux-gtk-runtime.test.ts verifies the GdkDisplay type with the system GTK separately.`,
       );
       return muon.pid;
     }
     await delay(100);
   }
   throw new Error(
-    `Packaged runtime did not load bundled GTK or CEF ${backend} ozone:\n${last}\n${diagnostics()}`,
+    `Packaged runtime did not load system GTK or CEF ${backend} ozone:\n${last}\n${diagnostics()}`,
   );
 };
 
@@ -509,11 +533,17 @@ it.skipIf(archive === undefined)(
         await stop(vite);
       }
       if (oldPrepared !== undefined) {
-        const prepared = await readFile(
-          join(consumer, ".muon", "linux-amd64", "libgtk-3.so.0"),
+        const prepared = await readdir(join(consumer, ".muon", "linux-amd64"), {
+          recursive: true,
+        });
+        const old = await readdir(resolve(oldPrepared), { recursive: true });
+        const gtkFiles = old.filter((file) =>
+          /^(?:lib(?:gtk|gdk|glib|gio|gobject|gmodule|pango|atk)|linux\/)/.test(
+            file,
+          ),
         );
-        const old = await readFile(join(resolve(oldPrepared), "libgtk-3.so.0"));
-        expect(prepared).not.toEqual(old);
+        expect(gtkFiles.length).toBeGreaterThan(0);
+        expect(prepared.filter((file) => gtkFiles.includes(file))).toEqual([]);
       }
 
       const runPort = await reservePort();

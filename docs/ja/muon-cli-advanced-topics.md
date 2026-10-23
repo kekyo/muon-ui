@@ -128,10 +128,10 @@ AppImageの内容は読み取り専用です。CEF、Node.js、起動状態は`$
 
 ### Linuxの実行環境
 
-配布バイナリの基準環境はUbuntu 20.04です。amd64ではUbuntu 20.04コンテナと24.04ホストで検証し、armhf・arm64ではUbuntu 20.04の対象CPU用コンテナをQEMUで実行して確認しています。ARM実機のGPUや音声デバイスの検証を含むものではありません。
+配布バイナリのビルド基準はDebian 12です。実行先にはGTK 3、GLib 2.74以上と、対応する入力メソッド・画像ローダー・設定データが必要です。これらはOSのパッケージとして導入してください。GLibの下限は、muonが使用する[非同期のシンボリックリンク作成API](https://docs.gtk.org/gio/method.File.make_symbolic_link_async.html)によるものです。
 
-GTK・GLibなどの共有ライブラリと必要なモジュールを同梱します。glibc、C++ランタイム、NSS、ALSA、X11・Wayland、GPUドライバーとGBMなどはホスト側を使用します。実行環境にはこれらのデスクトップ用ライブラリ、CA証明書、`curl`が必要です。例えば最小構成のコンテナには、AppImageだけを置いても実行に必要なライブラリがそろいません。
+GTK・GLibとその関連モジュールはシステムのものを使います。入力メソッドやテーマも実行先の設定に従います。glibc、C++ランタイム、NSS、ALSA、X11・Wayland、GPUドライバー、GBM、CA証明書、`curl`なども必要です。例えば最小構成のコンテナには、AppImageだけを置いても実行に必要なライブラリがそろいません。
 
-最低要件は、muonをビルドした際のCEFと完成した全ネイティブ部品から算出します。現在の基準ビルドでは、glibc 2.29以上、`libstdc++6`のパッケージ版9以上、GBM 21.1以上などの要求があります。これらの数値だけを満たす任意のディストリビューションでの動作を保証するものではありません。詳細はNPM配布物の`dist/runtime/<target>/linux-dependencies.json.txt`と同じ場所の`linux-dependencies.json`で確認できます。同梱ファイルの取得元とライセンスは`linux-bundle.json`に記録します。
+最低要件は、muonをビルドした際のCEFと完成した全ネイティブ部品から算出します。詳細はNPM配布物の`dist/runtime/<target>/linux-dependencies.json.txt`と同じ場所の`linux-dependencies.json`で確認できます。debには、この情報とアプリのネイティブ部品から求めた依存条件を設定します。GTKやGLibの版だけを満たしても、任意のディストリビューションで動作するとは限りません。
 
 実行時に将来のCEFを選んだ場合も、ビルド時の参照CEFから計算した要件を使用します。そのCEF固有の追加要件は再判定しません。ネイティブプラグインがさらに新しいライブラリを必要とする場合は、対象環境に合わせてプラグインもビルドしてください。[CEFのLinux実行環境](https://chromiumembedded.github.io/cef/branches_and_building.html)

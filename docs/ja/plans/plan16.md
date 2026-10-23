@@ -71,3 +71,48 @@ amd64の配布ビルドでは、GCC 12が既存の`ServerEnvelope`の`std::vecto
 amd64を収録した検証用NPMパッケージ`startup-package/muon-ui-0.33.21.tgz`から、独立した利用側を作成した。X11とWeston上のWaylandの両方で、Vite、`muon run`、再起動後、配布ランチャーの各プロセスを検査し、GTK・GDK・GLib・GIO・GObjectがすべてホストの`/usr/lib/x86_64-linux-gnu/`から読み込まれることを確認した。Playwright MCPによる表示・緑の描画・終了の検証も成功した。
 
 両環境とも、旧配布版の準備済みディレクトリーを配置してから更新し、古いGTKファイルが残らないことを確認した。Waylandではファイル選択、SVG読み込み、システムibusモジュールのテストも成功した。証跡は`packaged-x11.log`と`packaged-wayland.log`にある。利用者文書の日本語と英語も更新し、段階2の完了条件を満たした。全対象を収録する最終NPMパッケージと全配布形式は段階3で検証する。
+
+### 段階3
+
+`2850331`のソースで`build_package.sh --target all --jobs 2`が成功した。Linuxのamd64・armhf・arm64、Windowsのi686・amd64、Androidの資材を揃え、`muon-ui-0.33.23.tgz`と`muon-plugin-sdk-0.33.23.tgz`を生成した。3対象のLinux依存解析はすべて`audit.issues`が0件で、GTKとGLibのシステムパッケージを依存先として記録した。ビルドログと依存情報は`final-linux-build/`、パッケージとSHA-256は`final-package/`に保存している。
+
+最終NPMパッケージを独立した利用側へインストールし、公開CLIで各対象のAppImage・deb・tar.gzを作成した。NPMを含む3対象×4形式の計12組で、GTK関連ファイルと旧同梱ファイルの残存がないことを確認した。各形式の依存情報はNPM内の情報と一致し、debにもGTK・GLibの依存条件が含まれる。SDKパッケージにもGTK関連の同梱ファイルはなかった。
+
+対応するDebian 12コンテナーで、各形式の`muon-core`と`libmuon-ui.so`に`ldd`を実行した。GTK・GDK・GLib・GIO・GObjectはすべてシステムの`/lib/`配下へ解決され、未解決の共有ライブラリーはなかった。配布物が初回準備で取得するCEFは、ローダー検査に限り、ビルドに使った公式CEFの`libcef.so`を別ディレクトリーから参照させた。この参照先にはGTK関連ファイルを置いていない。ARMの結果はQEMU上のローダー検査であり、ARM実機での画面動作は確認していない。証跡は`distribution/summary.json`と`distribution/logs/`にある。
+
+ARM AppImageの展開では、ホストのQEMU自動起動設定がAppImage固有のELF識別子に一致せず、実行形式エラーになった。アーキテクチャとELFヘッダーを確認し、QEMUを明示して同じAppImageを展開した。配布物やシステムの自動起動設定は変更していない。
+
+armhfの`dpkg-shlibdeps`には、`__aeabi_atexit@CXXABI_ARM_1.3.3`を解決できないという追加診断が3件あった。コンテナー内の`libstdc++.so.6`はこのシンボルを公開し、対象ELFの`DT_NEEDED`と`ldd`もそのライブラリーを示している。一方、`libstdc++6:armhf.symbols`には該当シンボルが記載されていなかった。実ファイルとパッケージのシンボル情報の差による診断と判断し、実行時の依存先と生成された`libstdc++6 (>= 11)`の依存条件を確認した。さらに`muon-core`・`libmuon-ui.so`・`libcardio.so`の`ldd -r`で動的なシンボル解決を検査し、未解決シンボルがないことを確認した。警告は抑制せず、`armhf-symbol-diagnostics.log`へ根拠を保存した。[dpkg-shlibdepsの診断](https://manpages.debian.org/bookworm/dpkg-dev/dpkg-shlibdeps.1.en.html)、[deb-symbolsの形式](https://manpages.debian.org/bookworm/dpkg-dev/deb-symbols.5.en.html)
+
+amd64では生成したAppImage・tar.gz・debを、Ubuntu 24.04.5のX11とWeston上のWaylandで起動した。AppImageはFUSEを使わずに展開して実行するオプション、tar.gzとdebは展開した実物のランチャーを使った。標準の`tested`設定で初回準備を行い、計6回すべてでPlaywright MCPによるページの読み込みと終了が成功した。CEFの起動引数も対応する画面基盤を示し、実プロセスのGTK・GDK・GLib・GIO・GObjectはすべて`/usr/lib/x86_64-linux-gnu/`から読み込まれていた。ホストのGTKは3.24.41、GLibは2.80.0である。証跡は`distribution/startup/summary.json`と各形式の`result.json`にある。
+
+最初の検証アプリには`compat-latest`を指定していたため、複数のCEF候補の取得・比較に時間がかかった。今回のGTK検証に不要な指定だったため、その実行を停止して標準設定へ戻し、配布物の生成・12組の検査・6回の起動を実施し直した。製品コードの修正は行っていない。
+
+全体テストのAndroid処理では、plan15と同じくbundletool 1.18.3内のProtobufから`sun.misc.Unsafe::arrayBaseOffset`の警告が出た。[JDK 24以降の実行時警告](https://docs.oracle.com/en/java/javase/24/migrate/significant-changes-jdk-24.html)に該当し、今回使用したJDK 25でも表示される。APK生成とAndroidのテストは成功している。既存の外部依存による警告として記録し、外部コードの変更や警告の抑制は行っていない。
+
+最終の全体`npm test`は、2026年10月23日12:55 JSTに終了コード0で完了した。共通C/C++テストとbuilderのテストも成功し、件数が出力される主要な工程は次のとおりだった。配布物を指定するGTK関連の検証は、前述の専用実行でも確認している。
+
+| 対象 | 成功 | スキップ |
+| --- | ---: | ---: |
+| SDK | 18 | 0 |
+| Android tester | 110 | 0 |
+| Android PoC | 3 | 0 |
+| Node | 40 | 0 |
+| UI | 507 | 4 |
+| ネイティブCTest | 61 | 0 |
+| Linux CEF | 241 | 32 |
+| Windowsパス処理 | 62 | 0 |
+| Windows builderパス処理 | 122 | 0 |
+| Windows i686 CEF | 239 | 29 |
+| Windows amd64 CEF | 239 | 29 |
+| Windows通知（各ビット版） | 各8 | 0 |
+| Windows通信（各ビット版） | 各8 | 0 |
+
+Windows実機の資材は指定どおり`C:\test\`配下を使い、全体テスト後に実機への接続とテストプロセスが残っていないことを確認した。全体ログは`full-test-final.log`、件数の抜粋は`full-test-summary.txt`に保存している。
+
+全体テスト後、UIとSDKを全配布対象の配置へ戻し、両パッケージの検証を通した。UIのネイティブツールと実行資材は62ファイルすべてが、検査済みNPMパッケージ内のファイルとSHA-256で一致した。完成した2つのNPMパッケージをリポジトリーの`artifacts/`へ配置し、検査したものと同じSHA-256であることも確認した。
+
+- `muon-ui-0.33.23.tgz`: `e4074516181425319215aebe4e8d095b9a339bc6d1e97c4efe7c918c6320d4b3`
+- `muon-plugin-sdk-0.33.23.tgz`: `892f6659af45c31797be1b0e6b616f855fc5b10d9b33a65a19a305414b5114ad`
+
+以上により、同梱ファイルの除去、システムGTKの参照、入力設定の継承、旧版からの更新、全3対象の配布情報、全体テストの各完了条件を満たした。ARMの検証範囲は前述のQEMU上のローダー確認に限る。

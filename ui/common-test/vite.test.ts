@@ -4880,29 +4880,8 @@ require("node:fs").writeFileSync(${JSON.stringify(capturedPath)}, JSON.stringify
               environment: NodeJS.ProcessEnv;
               runtime: string;
             };
-            expect(captured.environment).toMatchObject({
-              ...inherited,
-              ...(bundled
-                ? {
-                    GTK_EXE_PREFIX: join(captured.runtime, "linux"),
-                    GTK_PATH: join(captured.runtime, "linux/lib/gtk-3.0"),
-                    GTK_IM_MODULE_FILE: join(
-                      captured.runtime,
-                      "linux/gtk-immodules.cache",
-                    ),
-                    GDK_PIXBUF_MODULE_FILE: join(
-                      captured.runtime,
-                      "linux/gdk-pixbuf-loaders.cache",
-                    ),
-                    MUON_LINUX_MODULE_ROOT: join(captured.runtime, "linux"),
-                    LD_LIBRARY_PATH:
-                      captured.runtime + (libraryPath ? `:${libraryPath}` : ""),
-                    XDG_DATA_DIRS: `${join(captured.runtime, "linux/share")}:${
-                      libraryPath || "/usr/local/share:/usr/share"
-                    }`,
-                  }
-                : {}),
-            });
+            for (const [key, value] of Object.entries(inherited))
+              expect(captured.environment[key]).toBe(value);
             // Preparing a child must not redirect modules in the parent Vite/Node process.
             for (const [key, value] of Object.entries(inherited)) {
               expect(process.env[key]).toBe(value);

@@ -89,5 +89,4 @@ node ui/.build/linux-dependencies/linux-dependencies.mjs \
   --cmake-cache "core/cef/.build/dist/${MUON_PACKAGE_TARGET}/release/CMakeCache.txt" \
   --runtime "core/cef/dist-${MUON_PACKAGE_TARGET}" \
   --native "builder/dist-${MUON_PACKAGE_TARGET}" \
-  --bundle-baseline /opt/muon-baseline/source.json \
   --output "core/cef/dist-${MUON_PACKAGE_TARGET}/linux-dependencies.json"

@@ -103,9 +103,12 @@ static std::string RequiredServerString(yyjson_val* root, const char* key) {
 }
 static ServerBytes ServerEnvelope(const std::string& json, const ServerBytes& body = {}) {
   const auto size = static_cast<uint32_t>(json.size());
-  auto result = ServerBytes{static_cast<uint8_t>(size >> 24),
-      static_cast<uint8_t>(size >> 16), static_cast<uint8_t>(size >> 8),
-      static_cast<uint8_t>(size)};
+  ServerBytes result;
+  result.reserve(sizeof(size) + json.size() + body.size());
+  result.push_back(static_cast<uint8_t>(size >> 24));
+  result.push_back(static_cast<uint8_t>(size >> 16));
+  result.push_back(static_cast<uint8_t>(size >> 8));
+  result.push_back(static_cast<uint8_t>(size));
   result.insert(result.end(), json.begin(), json.end());
   result.insert(result.end(), body.begin(), body.end());
   return result;

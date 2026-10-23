@@ -5,7 +5,6 @@
 
 import { execFile } from "node:child_process";
 import {
-  chmod,
   copyFile,
   mkdir,
   mkdtemp,
@@ -30,18 +29,6 @@ import {
   readLinuxDebianLibraries,
   getLinuxDebianSymbolDependencies,
 } from "../cef/linux-debian-symbols.js";
-import {
-  selectLinuxBundledLibraries,
-  stageLinuxBundledLibraries,
-} from "../cef/linux-bundle.js";
-import {
-  stageLinuxBaselineModules,
-  stageLinuxGtkModules,
-} from "../cef/linux-baseline-modules.js";
-import {
-  readLinuxBundleProvenance,
-  recordLinuxBundleProvenance,
-} from "../cef/linux-bundle-provenance.js";
 import {
   createLinuxDependencyManifest,
   collectLinuxElfFiles,
@@ -120,181 +107,6 @@ const createTemporaryDpkgDirectory = async (): Promise<string> => {
 describe.skipIf(process.platform !== "linux" || process.arch !== "x64")(
   "Linux binary dependency requirements",
   () => {
-    it("combines current GTK modules with external input methods without copying old GTK modules", async () => {
-      const fixture = await createLibraries();
-      const gtk = join(fixture.root, "gtk");
-      const baseline = join(fixture.root, "baseline");
-      const runtime = join(fixture.root, "runtime");
-      const moduleDirectory = "gtk-3.0/3.0.0/immodules";
-      await mkdir(join(gtk, "lib", moduleDirectory), { recursive: true });
-      await mkdir(join(gtk, "bin"));
-      await mkdir(join(baseline, moduleDirectory), { recursive: true });
-      await copyFile(
-        fixture.consumer,
-        join(gtk, "lib", moduleDirectory, "im-current.so"),
-      );
-      for (const name of [
-        "im-current",
-        "im-obsolete",
-        "im-ibus",
-        "im-fcitx",
-        "im-fcitx5",
-      ])
-        await copyFile(
-          fixture.good + "/libfixture.so",
-          join(baseline, moduleDirectory, name + ".so"),
-        );
-      const query = join(gtk, "bin/gtk-query-immodules-3.0");
-      await writeFile(
-        query,
-        `#!${process.execPath}
-for (const path of process.argv.slice(2)) {
-  process.stdout.write(JSON.stringify(path) + '\\n');
-  if (path.endsWith('im-fcitx.so')) process.stdout.write('"fcitx" "Fcitx4" "" "" "*"\\n');
-  if (path.endsWith('im-fcitx5.so')) process.stdout.write('"fcitx" "Fcitx5" "" "" "*"\\n"fcitx5" "Fcitx5" "" "" "*"\\n');
-  process.stdout.write('\\n');
-}
-`,
-      );
-      await chmod(query, 0o755);
-      const staged = await stageLinuxGtkModules(gtk, baseline, runtime);
-      expect(
-        staged.binaries
-          .map((path) => path.slice(path.lastIndexOf("/") + 1))
-          .sort(),
-      ).toEqual(["im-current.so", "im-fcitx.so", "im-fcitx5.so", "im-ibus.so"]);
-      expect(
-        await readFile(
-          join(runtime, "linux/lib", moduleDirectory, "im-current.so"),
-        ),
-      ).toEqual(await readFile(fixture.consumer));
-      const cache = await readFile(
-        join(runtime, "linux/gtk-immodules.cache.in"),
-        "utf8",
-      );
-      expect(cache).not.toContain(fixture.root);
-      for (const name of ["current", "fcitx", "fcitx5", "ibus"])
-        expect(cache).toContain(
-          `"@MUON_RUNTIME@/linux/lib/${moduleDirectory}/im-${name}.so"`,
-        );
-      expect(cache.match(/^"fcitx" /gm)).toHaveLength(1);
-      expect(cache).toContain('"fcitx" "Fcitx4"');
-      expect(cache).toContain('"fcitx5" "Fcitx5"');
-    });
-
-    it("attributes GTK modules and caches to GTK separately from GLib", async () => {
-      const fixture = await createLibraries();
-      const runtime = join(fixture.root, "runtime");
-      const sources = await Promise.all(
-        ["GTK", "GLib"].map(async (name) => {
-          const prefix = join(fixture.root, name);
-          await mkdir(prefix);
-          const license = join(prefix, "COPYING");
-          await writeFile(license, `${name} license`);
-          return {
-            name,
-            prefix,
-            license,
-            version: "1",
-            url: `https://example.invalid/${name}`,
-            sha256: name.repeat(16),
-          };
-        }),
-      );
-      await mkdir(join(runtime, "linux"), { recursive: true });
-      await copyFile(fixture.consumer, join(runtime, "libgtk-3.so.0"));
-      await copyFile(fixture.consumer, join(runtime, "libglib-2.0.so.0"));
-      await writeFile(join(runtime, "linux/gtk-immodules.cache.in"), "cache");
-      const schemaFile = "linux/share/glib-2.0/schemas/gschemas.compiled";
-      await mkdir(join(runtime, "linux/share/glib-2.0/schemas"), {
-        recursive: true,
-      });
-      await writeFile(join(runtime, schemaFile), "GTK settings data");
-      const records = await recordLinuxBundleProvenance([], runtime, sources, [
-        {
-          path: join(sources[0]!.prefix, "lib/libgtk-3.so.0"),
-          file: "libgtk-3.so.0",
-        },
-        {
-          path: join(sources[1]!.prefix, "lib/libglib-2.0.so.0"),
-          file: "libglib-2.0.so.0",
-        },
-        {
-          path: join(sources[0]!.prefix, "lib/libgtk-3.so.0"),
-          file: "linux/gtk-immodules.cache.in",
-        },
-        {
-          path: join(
-            sources[0]!.prefix,
-            "share/glib-2.0/schemas/gschemas.compiled",
-          ),
-          file: schemaFile,
-        },
-      ]);
-      expect(records.map(({ source }) => source)).toEqual([
-        "GTK",
-        "GLib",
-        "GTK",
-        "GTK",
-      ]);
-      expect(await readLinuxBundleProvenance(runtime)).toEqual(records);
-      for (const record of records)
-        expect(await readFile(join(runtime, record.license), "utf8")).toBe(
-          `${record.source} license`,
-        );
-    });
-
-    it("includes dynamically loaded modules in the audit and relocates their loader cache", async () => {
-      const fixture = await createLibraries();
-      const moduleDirectory = join(fixture.root, "gtk-3.0/3.0.0/immodules");
-      await mkdir(moduleDirectory, { recursive: true });
-      const module = join(moduleDirectory, "im-example.so");
-      await copyFile(fixture.consumer, module);
-      await copyFile(
-        fixture.consumer,
-        join(fixture.root, "gtk-3.0/query-modules"),
-      );
-      const cache = join(fixture.root, "immodules.cache");
-      await writeFile(
-        cache,
-        `"${module}"\n"example" "Example input" "" "" "*"\n`,
-      );
-      const runtime = join(fixture.root, "runtime");
-      const staged = await stageLinuxBaselineModules(fixture.root, runtime, [
-        {
-          directory: "gtk-3.0",
-          cache: {
-            source: cache,
-            destination: "linux/gtk-immodules.cache.in",
-            owner: module,
-          },
-        },
-      ]);
-      expect(staged.binaries).toEqual([module]);
-      const roots = await collectLinuxElfFiles(runtime);
-      expect(roots).toEqual([
-        join(runtime, "linux/lib/gtk-3.0/3.0.0/immodules/im-example.so"),
-      ]);
-      const audit = await auditLinuxDependencies({
-        target: "linux-amd64",
-        files: roots,
-        libraryPaths: [fixture.old],
-      });
-      expect(audit.issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            kind: "symbol",
-            requirement: "answer@LIB_1.0",
-          }),
-        ]),
-      );
-      await expect(
-        readFile(join(runtime, "linux/gtk-immodules.cache.in"), "utf8"),
-      ).resolves.toBe(
-        '"@MUON_RUNTIME@/linux/lib/gtk-3.0/3.0.0/immodules/im-example.so"\n"example" "Example input" "" "" "*"\n',
-      );
-    });
-
     it("reads the native build reference and rejects a cache for another target", async () => {
       const fixture = await createLibraries();
       const cache = join(fixture.root, "CMakeCache.txt");
@@ -435,57 +247,6 @@ for (const path of process.argv.slice(2)) {
       const files = await collectLinuxElfFiles(fixture.root);
       expect(files).toContain(fixture.consumer);
       expect(files).not.toContain(object);
-    });
-
-    it("runs with a bundled dependency and its consumers without bundling the platform C library", async () => {
-      const fixture = await createLibraries();
-      const directory = join(fixture.root, "app");
-      await mkdir(directory);
-      await writeFile(
-        join(fixture.root, "main.c"),
-        "extern int run(void);\nint main(void) { return run() == 42 ? 0 : 1; }\n",
-      );
-      const executable = join(directory, "application");
-      await execute("gcc", [
-        join(fixture.root, "main.c"),
-        `-L${fixture.root}`,
-        "-lconsumer",
-        `-Wl,-rpath-link,${fixture.good}`,
-        "-Wl,--disable-new-dtags,-rpath,$ORIGIN/lib",
-        "-o",
-        executable,
-      ]);
-      await expect(execute(executable)).rejects.toThrow("libconsumer.so");
-      const audit = await auditLinuxDependencies({
-        target: "linux-amd64",
-        files: [executable],
-        libraryPaths: [
-          fixture.root,
-          fixture.good,
-          "/usr/lib/x86_64-linux-gnu",
-          "/lib/x86_64-linux-gnu",
-        ],
-      });
-      const selected = selectLinuxBundledLibraries(audit, [executable], {
-        coherent: ["libfixture.so"],
-        independent: [],
-      });
-      expect(selected.map((binary) => binary.soname).sort()).toEqual([
-        "libconsumer.so",
-        "libfixture.so",
-      ]);
-      expect(
-        selectLinuxBundledLibraries(audit, [executable], {
-          coherent: [],
-          independent: ["libfixture.so"],
-        }).map((binary) => binary.soname),
-      ).toEqual(["libfixture.so"]);
-      await stageLinuxBundledLibraries(selected, join(directory, "lib"));
-      const environment = { ...process.env };
-      delete environment.LD_LIBRARY_PATH;
-      await expect(
-        execute(executable, [], { env: environment }),
-      ).resolves.toMatchObject({ stderr: "" });
     });
 
     it("calculates real Debian version constraints while excluding the application's private libraries", async () => {

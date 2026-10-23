@@ -128,7 +128,7 @@ platform_for_arch() {
 }
 
 image_for_arch() {
-  printf 'localhost/muon-pack-native-ubuntu-focal-%s:latest\n' "$1"
+  printf 'localhost/muon-pack-native-debian-bookworm-%s:latest\n' "$1"
 }
 
 split_arch_list() {
@@ -527,7 +527,6 @@ verify_package_file_list() {
   for linux_target in linux-amd64 linux-armhf linux-arm64; do
     require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json"
     require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json.txt"
-    require_pack_file "dist/runtime/${linux_target}/linux-bundle.json"
     reject_pack_file "dist/runtime/${linux_target}/libcef.so"
   done
   require_pack_file "dist/runtime/windows-i686/libcardio.dll"

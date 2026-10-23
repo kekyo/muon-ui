@@ -5,9 +5,8 @@
 // https://github.com/kekyo/muon-ui
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 // A script used exclusively within the muon project to restart muon-core in Recycle State.
 // This script is not included in the NPM package.
@@ -27,25 +26,7 @@ const executableName =
 const executablePath = resolve(runtimeDirectory, executableName);
 const executableArguments = process.argv.slice(4);
 
-// Match the packaged launcher and the UI launchers before loading GTK/GIO modules.
 const environment = { ...process.env };
-const moduleRoot = join(runtimeDirectory, "linux");
-if (process.platform === "linux" && existsSync(moduleRoot)) {
-  Object.assign(environment, {
-    GTK_EXE_PREFIX: moduleRoot,
-    GTK_PATH: join(moduleRoot, "lib", "gtk-3.0"),
-    GTK_IM_MODULE_FILE: join(moduleRoot, "gtk-immodules.cache"),
-    GDK_PIXBUF_MODULE_FILE: join(moduleRoot, "gdk-pixbuf-loaders.cache"),
-    MUON_LINUX_MODULE_ROOT: moduleRoot,
-    XDG_DATA_DIRS:
-      join(moduleRoot, "share") +
-      ":" +
-      (process.env.XDG_DATA_DIRS || "/usr/local/share:/usr/share"),
-    LD_LIBRARY_PATH:
-      runtimeDirectory +
-      (environment.LD_LIBRARY_PATH ? `:${environment.LD_LIBRARY_PATH}` : ""),
-  });
-}
 
 let activeChild = undefined;
 

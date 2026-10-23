@@ -104,19 +104,19 @@ platform_for_arch() {
 }
 
 image_for_arch() {
-  printf 'localhost/muon-pack-native-ubuntu-focal-%s:latest\n' "$1"
+  printf 'localhost/muon-pack-native-debian-bookworm-%s:latest\n' "$1"
 }
 
 base_image_for_arch() {
   case "$1" in
     amd64)
-      printf '%s\n' "docker.io/amd64/ubuntu:20.04"
+      printf '%s\n' "docker.io/amd64/debian:bookworm"
       ;;
     armv7l)
-      printf '%s\n' "docker.io/arm32v7/ubuntu:20.04"
+      printf '%s\n' "docker.io/arm32v7/debian:bookworm"
       ;;
     arm64)
-      printf '%s\n' "docker.io/arm64v8/ubuntu:20.04"
+      printf '%s\n' "docker.io/arm64v8/debian:bookworm"
       ;;
     *)
       fail "Unsupported architecture: $1"
@@ -157,7 +157,6 @@ build_image() {
   "${CONTAINER_ENGINE}" build \
     --platform "${platform}" \
     --build-arg "BASE_IMAGE=${base_image}" \
-    --build-arg "BUILD_JOBS=${JOBS}" \
     -f "scripts/linux-baseline.Containerfile" \
     -t "${image}" \
     .

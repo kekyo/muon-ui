@@ -67,7 +67,6 @@ import {
   type ResolvedMuonWindowsCodeSigning,
 } from "./windows-code-signing.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "../common/app-icon.js";
-import { readLinuxBundleProvenance } from "./linux-bundle-provenance.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import type { MuonProgressCallback } from "../common/progress.js";
 import {
@@ -790,26 +789,10 @@ const copyRuntimeFiles = async (
       join(sourceRuntimePath, "linux-dependencies.json"),
     )) !== undefined
   ) {
-    for (const name of ["linux-dependencies.json", "linux-bundle.json"])
-      await copyFile(join(sourceRuntimePath, name), join(outputPath, name));
-    for (const library of await readLinuxBundleProvenance(sourceRuntimePath)) {
-      if (!/^licenses\/linux\/[^/]+\.txt$/.test(library.license))
-        throw new Error(
-          `Invalid bundled library license path: ${library.license}`,
-        );
-      await mkdir(dirname(join(outputPath, library.file)), { recursive: true });
-      await copyFile(
-        join(sourceRuntimePath, library.file),
-        join(outputPath, library.file),
-      );
-      await mkdir(dirname(join(outputPath, library.license)), {
-        recursive: true,
-      });
-      await copyFile(
-        join(sourceRuntimePath, library.license),
-        join(outputPath, library.license),
-      );
-    }
+    await copyFile(
+      join(sourceRuntimePath, "linux-dependencies.json"),
+      join(outputPath, "linux-dependencies.json"),
+    );
   }
   if (descriptor.optionalRuntimeFilePatterns !== undefined) {
     const fileNames = await readdir(sourceRuntimePath);

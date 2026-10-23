@@ -63,7 +63,10 @@ try {
     await delay(25);
   }
   process.exitCode = await new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env: environment, stdio: "inherit" });
+    const child = spawn(command, args, {
+      env: { ...environment, DISPLAY: "" },
+      stdio: "inherit",
+    });
     child.once("error", reject);
     child.once("exit", (code) => resolve(code ?? 1));
   });

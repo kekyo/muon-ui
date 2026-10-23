@@ -1847,47 +1847,13 @@ describe("muon-builder", () => {
     ]);
   });
 
-  it("relocates Linux module caches to the final runtime directory on preparation and reuse", async () => {
-    const fixture = await createPrepareFixture();
-    fixture.stageDir = join(fixture.projectPath, '日本語 runtime "quoted"');
-    await mkdir(join(fixture.muonPath, "linux"));
-    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"]) {
-      await writeFile(
-        join(fixture.muonPath, "linux", `${name}.cache.in`),
-        '"@MUON_RUNTIME@/linux/lib/module.so"\n',
-      );
-    }
-    await prepareFixture(fixture);
-    const expected = `"${fixture.stageDir.replaceAll('"', '\\"')}/linux/lib/module.so"\n`;
-    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"]) {
-      const path = join(fixture.stageDir, "linux", `${name}.cache`);
-      expect(await readFile(path, "utf8")).toBe(expected);
-      await writeFile(path, "stale path\n");
-    }
-    expect((await prepareFixture(fixture)).cacheHit).toBe(true);
-    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"])
-      expect(
-        await readFile(
-          join(fixture.stageDir, "linux", `${name}.cache`),
-          "utf8",
-        ),
-      ).toBe(expected);
-  });
-
-  it("launches with private Linux module paths while preserving the input method selection", async () => {
+  it("preserves the system Linux module environment", async () => {
     const fixture = await createPrepareFixture();
     const stateHome = join(fixture.projectPath, "日本語 state");
     const appId = "scope.linux-modules";
-    const runtime = getLinuxPortableStateRuntimePath(stateHome, appId);
-    await mkdir(join(fixture.muonPath, "linux"));
-    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"])
-      await writeFile(
-        join(fixture.muonPath, "linux", `${name}.cache.in`),
-        '"@MUON_RUNTIME@/linux/lib/module.so"\n',
-      );
     await writeFile(
       join(fixture.muonPath, "muon-core"),
-      '#!/bin/sh\nprintf "%s\\n" "$GTK_EXE_PREFIX" "$GTK_IM_MODULE_FILE" "$GDK_PIXBUF_MODULE_FILE" "$MUON_LINUX_MODULE_ROOT" "$GTK_IM_MODULE"\n',
+      '#!/bin/sh\nprintf "%s\\n" "$GTK_EXE_PREFIX" "$GTK_PATH" "$GTK_IM_MODULE_FILE" "$GDK_PIXBUF_MODULE_FILE" "$MUON_LINUX_MODULE_ROOT" "$GTK_IM_MODULE" "$XDG_DATA_DIRS" "$LD_LIBRARY_PATH"\n',
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
     const launcher = await writeEmbeddedLauncher(fixture, {
@@ -1901,14 +1867,24 @@ describe("muon-builder", () => {
         XDG_STATE_HOME: stateHome,
         XDG_DATA_HOME: join(fixture.projectPath, "data"),
         GTK_IM_MODULE: "ibus",
+        GTK_EXE_PREFIX: "/system/gtk",
+        GTK_PATH: "/system/gtk/modules",
+        GTK_IM_MODULE_FILE: "/system/gtk-immodules.cache",
+        GDK_PIXBUF_MODULE_FILE: "/system/gdk-pixbuf-loaders.cache",
+        MUON_LINUX_MODULE_ROOT: "/system/gio-modules",
+        XDG_DATA_DIRS: "/custom/share:/usr/share",
+        LD_LIBRARY_PATH: "/system/lib",
       },
     });
     expect(stdout.trim().split("\n")).toEqual([
-      join(runtime, "linux"),
-      join(runtime, "linux/gtk-immodules.cache"),
-      join(runtime, "linux/gdk-pixbuf-loaders.cache"),
-      join(runtime, "linux"),
+      "/system/gtk",
+      "/system/gtk/modules",
+      "/system/gtk-immodules.cache",
+      "/system/gdk-pixbuf-loaders.cache",
+      "/system/gio-modules",
       "ibus",
+      "/custom/share:/usr/share",
+      "/system/lib",
     ]);
   });
 
@@ -4104,7 +4080,7 @@ requestedAtUnix=123
     });
     await writeFile(
       join(fixture.muonPath, "muon-core"),
-      "#!/bin/sh\npwd\nprintf '%s\\n' \"$@\"\n",
+      "#!/bin/sh\npwd\nprintf '%s\\n' \"$LD_LIBRARY_PATH\"\nprintf '%s\\n' \"$@\"\n",
     );
     await chmod(join(fixture.muonPath, "muon-core"), 0o755);
     const icon = join(fixture.muonPath, "icon.png");
@@ -4143,6 +4119,7 @@ requestedAtUnix=123
       MUON_CEF_CATALOG_URL: fixture.catalogPath,
       XDG_STATE_HOME: stateHome,
       XDG_DATA_HOME: dataHome,
+      LD_LIBRARY_PATH: "/system/library",
     };
     const runtime = getLinuxPortableStateRuntimePath(stateHome, appId);
     try {
@@ -4152,7 +4129,7 @@ requestedAtUnix=123
           ["two words", "日本語"],
           { cwd: root, env: environment },
         );
-        expect(stdout).toBe(`${runtime}\ntwo words\n日本語\n`);
+        expect(stdout).toBe(`${runtime}\n/system/library\ntwo words\n日本語\n`);
         await expect(
           access(join(runtime, "libcef.so")),
         ).resolves.toBeUndefined();

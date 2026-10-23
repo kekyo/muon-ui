@@ -31,7 +31,7 @@ export default defineConfig({
 | `stagePath` | `string` | `".muon/<public-target>"` | Directory where the muon runtime is staged for development launch. |
 | `enableDebugger` | `boolean` | `true` | Enables CDP, the `F12` muon DevTools keybind, and the `Ctrl+F12` recycle keybind during development launch. |
 | `allowInsecureLocalhost` | `boolean` | `muon.json`, then `false` | Overrides whether invalid localhost HTTPS certificate errors are ignored during development launch. |
-| `exitWithServer` | `boolean` | `true` | Whether to stop the Vite dev server when muon-core exits normally. |
+| `exitWithServer` | `boolean` | `true` | Whether to stop the Vite dev server when muon-core exits or fails to start. |
 | `dev` | `object` | `{}` | Overrides applied only to the muon process launched by Vite development. |
 | `pluginAccess` | `false \| object` | `plugin` setting from `muon.json` | Override settings for plugin API exposure and virtual module imports. |
 | `build` | `boolean \| object` | `true` | Whether to generate distribution directories after `vite build`, or options used during generation. |
@@ -56,6 +56,10 @@ export default defineConfig({
   `vite build` ignores the Vite plugin option; distribution builds use the value embedded from `muon.json`.
 - When `exitWithServer` is omitted or `true`, the Vite dev server also exits when muon-core exits normally.
   muon recycle restart does not stop the Vite dev server.
+- If muon-core fails to start, exits with a nonzero code other than 88, or exits because of a signal, Vite logs the failure reason. When the executable could be started, the log also includes its path and the tail of its standard output and standard error. Diagnostic output is retained up to a combined limit of 64 KiB.
+  By default, Vite also stops and the CLI exit code becomes 1. An existing nonzero exit code is preserved.
+- With `exitWithServer: false`, failures are still logged, but Vite keeps running and the CLI exit code is unchanged.
+  Stopping Vite also stops muon and is treated as a normal shutdown.
 
 ## dev key
 

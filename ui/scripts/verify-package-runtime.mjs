@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { access, readFile, readdir, stat } from "node:fs/promises";
+import { access, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageRuntimeTargets = {
@@ -163,16 +163,8 @@ for (const target of targets) {
     for (const name of [
       "linux-dependencies.json",
       "linux-dependencies.json.txt",
-      "linux-bundle.json",
     ])
       await assertExists(join(runtimePath, name));
-    const libraries = JSON.parse(
-      await readFile(join(runtimePath, "linux-bundle.json"), "utf8"),
-    );
-    for (const library of libraries) {
-      await assertExists(join(runtimePath, library.file));
-      await assertExists(join(runtimePath, library.license));
-    }
     await assertMissing(join(runtimePath, "libcef.so"));
   }
   await assertMissing(join(runtimePath, "THIRD_PARTY_NOTICES.md"));

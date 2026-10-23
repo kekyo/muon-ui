@@ -128,7 +128,7 @@ platform_for_arch() {
 }
 
 image_for_arch() {
-  printf 'localhost/muon-pack-native-ubuntu-focal-%s:latest\n' "$1"
+  printf 'localhost/muon-pack-native-debian-bookworm-%s:latest\n' "$1"
 }
 
 split_arch_list() {
@@ -453,7 +453,7 @@ build_dist() {
 
 get_dry_run_files() {
   npm pack --workspace muon-ui --dry-run --ignore-scripts --json |
-    node -e 'let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const packs = JSON.parse(input); for (const file of packs[0].files) console.log(file.path); });'
+    node -e 'let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const packs = Object.values(JSON.parse(input)); for (const file of packs[0].files) console.log(file.path); });'
 }
 
 get_tarball_files() {
@@ -527,7 +527,6 @@ verify_package_file_list() {
   for linux_target in linux-amd64 linux-armhf linux-arm64; do
     require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json"
     require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json.txt"
-    require_pack_file "dist/runtime/${linux_target}/linux-bundle.json"
     reject_pack_file "dist/runtime/${linux_target}/libcef.so"
   done
   require_pack_file "dist/runtime/windows-i686/libcardio.dll"
@@ -571,7 +570,9 @@ verify_package_file_list() {
 }
 
 verify_pack_file_list() {
-  verify_package_file_list "npm pack dry run" "$(get_dry_run_files)"
+  local files
+  files="$(get_dry_run_files)"
+  verify_package_file_list "npm pack dry run" "${files}"
 }
 
 verify_tarball_file_list() {

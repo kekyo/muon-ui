@@ -91,7 +91,7 @@ Tests use the `win11` section unless you specify another section, for example by
 
 Remote tests are skipped only when the SDK cannot establish a connection, such as when the configuration file is missing. The skip reason is printed. Build, transfer, and assertion errors after a successful connection fail the tests. Connections are released during local builds and when each suite finishes.
 
-Set `MUON_E2E_REMOTE_WORK_DIR` to change the remote working directory. Screen tests discover the IPv4 routes for CDP and HTTP automatically. Networks requiring a different return address for the HTTP fixture server can override it with `MUON_E2E_REMOTE_HTTP_HOST`.
+Set `MUON_E2E_REMOTE_WORK_DIR` to change the remote working directory. If Node.js is not on the remote machine's PATH, set `MUON_E2E_REMOTE_NODE_PATH` to the executable used by test helper processes. Screen tests discover the IPv4 routes for CDP and HTTP automatically. Networks requiring a different return address for the HTTP fixture server can override it with `MUON_E2E_REMOTE_HTTP_HOST`.
 
 ## Package generation
 
@@ -126,7 +126,7 @@ If you want to pass package generation options directly, you can run `build_pack
 
 ### Linux baseline builds and dependency reports
 
-Linux distributions are built in Ubuntu 20.04 containers prepared by `prereq.sh`, using GCC 10 and the library baseline in `scripts/linux-baseline.Containerfile`. Required GLib 2.74.7 is built from upstream source in a private prefix and distributed with GTK and related libraries. This does not replace the host OS's GLib. See [GLib source releases](https://download.gnome.org/sources/glib/2.74/).
+Linux distributions are built in Debian 12 containers prepared by `prereq.sh`, using GCC 12 and the library baseline in `scripts/linux-baseline.Containerfile`. GTK and GLib are linked from the container's system packages and resolved from the destination system at runtime. The distribution does not add GTK-related shared libraries, input modules, image loaders, or settings data.
 
 After changing CEF or the baseline, rebuild both the images and distribution files. To check only amd64, add `--arch amd64` to both commands:
 
@@ -135,9 +135,9 @@ bash prereq.sh --force
 bash build_package.sh --target dist
 ```
 
-Each target's `core/cef/dist-linux-*/linux-dependencies.json` records the build reference CEF, library requirements, baseline, and deb dependencies. The adjacent `.json.txt` is the readable report. `linux-bundle.json` records bundled file hashes, provenance, and license locations. Unresolved required symbols or libraries cause the build to fail with a report.
+Each target's `core/cef/dist-linux-*/linux-dependencies.json` records the build reference CEF, library requirements, baseline, and deb dependencies. The adjacent `.json.txt` is the readable report. Unresolved required symbols or libraries cause the build to fail with a report.
 
-These records and libraries are staged under `ui/dist/runtime/<target>/`. Application packaging combines the recorded requirements with those of the application's native components without downloading CEF again. Changing the runtime CEF selection policy does not change the analysis reference.
+These dependency records are staged under `ui/dist/runtime/<target>/`. Application packaging combines the recorded requirements with those of the application's native components without downloading CEF again. Changing the runtime CEF selection policy does not change the analysis reference.
 
 Run the package validation and independent AppImage, deb, and tar.gz consumer check as follows. After building a single target, append `linux-amd64` to the validation command:
 

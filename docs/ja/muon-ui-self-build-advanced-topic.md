@@ -91,7 +91,7 @@ npm run test:windows-nsis-e2e --workspace muon-ui
 
 設定ファイルがない場合など、SDKが接続を確立できなかった場合のみ、理由を表示して実機テストをスキップします。接続後のビルド・転送・検証のエラーはテストの失敗です。ローカルビルド中と各スイートの終了時には、実機への接続を解放します。
 
-実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
+実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。実機のPATHにNode.jsがない場合は、テスト補助プロセスに使う実行ファイルを`MUON_E2E_REMOTE_NODE_PATH`で指定できます。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
 
 ## パッケージ生成
 
@@ -126,7 +126,7 @@ npm run pack
 
 ### Linuxの基準ビルドと依存情報
 
-Linux配布物は`prereq.sh`が作るUbuntu 20.04のコンテナでビルドします。GCC 10と、共有ライブラリの基準環境を定義する`scripts/linux-baseline.Containerfile`を使用します。必要なGLib 2.74.7は公式ソースから専用の場所へビルドし、GTKなどと共に配布物へ含めます。ホストOSのGLibを置き換える手順ではありません。[GLibの配布元](https://download.gnome.org/sources/glib/2.74/)
+Linux配布物は`prereq.sh`が作るDebian 12のコンテナでビルドします。GCC 12と、共有ライブラリの基準環境を定義する`scripts/linux-baseline.Containerfile`を使用します。GTKとGLibはコンテナのシステムパッケージにリンクし、実行時には配布先のシステムライブラリを使います。配布物へGTK関連の共有ライブラリ、入力モジュール、画像ローダー、設定データを追加する処理はありません。
 
 CEFや基準環境を更新した場合は、イメージと配布物を作り直してください。amd64だけを確認する場合は、両方のコマンドへ`--arch amd64`を付けます。
 
@@ -135,9 +135,9 @@ bash prereq.sh --force
 bash build_package.sh --target dist
 ```
 
-対象ごとの`core/cef/dist-linux-*/linux-dependencies.json`に、ビルドで使ったCEF、ライブラリの要求、基準環境、debの依存条件を保存します。同じ場所の`.json.txt`が可読版です。`linux-bundle.json`には同梱ファイルのハッシュ、出自、ライセンスの配置先を記録します。ビルド中に要求シンボルや必要なライブラリを解決できなければ、報告を出して失敗します。
+対象ごとの`core/cef/dist-linux-*/linux-dependencies.json`に、ビルドで使ったCEF、ライブラリの要求、基準環境、debの依存条件を保存します。同じ場所の`.json.txt`が可読版です。ビルド中に要求シンボルや必要なライブラリを解決できなければ、報告を出して失敗します。
 
-これらの情報とライブラリは`ui/dist/runtime/<target>/`へ収録します。アプリをpackするときは、この記録とアプリ自身のネイティブ部品から要求を合成するため、CEFを再取得する必要はありません。実行時のCEF選択ポリシーを変えても、解析入力のCEFは変わりません。
+これらの依存情報は`ui/dist/runtime/<target>/`へ収録します。アプリをpackするときは、この記録とアプリ自身のネイティブ部品から要求を合成するため、CEFを再取得する必要はありません。実行時のCEF選択ポリシーを変えても、解析入力のCEFは変わりません。
 
 NPM配布前の検査と、独立したアプリからのAppImage・deb・tar.gz生成は次のコマンドで確認できます。単一対象のビルド後は、検査コマンドの末尾へ`linux-amd64`を指定してください。
 

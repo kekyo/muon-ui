@@ -7,7 +7,6 @@
 // repository symlinks and uses only the installed package's public CLI.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   access,
   mkdir,
@@ -106,24 +105,11 @@ try {
       reference,
     );
     await assert.rejects(access(join(payload, "libcef.so")));
-    const libraries = JSON.parse(
-      await readFile(join(payload, "linux-bundle.json"), "utf8"),
-    ) as { file: string; license: string; sha256: string }[];
-    assert(
-      libraries.length > 0,
-      "The baseline private library group must be packaged",
-    );
-    for (const library of libraries) {
-      const content = await readFile(join(payload, library.file));
-      assert.equal(
-        createHash("sha256").update(content).digest("hex"),
-        library.sha256,
-      );
-      await access(join(payload, library.license));
-    }
     const deb = result.artifacts.find((artifact) => artifact.type === "deb")!;
     const depends = await execute("dpkg-deb", ["--field", deb.path, "Depends"]);
     assert.match(depends.stdout, /libc6 \(>= /);
+    assert.match(depends.stdout, /libgtk-3-0 \(>= /);
+    assert.match(depends.stdout, /libglib2.0-0 \(>= 2\.7[34]/);
     const portable = result.artifacts.find(
       (artifact) => artifact.type === "tar.gz",
     )!;
@@ -135,7 +121,6 @@ try {
         target,
         formats: result.artifacts.map((artifact) => artifact.type),
         appImageBytes: executable.length,
-        verifiedPrivateFiles: libraries.length,
         depends: depends.stdout.trim(),
       }),
     );

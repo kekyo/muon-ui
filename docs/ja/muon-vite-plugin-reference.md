@@ -30,7 +30,7 @@ export default defineConfig({
 | `stagePath`      | `string`              | `".muon/<public-target>"`   | 開発起動用にmuonランタイムを配置するディレクトリです。               |
 | `enableDebugger` | `boolean`             | `true`                      | 開発起動時にCDP、`F12` のmuon DevToolsキーバインド、`Ctrl+F12` のリサイクルキーバインドを有効化します。 |
 | `allowInsecureLocalhost` | `boolean` | `muon.json`、次に `false` | 開発起動時にlocalhostの無効なHTTPS証明書エラーを無視するかを上書きします。 |
-| `exitWithServer` | `boolean`             | `true`                      | muon-coreが通常終了した時にVite dev serverも終了するかどうかです。   |
+| `exitWithServer` | `boolean`             | `true`                      | muon-coreの終了や起動失敗に合わせてVite dev serverも終了するかどうかです。 |
 | `dev`            | `object`              | `{}`                        | Vite開発起動のmuonプロセスだけに適用する上書き設定です。             |
 | `pluginAccess`   | `false \| object`     | `muon.json` の `plugin` 設定 | プラグインAPIの露出方式とvirtual module importの上書き設定です。     |
 | `build`          | `boolean \| object`   | `true`                      | `vite build` 後に配布用ディレクトリを生成するかどうか、または生成時のオプションです。 |
@@ -55,6 +55,10 @@ export default defineConfig({
   `vite build` はViteプラグインオプションを無視し、配布用ビルドでは `muon.json` から埋め込まれた値を使用します。
 - `exitWithServer` を省略または `true` にした場合、muon-coreが通常終了するとVite dev serverも終了します。
   muonのリサイクル再起動ではVite dev serverは終了しません。
+- muon-coreの起動に失敗した場合や、終了コード88以外の非ゼロ終了、シグナルによる終了が発生した場合は、Viteのログに終了理由を表示します。実行ファイルを起動できた場合は、そのパスと標準出力・標準エラーの末尾も表示します。保持する診断出力は合計64 KiBまでです。
+  既定ではViteも終了し、CLIの終了コードは1になります。すでに非ゼロの終了コードが設定されている場合は、その値を維持します。
+- `exitWithServer: false` の場合も異常終了の診断を表示しますが、Viteは起動を続け、CLIの終了コードは変更しません。
+  Vite側から停止した場合はmuonも停止し、通常の停止として扱います。
 
 ## devキー
 

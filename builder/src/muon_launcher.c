@@ -1335,40 +1335,6 @@ static int launch_core(const char *runtime_dir, const char *core_path,
       perror(MUON_LAUNCHER_APPIMAGE_ENVIRONMENT);
       _exit(1);
     }
-    char *module_root = muon_path_join(runtime_dir, "linux");
-    if (module_root == NULL) _exit(1);
-    if (muon_path_exists(module_root)) {
-      static const char *const names[] = {
-          "GTK_EXE_PREFIX", "GTK_PATH", "GTK_IM_MODULE_FILE",
-          "GDK_PIXBUF_MODULE_FILE", "MUON_LINUX_MODULE_ROOT"};
-      static const char *const paths[] = {
-          "linux", "linux/lib/gtk-3.0", "linux/gtk-immodules.cache",
-          "linux/gdk-pixbuf-loaders.cache", "linux"};
-      for (size_t index = 0; index < sizeof(names) / sizeof(names[0]); index += 1) {
-        char *value = muon_path_join(runtime_dir, paths[index]);
-        if (value == NULL || setenv(names[index], value, 1) != 0) {
-          perror(names[index]);
-          _exit(1);
-        }
-        free(value);
-      }
-      // Dynamic GTK/GIO modules must resolve their dependencies from the same
-      // baseline as the libraries already loaded by muon and CEF.
-      const char *previous = getenv("LD_LIBRARY_PATH");
-      const size_t size = strlen(runtime_dir) +
-                          (previous == NULL ? 0 : strlen(previous)) + 2;
-      char *library_path = (char *)malloc(size);
-      if (library_path == NULL) _exit(1);
-      snprintf(library_path, size, "%s%s%s", runtime_dir,
-               previous == NULL || previous[0] == '\0' ? "" : ":",
-               previous == NULL ? "" : previous);
-      if (setenv("LD_LIBRARY_PATH", library_path, 1) != 0) {
-        perror("LD_LIBRARY_PATH");
-        _exit(1);
-      }
-      free(library_path);
-    }
-    free(module_root);
     if (setenv(MUON_LAUNCHER_PATH_ENVIRONMENT, launcher_path, 1) != 0) {
       perror(MUON_LAUNCHER_PATH_ENVIRONMENT);
       _exit(1);

@@ -386,6 +386,42 @@ const writeFakeControlledMuonSource = async (
   await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
 };
 
+const writeFakeFailingMuonSource = async (
+  muonDirectory: string,
+  exitCommand: string,
+): Promise<void> => {
+  await mkdir(muonDirectory, { recursive: true });
+  const executable = getMuonExecutablePath(muonDirectory, "linux");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf 'discarded diagnostic\\n' >&2
+for _ in $(seq 1 70000); do printf 'x' >&2; done
+printf 'retained stdout diagnostic: ${exitCommand}\\n'
+printf '\\346' >&2
+sleep 0.05
+printf '\\227\\245\\346\\234\\254\\350\\252\\236\\343\\201\\256\\350\\250\\272\\346\\226\\255\\n' >&2
+printf '\\nretained diagnostic: ${exitCommand}\\n' >&2
+${exitCommand}
+`,
+  );
+  await chmod(executable, 0o755);
+  await mkdir(join(muonDirectory, "plugins"), { recursive: true });
+  await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
+};
+
+const writeFakeUnlaunchableMuonSource = async (
+  muonDirectory: string,
+): Promise<void> => {
+  await mkdir(muonDirectory, { recursive: true });
+  const executable = getMuonExecutablePath(muonDirectory, "linux");
+  await writeFile(executable, "#!/definitely-not-a-muon-interpreter\n");
+  await chmod(executable, 0o755);
+  await mkdir(join(muonDirectory, "plugins"), { recursive: true });
+  await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
+};
+
 const writeFakeConfigUpdatingRecyclingMuonSource = async (
   muonDirectory: string,
   outputDirectory: string,
@@ -2972,6 +3008,222 @@ describe("muon Vite plugin", () => {
     await server.close();
   });
 
+  it("waits for an active muon process when Vite stops without reporting a failure", async () => {
+    const root = await createTemporaryDirectory("muon-vite-parent-stop-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeControlledMuonSource(muonDirectory, outputDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+    const { logger, warnings } = createCapturingLogger();
+
+    const server = await startServer(
+      root,
+      {
+        muonPath: muonDirectory,
+        cefPath: cefDirectory,
+        stagePath: undefined,
+        enableDebugger: undefined,
+        open: undefined,
+      },
+      undefined,
+      logger,
+    );
+    await wait(() => existsSync(join(outputDirectory, "ready")));
+
+    const argumentsText = await readFile(
+      join(outputDirectory, "args.txt"),
+      "utf8",
+    );
+    const overrideConfigPath = argumentsText.trim().split("\n").at(-1)!;
+    await access(overrideConfigPath);
+    const timeout = new AbortController();
+    try {
+      await Promise.race([
+        server.close(),
+        (async () => {
+          await delay(5000, timeout.signal);
+          throw new Error(
+            "Vite server close did not finish after stopping muon.",
+          );
+        })(),
+      ]);
+    } finally {
+      timeout.abort();
+    }
+    await expect(access(dirname(overrideConfigPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it("reports a non-zero muon exit with its trailing diagnostic and fails the default CLI exit", async () => {
+    const root = await createTemporaryDirectory("muon-vite-failure-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeFailingMuonSource(muonDirectory, "exit 23");
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+    const { logger, warnings } = createCapturingLogger();
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      const server = await startServer(
+        root,
+        {
+          muonPath: muonDirectory,
+          cefPath: cefDirectory,
+          stagePath: undefined,
+          enableDebugger: undefined,
+          open: undefined,
+        },
+        undefined,
+        logger,
+      );
+      await wait(() => server.httpServer?.listening === false);
+
+      const diagnostic = warnings.join("\n");
+      expect(diagnostic).toContain("muon runtime failed:");
+      expect(diagnostic).toContain("exit code 23");
+      expect(diagnostic).toContain("retained stdout diagnostic: exit 23");
+      expect(diagnostic).toContain("日本語の診断");
+      expect(diagnostic).toContain("retained diagnostic: exit 23");
+      expect(diagnostic).not.toContain("discarded diagnostic");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it("returns a non-zero Vite CLI status for a failed muon runtime", async () => {
+    const root = await createTemporaryDirectory("muon-vite-cli-failure-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeFailingMuonSource(muonDirectory, "exit 23");
+    const cacheDirectory = await createTemporaryDirectory("muon-vite-cache-");
+    const viteModuleUrl = pathToFileURL(resolve("dist", "vite.mjs")).href;
+    await writeFile(
+      join(root, "vite.config.mjs"),
+      `import muon from ${JSON.stringify(viteModuleUrl)};
+export default {
+  plugins: [muon(${JSON.stringify({
+    muonPath: muonDirectory,
+    cefPath: cefDirectory,
+    enableDebugger: false,
+  })})],
+};
+`,
+    );
+    const previousCacheDirectory = process.env.MUON_CACHE_DIR;
+    process.env.MUON_CACHE_DIR = cacheDirectory;
+
+    try {
+      const result = await runViteCli(root, ["--config", "vite.config.mjs"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "muon runtime failed:",
+      );
+      expect(`${result.stdout}\n${result.stderr}`).toContain("exit code 23");
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "retained diagnostic: exit 23",
+      );
+    } finally {
+      if (previousCacheDirectory === undefined) {
+        delete process.env.MUON_CACHE_DIR;
+      } else {
+        process.env.MUON_CACHE_DIR = previousCacheDirectory;
+      }
+    }
+  });
+
+  it("reports a muon launch failure and closes the default Vite server", async () => {
+    const root = await createTemporaryDirectory("muon-vite-launch-failure-");
+    const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+    const cefDirectory = await writeFakeCefDirectory();
+    await writeBasicViteProject(root);
+    await writeProjectMuonConfig(root);
+    await writeFakeUnlaunchableMuonSource(muonDirectory);
+    process.env.MUON_CACHE_DIR =
+      await createTemporaryDirectory("muon-vite-cache-");
+    const { logger, warnings } = createCapturingLogger();
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      const server = await startServer(
+        root,
+        {
+          muonPath: muonDirectory,
+          cefPath: cefDirectory,
+          stagePath: undefined,
+          enableDebugger: undefined,
+          open: undefined,
+        },
+        undefined,
+        logger,
+      );
+      await wait(() => server.httpServer?.listening === false);
+
+      expect(warnings.join("\n")).toContain("muon runtime failed:");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports a signal-terminated muon process without stopping Vite when exitWithServer is false",
+    async () => {
+      const root = await createTemporaryDirectory("muon-vite-signal-");
+      const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
+      const cefDirectory = await writeFakeCefDirectory();
+      await writeBasicViteProject(root);
+      await writeProjectMuonConfig(root);
+      await writeFakeFailingMuonSource(muonDirectory, "kill -TRAP $$");
+      process.env.MUON_CACHE_DIR =
+        await createTemporaryDirectory("muon-vite-cache-");
+      const { logger, warnings } = createCapturingLogger();
+      const originalExitCode = process.exitCode;
+      process.exitCode = undefined;
+
+      try {
+        const server = await startServer(
+          root,
+          {
+            muonPath: muonDirectory,
+            cefPath: cefDirectory,
+            stagePath: undefined,
+            enableDebugger: undefined,
+            open: undefined,
+            exitWithServer: false,
+          },
+          undefined,
+          logger,
+        );
+        await wait(() => warnings.length > 0);
+
+        expect(warnings.join("\n")).toContain("signal SIGTRAP");
+        expect(warnings.join("\n")).toContain(
+          "retained diagnostic: kill -TRAP $$",
+        );
+        expect(server.httpServer?.listening).toBe(true);
+        expect(process.exitCode).toBeUndefined();
+        await server.close();
+      } finally {
+        process.exitCode = originalExitCode;
+      }
+    },
+  );
+
   it("refreshes the generated Vite override when muon requests recycle", async () => {
     const root = await createTemporaryDirectory("muon-vite-recycle-refresh-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
@@ -4561,6 +4813,7 @@ require("node:fs").writeFileSync(${JSON.stringify(capturedPath)}, JSON.stringify
             GDK_PIXBUF_MODULE_FILE: "/host/gdk-pixbuf-loaders.cache",
             MUON_LINUX_MODULE_ROOT: "/host/linux",
             LD_LIBRARY_PATH: libraryPath,
+            XDG_DATA_DIRS: libraryPath,
             GTK_IM_MODULE: "ibus",
             MUON_TEST_CUSTOM_ENV: "preserved",
           };
@@ -4627,26 +4880,8 @@ require("node:fs").writeFileSync(${JSON.stringify(capturedPath)}, JSON.stringify
               environment: NodeJS.ProcessEnv;
               runtime: string;
             };
-            expect(captured.environment).toMatchObject({
-              ...inherited,
-              ...(bundled
-                ? {
-                    GTK_EXE_PREFIX: join(captured.runtime, "linux"),
-                    GTK_PATH: join(captured.runtime, "linux/lib/gtk-3.0"),
-                    GTK_IM_MODULE_FILE: join(
-                      captured.runtime,
-                      "linux/gtk-immodules.cache",
-                    ),
-                    GDK_PIXBUF_MODULE_FILE: join(
-                      captured.runtime,
-                      "linux/gdk-pixbuf-loaders.cache",
-                    ),
-                    MUON_LINUX_MODULE_ROOT: join(captured.runtime, "linux"),
-                    LD_LIBRARY_PATH:
-                      captured.runtime + (libraryPath ? `:${libraryPath}` : ""),
-                  }
-                : {}),
-            });
+            for (const [key, value] of Object.entries(inherited))
+              expect(captured.environment[key]).toBe(value);
             // Preparing a child must not redirect modules in the parent Vite/Node process.
             for (const [key, value] of Object.entries(inherited)) {
               expect(process.env[key]).toBe(value);

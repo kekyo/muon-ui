@@ -8,6 +8,7 @@ import { constants, writeFileSync } from "node:fs";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 import { parse } from "json5";
@@ -15,7 +16,6 @@ import type { ViteDevServer } from "vite";
 
 import { ensureMuonGitignoreEntry } from "../common/gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
-import { createMuonRuntimeEnvironment } from "./runtime-environment.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import type { MuonVitePluginOptions } from "../common/vite.js";
 import {
@@ -116,6 +116,53 @@ const moduleDirectory =
     : dirname(fileURLToPath(import.meta.url));
 const defaultProjectConfigFileNames = ["muon.json5", "muon.jsonc", "muon.json"];
 const muonRecycleExitCode = 88;
+const muonDiagnosticLimit = 64 * 1024;
+
+interface MuonProcessResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  diagnostic: string;
+  error: Error | undefined;
+}
+
+const appendDiagnostic = (
+  diagnostic: Buffer<ArrayBufferLike>,
+  chunk: Buffer<ArrayBufferLike>,
+): Buffer<ArrayBufferLike> => {
+  if (chunk.byteLength >= muonDiagnosticLimit) {
+    return Buffer.from(chunk.subarray(chunk.byteLength - muonDiagnosticLimit));
+  }
+  const retainedLength = Math.max(0, muonDiagnosticLimit - chunk.byteLength);
+  return Buffer.concat([
+    diagnostic.subarray(Math.max(0, diagnostic.byteLength - retainedLength)),
+    chunk,
+  ]);
+};
+
+const decodeTrailingUtf8 = (value: Buffer<ArrayBufferLike>): string => {
+  let start = 0;
+  while (start < value.byteLength && (value[start]! & 0xc0) === 0x80) {
+    start += 1;
+  }
+  return value.subarray(start).toString("utf8");
+};
+
+const getMuonExitDescription = ({ code, signal }: MuonProcessResult): string =>
+  signal === null ? `exit code ${code ?? 1}` : `signal ${signal}`;
+
+const reportMuonFailure = (
+  server: ViteDevServer,
+  executablePath: string,
+  result: MuonProcessResult,
+): void => {
+  const diagnostic = result.diagnostic.trim();
+  const error = result.error === undefined ? "" : `: ${result.error.message}`;
+  server.config.logger.warn(
+    `muon runtime failed: ${executablePath}: ${getMuonExitDescription(result)}${error}${
+      diagnostic === "" ? "" : `\n${diagnostic}`
+    }`,
+  );
+};
 
 /**
  * Resolves the muon-core runtime directory used by the Vite plugin.
@@ -184,20 +231,6 @@ fi
 MUON_CONFIG_ARGS+=("-c" "$MUON_OVERRIDE_CONFIG")
 
 cd "$MUON_EXECUTABLE_DIRECTORY"
-${
-  // Keep direct shell launches aligned with the distribution launcher's modules.
-  platform === "linux"
-    ? `if [[ -d "$MUON_EXECUTABLE_DIRECTORY/linux" ]]; then
-  export GTK_EXE_PREFIX="$MUON_EXECUTABLE_DIRECTORY/linux"
-  export GTK_PATH="$MUON_EXECUTABLE_DIRECTORY/linux/lib/gtk-3.0"
-  export GTK_IM_MODULE_FILE="$MUON_EXECUTABLE_DIRECTORY/linux/gtk-immodules.cache"
-  export GDK_PIXBUF_MODULE_FILE="$MUON_EXECUTABLE_DIRECTORY/linux/gdk-pixbuf-loaders.cache"
-  export MUON_LINUX_MODULE_ROOT="$MUON_EXECUTABLE_DIRECTORY/linux"
-  export LD_LIBRARY_PATH="$MUON_EXECUTABLE_DIRECTORY\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-fi
-`
-    : ""
-}
 while true; do
   set +e
   "$MUON_EXECUTABLE" "\${MUON_CONFIG_ARGS[@]}"
@@ -433,19 +466,47 @@ const waitForMuonProcess = async (
   configArguments: readonly string[],
   environment: NodeJS.ProcessEnv,
   setCurrentChild: (child: ChildProcess | undefined) => void,
-): Promise<number> => {
+): Promise<MuonProcessResult> => {
   const child = spawn(muonExecutablePath, [...configArguments], {
     cwd: dirname(muonExecutablePath),
     env: environment,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: false,
   });
   setCurrentChild(child);
   try {
-    return await new Promise<number>((resolvePromise, reject) => {
-      child.once("error", reject);
-      child.once("close", (code) => {
-        resolvePromise(code ?? 1);
+    return await new Promise<MuonProcessResult>((resolvePromise) => {
+      let diagnostic: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+      let error: Error | undefined = undefined;
+      const stdoutDecoder = new StringDecoder("utf8");
+      const stderrDecoder = new StringDecoder("utf8");
+      const append = (source: "stdout" | "stderr", text: string): void => {
+        if (text === "") {
+          return;
+        }
+        diagnostic = appendDiagnostic(
+          diagnostic,
+          Buffer.from(`[${source}] ${text}`),
+        );
+      };
+      child.stdout?.on("data", (chunk: Buffer) => {
+        append("stdout", stdoutDecoder.write(chunk));
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        append("stderr", stderrDecoder.write(chunk));
+      });
+      child.once("error", (reason: Error) => {
+        error = reason;
+      });
+      child.once("close", (code, signal) => {
+        append("stdout", stdoutDecoder.end());
+        append("stderr", stderrDecoder.end());
+        resolvePromise({
+          code,
+          signal,
+          diagnostic: decodeTrailingUtf8(diagnostic),
+          error,
+        });
       });
     });
   } finally {
@@ -492,25 +553,12 @@ export const startMuonViteBrowserBridge = async ({
     currentChild = child;
   };
 
-  const closeServerAfterMuonExit = (): void => {
-    if (
-      closing ||
-      serverCloseRequested ||
-      pluginOptions.exitWithServer === false
-    ) {
-      return;
-    }
-    serverCloseRequested = true;
-    void server.close().catch((error: unknown) => {
-      server.config.logger.warn(
-        `muon could not close the Vite server after muon exited: ${getErrorMessage(error)}`,
-      );
-    });
-  };
-
   const runSupervisor = async (): Promise<void> => {
-    let exitCode = muonRecycleExitCode;
-    while (!closing && exitCode === muonRecycleExitCode) {
+    let result: MuonProcessResult | undefined = undefined;
+    while (
+      !closing &&
+      (result === undefined || result.code === muonRecycleExitCode)
+    ) {
       try {
         const projectConfig = await resolveProjectConfig(server);
         const nodeProject = await resolveMuonNodeProject(
@@ -560,27 +608,43 @@ export const startMuonViteBrowserBridge = async ({
         if (!configWritten || closing) {
           return;
         }
-        exitCode = await waitForMuonProcess(
-          getMuonExecutablePath(preparedRuntime.stagePath, platform),
+        const executablePath = getMuonExecutablePath(
+          preparedRuntime.stagePath,
+          platform,
+        );
+        result = await waitForMuonProcess(
+          executablePath,
           createMuonConfigArguments(
             projectConfig.path,
             paths.overrideConfigPath,
           ),
-          createMuonRuntimeEnvironment(
-            preparedRuntime.stagePath,
-            platform,
-            environment,
-          ),
+          environment,
           setCurrentChild,
         );
-        if (!closing && exitCode !== muonRecycleExitCode) {
-          closeServerAfterMuonExit();
+        if (
+          !closing &&
+          (result.error !== undefined ||
+            result.signal !== null ||
+            result.code === null ||
+            (result.code !== 0 && result.code !== muonRecycleExitCode))
+        ) {
+          reportMuonFailure(server, executablePath, result);
+          if (pluginOptions.exitWithServer !== false) {
+            if (process.exitCode === undefined || process.exitCode === 0) {
+              process.exitCode = 1;
+            }
+          }
         }
       } catch (error) {
         if (!closing) {
           server.config.logger.warn(
             `muon startup failed: ${getErrorMessage(error)}`,
           );
+          if (pluginOptions.exitWithServer !== false) {
+            if (process.exitCode === undefined || process.exitCode === 0) {
+              process.exitCode = 1;
+            }
+          }
         }
         return;
       }
@@ -609,10 +673,32 @@ export const startMuonViteBrowserBridge = async ({
       await cleanup();
     }
   };
-  server.httpServer.once("close", () => {
-    void cleanup();
+  server.httpServer.once("close", async () => {
+    try {
+      await cleanup();
+    } catch (error) {
+      server.config.logger.warn(
+        `muon could not clean up after the Vite server closed: ${getErrorMessage(error)}`,
+      );
+    }
   });
-  server.httpServer.once("listening", () => {
+  server.httpServer.once("listening", async () => {
     supervisorPromise = runSupervisor();
+    await supervisorPromise;
+    if (
+      closing ||
+      serverCloseRequested ||
+      pluginOptions.exitWithServer === false
+    ) {
+      return;
+    }
+    serverCloseRequested = true;
+    try {
+      await server.close();
+    } catch (error) {
+      server.config.logger.warn(
+        `muon could not close the Vite server after muon exited: ${getErrorMessage(error)}`,
+      );
+    }
   });
 };

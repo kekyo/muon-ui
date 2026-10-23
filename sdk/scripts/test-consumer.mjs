@@ -39,17 +39,19 @@ const run = async (command, args, cwd = root, env = process.env) => {
 const pack = async (directory, ignoreScripts) =>
   join(
     root,
-    JSON.parse(
-      await run(
-        'npm',
-        [
-          'pack',
-          '--json',
-          ...(ignoreScripts ? ['--ignore-scripts'] : []),
-          '--pack-destination',
-          root,
-        ],
-        directory
+    Object.values(
+      JSON.parse(
+        await run(
+          'npm',
+          [
+            'pack',
+            '--json',
+            ...(ignoreScripts ? ['--ignore-scripts'] : []),
+            '--pack-destination',
+            root,
+          ],
+          directory
+        )
       )
     )[0].filename
   );

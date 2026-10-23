@@ -83,17 +83,19 @@ const connectNetworkProbe = async (
 
 /**
  * Discovers the route to the machine already selected by agent-rover.
- * @param agent Connected Windows agent with Node.js on PATH.
+ * @param agent Connected Windows agent.
+ * @param nodePath Node.js executable for the temporary probe.
  * @returns Addresses for CDP and HTTP test fixtures.
  * @remarks Uses a temporary listener and always releases its managed process.
  * No agent connection settings or credentials are read by this helper.
  */
 export const discoverWindowsTestNetwork = async (
   agent: RemoteAgent,
+  nodePath: string,
 ): Promise<WindowsTestNetwork> => {
   const nonce = randomUUID();
   const probe = await agent.processes.launchManaged({
-    path: "node.exe",
+    path: nodePath,
     arguments: ["-e", networkProbeScript, nonce],
     captureStdout: true,
     captureStderr: true,

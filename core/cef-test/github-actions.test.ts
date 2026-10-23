@@ -70,7 +70,9 @@ describe("GitHub Actions CI", () => {
     expect(Object.keys(jobs).sort()).toEqual(["build-test", "codeql"]);
     for (const [jobName, value] of Object.entries(jobs)) {
       const job = requireMapping(value, `Job ${jobName}`);
-      expect(job["runs-on"]).toBe("ubuntu-latest");
+      expect(job["runs-on"]).toBe(
+        jobName === "build-test" ? "ubuntu-24.04" : "ubuntu-latest",
+      );
     }
 
     const buildTestJob = requireMapping(jobs["build-test"], "Build/test job");

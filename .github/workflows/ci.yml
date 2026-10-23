@@ -18,7 +18,7 @@ permissions:
 jobs:
   build-test:
     name: Build and test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
@@ -80,6 +80,8 @@ jobs:
             file \
             ffmpeg \
             g++-mingw-w64 \
+            gnome-settings-daemon-common \
+            gsettings-desktop-schemas \
             git \
             libasound2-dev \
             libdrm-dev \
@@ -92,6 +94,7 @@ jobs:
             wine \
             wine32:i386 \
             wine64 \
+            weston \
             x11-utils \
             xdotool \
             xvfb
@@ -168,6 +171,16 @@ jobs:
           bash prereq.sh --arch amd64 --jobs 2
           bash build_package.sh --target dist --arch amd64 --jobs 2
           npm run verify:package-runtime --workspace muon-ui -- linux-amd64 windows-i686 windows-amd64
+          mkdir -p .run/linux-package-ci
+          npm pack --workspace muon-ui --ignore-scripts --pack-destination .run/linux-package-ci
+          archives=("${GITHUB_WORKSPACE}"/.run/linux-package-ci/muon-ui-*.tgz)
+          test "${#archives[@]}" -eq 1
+          MUON_TEST_LINUX_RUNTIME="${GITHUB_WORKSPACE}/ui/dist/runtime/linux-amd64" \
+            xvfb-run -a node scripts/run-wayland-command.mjs weston \
+            npm exec --workspace muon-core-tester -- vitest run linux-gtk-runtime.test.ts --reporter=default
+          MUON_PACKAGED_LINUX_TARBALL="${archives[0]}" \
+            xvfb-run -a node scripts/run-wayland-command.mjs weston \
+            npm exec --workspace muon-core-tester -- vitest run packaged-linux-startup.test.ts --reporter=default
           node sdk/scripts/stage-package.mjs linux-amd64 android-arm64-v8a android-x86_64
           node sdk/scripts/verify-package.mjs linux-amd64 windows-i686 windows-amd64 android-arm64-v8a android-x86_64
 

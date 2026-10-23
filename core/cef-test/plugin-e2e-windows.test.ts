@@ -51,7 +51,10 @@ if (windowsAgent !== undefined) {
 
 if (windowsAgent !== undefined) {
   try {
-    const network = await discoverWindowsTestNetwork(windowsAgent);
+    const network = await discoverWindowsTestNetwork(
+      windowsAgent,
+      windowsE2eEnvironment.nodePath,
+    );
     const runtime = await stageWindowsRuntime(
       windowsAgent,
       windowsE2eEnvironment,

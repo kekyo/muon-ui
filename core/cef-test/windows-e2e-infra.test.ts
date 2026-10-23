@@ -112,6 +112,7 @@ describe("Windows e2e environment", () => {
     expect(resolveWindowsE2eEnvironment({})).toEqual({
       section: "win11",
       httpHost: undefined,
+      nodePath: "node.exe",
       workDir: String.raw`C:\muon-e2e`,
     });
   });
@@ -121,11 +122,13 @@ describe("Windows e2e environment", () => {
       resolveWindowsE2eEnvironment({
         MUON_E2E_AGENT_SECTION: " vm ",
         MUON_E2E_REMOTE_HTTP_HOST: "10.10.0.1",
+        MUON_E2E_REMOTE_NODE_PATH: String.raw` C:\test\node.exe `,
         MUON_E2E_REMOTE_WORK_DIR: String.raw`D:\muon-test`,
       }),
     ).toEqual({
       section: "vm",
       httpHost: "10.10.0.1",
+      nodePath: String.raw`C:\test\node.exe`,
       workDir: String.raw`D:\muon-test`,
     });
   });
@@ -231,6 +234,7 @@ describe("Windows e2e staging", () => {
           {
             section: "win11",
             httpHost: "linux.test",
+            nodePath: "node.exe",
             workDir: String.raw`C:\muon-e2e`,
           },
           {

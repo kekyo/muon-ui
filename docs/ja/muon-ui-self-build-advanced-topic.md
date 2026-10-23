@@ -91,7 +91,7 @@ npm run test:windows-nsis-e2e --workspace muon-ui
 
 設定ファイルがない場合など、SDKが接続を確立できなかった場合のみ、理由を表示して実機テストをスキップします。接続後のビルド・転送・検証のエラーはテストの失敗です。ローカルビルド中と各スイートの終了時には、実機への接続を解放します。
 
-実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
+実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。実機のPATHにNode.jsがない場合は、テスト補助プロセスに使う実行ファイルを`MUON_E2E_REMOTE_NODE_PATH`で指定できます。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
 
 ## パッケージ生成
 

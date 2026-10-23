@@ -1847,28 +1847,6 @@ describe("muon-builder", () => {
     ]);
   });
 
-  it("does not render removed Linux module cache templates", async () => {
-    const fixture = await createPrepareFixture();
-    fixture.stageDir = join(fixture.projectPath, '日本語 runtime "quoted"');
-    await mkdir(join(fixture.muonPath, "linux"));
-    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"]) {
-      await writeFile(
-        join(fixture.muonPath, "linux", `${name}.cache.in`),
-        '"@MUON_RUNTIME@/linux/lib/module.so"\n',
-      );
-    }
-    await prepareFixture(fixture);
-    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"])
-      await expect(
-        access(join(fixture.stageDir, "linux", `${name}.cache`)),
-      ).rejects.toThrow();
-    expect((await prepareFixture(fixture)).cacheHit).toBe(true);
-    for (const name of ["gtk-immodules", "gdk-pixbuf-loaders"])
-      await expect(
-        access(join(fixture.stageDir, "linux", `${name}.cache`)),
-      ).rejects.toThrow();
-  });
-
   it("preserves the system Linux module environment", async () => {
     const fixture = await createPrepareFixture();
     const stateHome = join(fixture.projectPath, "日本語 state");

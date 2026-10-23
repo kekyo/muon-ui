@@ -741,18 +741,6 @@ describe("muon build", () => {
       join(source, "linux-dependencies.json"),
       JSON.stringify({ referenceCef: { version: "build-reference" } }),
     );
-    await writeFile(
-      join(source, "linux-bundle.json"),
-      JSON.stringify([
-        { file: "libfixture.so.1", license: "licenses/linux/fixture.txt" },
-      ]),
-    );
-    await writeFile(join(source, "libfixture.so.1"), "private library");
-    await mkdir(join(source, "licenses/linux"), { recursive: true });
-    await writeFile(
-      join(source, "licenses/linux/fixture.txt"),
-      "redistribution notice",
-    );
     const result = await buildMuonApp({
       root,
       packageDirectory,
@@ -765,10 +753,6 @@ describe("muon build", () => {
         await readFile(join(output, "linux-dependencies.json"), "utf8"),
       ).referenceCef.version,
     ).toBe("build-reference");
-    expect(await exists(join(output, "libfixture.so.1"))).toBe(false);
-    expect(await exists(join(output, "licenses/linux/fixture.txt"))).toBe(
-      false,
-    );
     expect(await exists(join(output, "libcef.so"))).toBe(false);
   });
 

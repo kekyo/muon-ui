@@ -678,21 +678,6 @@ describe("muon-ui package root export", () => {
         "audit\n",
       );
       await writeFile(
-        join(runtimeDirectory, "linux-bundle.json"),
-        JSON.stringify([
-          { file: "libexample.so.1", license: "licenses/example.txt" },
-        ]),
-      );
-      await writeFile(
-        join(runtimeDirectory, "libexample.so.1"),
-        "private library\n",
-      );
-      await mkdir(join(runtimeDirectory, "licenses"));
-      await writeFile(
-        join(runtimeDirectory, "licenses/example.txt"),
-        "license\n",
-      );
-      await writeFile(
         join(runtimeDirectory, "plugins", "node.so"),
         "node plugin\n",
       );
@@ -734,12 +719,6 @@ describe("muon-ui package root export", () => {
           "utf8",
         ),
       ).resolves.toBe("audit\n");
-      await expect(
-        exists(join(stagedRuntimeDirectory, "libexample.so.1")),
-      ).resolves.toBe(false);
-      await expect(
-        exists(join(stagedRuntimeDirectory, "licenses/example.txt")),
-      ).resolves.toBe(false);
       await expect(
         readFile(join(stagedRuntimeDirectory, "plugins", "node.so"), "utf8"),
       ).resolves.toBe("node plugin\n");

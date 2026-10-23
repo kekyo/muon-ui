@@ -513,7 +513,7 @@ const getDryRunPackageFiles = async (): Promise<string[]> => {
       encoding: "utf8",
     },
   );
-  const [pack] = JSON.parse(stdout) as [NpmPackEntry];
+  const [pack] = Object.values(JSON.parse(stdout)) as [NpmPackEntry];
   return pack.files.map((file) => file.path).sort();
 };
 
@@ -622,6 +622,79 @@ describe("muon-ui package root export", () => {
 
     expect(rootHelp.stdout).toContain("Usage: ./build_package.sh");
     expect(workspaceHelp.stdout).toContain("Usage: ./build_package.sh");
+  });
+
+  it.each([
+    { packOutput: [{ files: [{ path: "muon.d.ts" }] }] },
+    { packOutput: { "muon-ui": { files: [{ path: "muon.d.ts" }] } } },
+  ])(
+    "reports the missing file from npm pack output %j",
+    async ({ packOutput }) => {
+      const root = await createFakePackageBuildRoot();
+      const binDirectory = join(root, "bin");
+      await mkdir(binDirectory);
+      await writeFile(join(root, "pack.json"), JSON.stringify(packOutput));
+      await writeExecutableScript(
+        join(binDirectory, "npm"),
+        `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "run" ]]; then
+  exit 0
+fi
+if [[ "$1" == "pack" ]]; then
+  cat pack.json
+  exit 0
+fi
+printf 'Unexpected npm invocation: %s\\n' "$*" >&2
+exit 99
+`,
+      );
+
+      await expect(
+        execFileAsync("bash", ["build_package.sh", "--target", "npm"], {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+          },
+        }),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: "npm pack dry run is missing required file: vite.d.ts\n",
+      });
+    },
+  );
+
+  it("preserves npm pack failures without reporting missing package files", async () => {
+    const root = await createFakePackageBuildRoot();
+    const binDirectory = join(root, "bin");
+    await mkdir(binDirectory);
+    await writeExecutableScript(
+      join(binDirectory, "npm"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "run" ]]; then
+  exit 0
+fi
+if [[ "$1" == "pack" ]]; then
+  printf '[{"files": []}]\\n'
+  printf 'npm pack failed\\n' >&2
+  exit 42
+fi
+printf 'Unexpected npm invocation: %s\\n' "$*" >&2
+exit 99
+`,
+    );
+
+    await expect(
+      execFileAsync("bash", ["build_package.sh", "--target", "npm"], {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+        },
+      }),
+    ).rejects.toMatchObject({ code: 42, stderr: "npm pack failed\n" });
   });
 
   it("stages Linux runtime helpers and the Node plugin without bundling a Node runtime", async () => {

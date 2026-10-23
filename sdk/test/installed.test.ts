@@ -9,17 +9,19 @@ it('authors and packs a plugin using only an installed SDK tarball outside the r
   const execute = promisify(execFile);
   const root = await mkdtemp(join(tmpdir(), 'muon-installed-sdk-'));
   try {
-    const packed = JSON.parse(
-      (
-        await execute(
-          'npm',
-          ['pack', '--ignore-scripts', '--json', '--pack-destination', root],
-          {
-            cwd: resolve('.'),
-          }
-        )
-      ).stdout
-    );
+    const [packed] = Object.values(
+      JSON.parse(
+        (
+          await execute(
+            'npm',
+            ['pack', '--ignore-scripts', '--json', '--pack-destination', root],
+            {
+              cwd: resolve('.'),
+            }
+          )
+        ).stdout
+      )
+    ) as [{ filename: string }];
     const application = join(root, 'application');
     await mkdir(application);
     await writeFile(
@@ -33,7 +35,7 @@ it('authors and packs a plugin using only an installed SDK tarball outside the r
         '--ignore-scripts',
         '--no-audit',
         '--no-fund',
-        join(root, packed[0].filename),
+        join(root, packed.filename),
       ],
       { cwd: application }
     );
@@ -67,13 +69,15 @@ it('authors and packs a plugin using only an installed SDK tarball outside the r
         files: ['muon-plugin.json', 'native', 'types'],
       })
     );
-    const plugin = JSON.parse(
-      (
-        await execute('npm', ['pack', '--json', '--pack-destination', root], {
-          cwd: directory,
-        })
-      ).stdout
-    );
+    const [plugin] = Object.values(
+      JSON.parse(
+        (
+          await execute('npm', ['pack', '--json', '--pack-destination', root], {
+            cwd: directory,
+          })
+        ).stdout
+      )
+    ) as [{ filename: string }];
     const consumer = join(root, 'consumer');
     await mkdir(consumer);
     await writeFile(
@@ -87,7 +91,7 @@ it('authors and packs a plugin using only an installed SDK tarball outside the r
         '--ignore-scripts',
         '--no-audit',
         '--no-fund',
-        join(root, plugin[0].filename),
+        join(root, plugin.filename),
       ],
       { cwd: consumer }
     );

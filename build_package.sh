@@ -453,7 +453,7 @@ build_dist() {
 
 get_dry_run_files() {
   npm pack --workspace muon-ui --dry-run --ignore-scripts --json |
-    node -e 'let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const packs = JSON.parse(input); for (const file of packs[0].files) console.log(file.path); });'
+    node -e 'let input = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", chunk => input += chunk); process.stdin.on("end", () => { const packs = Object.values(JSON.parse(input)); for (const file of packs[0].files) console.log(file.path); });'
 }
 
 get_tarball_files() {
@@ -570,7 +570,9 @@ verify_package_file_list() {
 }
 
 verify_pack_file_list() {
-  verify_package_file_list "npm pack dry run" "$(get_dry_run_files)"
+  local files
+  files="$(get_dry_run_files)"
+  verify_package_file_list "npm pack dry run" "${files}"
 }
 
 verify_tarball_file_list() {

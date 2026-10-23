@@ -724,7 +724,7 @@ afterEach(async () => {
 });
 
 describe("muon build", () => {
-  it("carries the Linux baseline libraries, notices and dependency report into the app", async () => {
+  it("carries the Linux system dependency report into the app", async () => {
     const root = await createTemporaryDirectory("muon-build-baseline-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     const source = join(packageDirectory, "runtime/linux-amd64");
@@ -765,12 +765,10 @@ describe("muon build", () => {
         await readFile(join(output, "linux-dependencies.json"), "utf8"),
       ).referenceCef.version,
     ).toBe("build-reference");
-    expect(await readFile(join(output, "libfixture.so.1"), "utf8")).toBe(
-      "private library",
+    expect(await exists(join(output, "libfixture.so.1"))).toBe(false);
+    expect(await exists(join(output, "licenses/linux/fixture.txt"))).toBe(
+      false,
     );
-    expect(
-      await readFile(join(output, "licenses/linux/fixture.txt"), "utf8"),
-    ).toBe("redistribution notice");
     expect(await exists(join(output, "libcef.so"))).toBe(false);
   });
 

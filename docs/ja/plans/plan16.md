@@ -48,4 +48,18 @@ muon、CEF、cardioなどアプリの実行に必要な部品は維持する。�
 
 ## 実施結果
 
-未実施。各段階の結果と制約をここへ追記する。
+### 段階1
+
+削除確認用テストは旧amd64配布物で2件とも失敗した。同梱グループの69ファイルが検出され、`ldd`も配布ディレクトリー内のGTKを示した。起動環境を継承するテストも、変更前のViteで12件、AppImageで1件の失敗を確認してから修正した。
+
+GTKのビルド・収集・配置と専用の起動環境設定を削除した。Debian 12の前提イメージは3対象ともビルド済み。関連するUIの195件、Viteの起動環境16件、AppImageの環境継承1件は成功した。UIテストは配布ビルドの途中で消去されたホスト用ツールを必要とするため、ツールを配置し直してから失敗した2ファイル84件を再実行した。
+
+amd64の配布ビルドでは、GCC 12が既存の`ServerEnvelope`の`std::vector::insert`に`-Wstringop-overread`を報告した。診断対象は4バイトのヘッダーを持つ配列の再配置部分であり、JSONや本文の入力範囲に不正は見つからなかった。段階1のビルド基準変更に必要な対応として、必要容量を先に確保してからヘッダーとデータを追加する形へ変更した。通信形式と長さの扱いは維持し、警告を無効化する設定は追加していない。再ビルドと既存の公開サーバーテストで確認する。[GCCの警告オプション](https://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html)と、ビルド用コンテナー内の`/usr/include/c++/12/bits/stl_vector.h`にある`reserve`のAPIコメントを確認した。
+
+再ビルドでamd64のLinux部分とWindows 2対象は成功し、`ServerEnvelope`の警告は解消した。最後のAndroid処理はJDK環境変数の指定漏れで停止したため、既存のJDK・Android SDKを指定してその処理とSDK・配布物の配置を再実行し、成功した。
+
+依存解析にはCEFの`libpthread.so.0`と`libdl.so.2`が未使用という警告が2件残る。ビルド環境で両ファイルの提供元が`libc6`であることを確認し、生成された`Depends`にも別パッケージの余分な要求はない。これは配布済みCEFバイナリーのリンク情報に対する診断なので、外部バイナリーを加工せず、依存レポートに診断を保持する。[dpkg-shlibdepsの診断説明](https://manpages.debian.org/bookworm/dpkg-dev/dpkg-shlibdeps.1.en.html#Warnings)
+
+新しいamd64配布物で、削除確認2件とシステムGTKの機能確認1件、公開HTTPサーバー2件が成功した。`muon-core`と`libmuon-ui.so`のGTK・GDK・GLib・GIO・GObjectは、いずれもホストの`/lib/x86_64-linux-gnu/`へ解決された。ファイル選択、SVGの画素、システムibusモジュールの読み込みも確認した。builderのテスト全体も成功し、段階1の完了条件を満たした。
+
+証跡は`/tmp/muon-plan16-evidence/`に保存している。主要なログは`gtk-removal-red.log`、`build-amd64-recheck.log`、`stage-amd64-recovery.log`、`amd64-runtime-tests.log`、`builder-tests.log`である。公開起動経路、全配布形式、全体テストは引き続き実施する。

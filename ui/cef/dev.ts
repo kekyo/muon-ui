@@ -28,7 +28,6 @@ import {
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import { ensureMuonGitignoreEntry } from "../common/gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
-import { createMuonRuntimeEnvironment } from "./runtime-environment.js";
 import {
   getMuonExecutablePath,
   resolveMuonRuntimePath,
@@ -836,11 +835,7 @@ const runMuonDevOnce = async (
   const exitCode = await runMuonExecutable(
     muonExecutablePath,
     configPaths,
-    createMuonRuntimeEnvironment(
-      preparedRuntime.stagePath,
-      platform,
-      environment,
-    ),
+    environment,
   );
 
   return {

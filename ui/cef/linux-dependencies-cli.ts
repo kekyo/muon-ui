@@ -3,14 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import {
-  copyFile,
-  mkdir,
-  readFile,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 import { Command } from "commander";
@@ -18,26 +11,9 @@ import { runScriptOnceToText, type FunCityLogEntry } from "funcity";
 
 import {
   createLinuxDependencyManifest,
-  collectLinuxElfFiles,
   readLinuxReferenceCef,
 } from "./linux-dependency-manifest.js";
-import {
-  auditLinuxDependencies,
-  type LinuxDependencyTarget,
-} from "./linux-dependencies.js";
-import {
-  selectLinuxBundledLibraries,
-  stageLinuxBundledLibraries,
-} from "./linux-bundle.js";
-import {
-  recordLinuxBundleProvenance,
-  readLinuxBundleProvenance,
-  type LinuxBaselineSource,
-} from "./linux-bundle-provenance.js";
-import {
-  stageLinuxBaselineModules,
-  stageLinuxGtkModules,
-} from "./linux-baseline-modules.js";
+import { type LinuxDependencyTarget } from "./linux-dependencies.js";
 
 interface DependencyCommandOptions {
   target: string;
@@ -47,7 +23,6 @@ interface DependencyCommandOptions {
   native: string | undefined;
   libraryPath: string[];
   output: string;
-  bundleBaseline: string | undefined;
 }
 
 const command = new Command()
@@ -80,10 +55,6 @@ const command = new Command()
   .requiredOption(
     "--output <file>",
     "output JSON manifest; also writes a .txt report",
-  )
-  .option(
-    "--bundle-baseline <file>",
-    "stage the baseline library group and record its source configuration",
   );
 
 try {
@@ -106,129 +77,6 @@ try {
   const libraryPaths = options.libraryPath.length
     ? options.libraryPath
     : [`/usr/lib/${triplet}`, `/lib/${triplet}`, "/usr/lib", "/lib"];
-  if (options.bundleBaseline) {
-    const configuration = JSON.parse(
-      await readFile(options.bundleBaseline, "utf8"),
-    ) as { glib: LinuxBaselineSource; gtk: LinuxBaselineSource };
-    const files: string[] = [];
-    const previousLibraries = await readLinuxBundleProvenance(options.runtime);
-    // Remove previous generated files before resolution, otherwise $ORIGIN
-    // files would mask the original baseline libraries on a repeated build.
-    for (const library of previousLibraries)
-      await rm(join(options.runtime, library.file), { force: true });
-    for (const directory of [cefDirectory, options.runtime, options.native]) {
-      if (directory === undefined) continue;
-      for (const path of await collectLinuxElfFiles(directory)) {
-        files.push(await realpath(path));
-      }
-    }
-    const baselineLib = `/usr/lib/${triplet}`;
-    const modules = await stageLinuxBaselineModules(
-      baselineLib,
-      options.runtime,
-      [
-        {
-          directory: "gdk-pixbuf-2.0",
-          cache: {
-            source: join(baselineLib, "gdk-pixbuf-2.0/2.10.0/loaders.cache"),
-            destination: "linux/gdk-pixbuf-loaders.cache.in",
-            owner: join(baselineLib, "libgdk_pixbuf-2.0.so.0"),
-          },
-        },
-        {
-          directory: "gio/modules",
-          cache: {
-            source: join(baselineLib, "gio/modules/giomodule.cache"),
-            destination: "linux/lib/gio/modules/giomodule.cache",
-            owner: join(baselineLib, "libgio-2.0.so.0"),
-          },
-        },
-      ],
-    );
-    const gtkModules = await stageLinuxGtkModules(
-      configuration.gtk.prefix,
-      baselineLib,
-      options.runtime,
-    );
-    modules.binaries.push(...gtkModules.binaries);
-    modules.files.push(...gtkModules.files);
-    // File/color/emoji chooser settings belong to GTK, not to GNOME's optional
-    // desktop preferences. Ship exactly the schemas compiled by this GTK build.
-    const schemaSource = join(
-      configuration.gtk.prefix,
-      "share/glib-2.0/schemas/gschemas.compiled",
-    );
-    for (const [source, file, owner] of [
-      [
-        schemaSource,
-        "linux/share/glib-2.0/schemas/gschemas.compiled",
-        schemaSource,
-      ],
-      // GdkPixbuf uses GIO's MIME database to recognize even GTK's built-in
-      // PNG icons. mime.cache is generated from this distribution-owned XML.
-      [
-        "/usr/share/mime/mime.cache",
-        "linux/share/mime/mime.cache",
-        "/usr/share/mime/packages/freedesktop.org.xml",
-      ],
-      // This index enables GTK's embedded icons when no desktop theme exists.
-      [
-        "/usr/share/icons/hicolor/index.theme",
-        "linux/share/icons/hicolor/index.theme",
-        "/usr/share/icons/hicolor/index.theme",
-      ],
-    ] as const) {
-      await mkdir(dirname(join(options.runtime, file)), { recursive: true });
-      await copyFile(source, join(options.runtime, file));
-      modules.files.push({ path: owner, file });
-    }
-    files.push(...modules.binaries);
-    const audit = await auditLinuxDependencies({
-      target,
-      files,
-      libraryPaths: [
-        ...new Set([
-          join(configuration.gtk.prefix, "lib"),
-          join(configuration.glib.prefix, "lib"),
-          ...files.map((path) => dirname(path)),
-          ...libraryPaths,
-        ]),
-      ],
-    });
-    const seeds = audit.binaries.flatMap((binary) =>
-      binary.soname &&
-      /^lib(?:glib|gio|gobject|gmodule|gthread)-2\.0\.so\./.test(binary.soname)
-        ? [binary.soname]
-        : [],
-    );
-    const libraries = selectLinuxBundledLibraries(audit, files, {
-      coherent: seeds,
-      independent: audit.binaries.flatMap((binary) =>
-        binary.soname &&
-        (/^libffi\.so\./.test(binary.soname) ||
-          [
-            // These module dependencies are absent or have changed SONAMEs
-            // on newer distributions. libproxy also gained a newer GLib ABI.
-            "libfcitx-utils.so.0",
-            "libFcitx5Utils.so.1",
-            "libproxy.so.1",
-            "libtiff.so.5",
-            "libjpeg.so.8",
-            "libwebp.so.6",
-          ].includes(binary.soname))
-          ? [binary.soname]
-          : [],
-      ),
-    });
-    // CEF's own RUNPATH is $ORIGIN. Its dependencies must live beside libcef.so.
-    await stageLinuxBundledLibraries(libraries, options.runtime);
-    await recordLinuxBundleProvenance(
-      libraries,
-      options.runtime,
-      [configuration.glib, configuration.gtk],
-      modules.files,
-    );
-  }
   const manifest = await createLinuxDependencyManifest({
     target,
     referenceCef: await readLinuxReferenceCef(options.cmakeCache, target),

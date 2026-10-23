@@ -735,11 +735,11 @@ describe("muon-ui package root export", () => {
         ),
       ).resolves.toBe("audit\n");
       await expect(
-        readFile(join(stagedRuntimeDirectory, "libexample.so.1"), "utf8"),
-      ).resolves.toBe("private library\n");
+        exists(join(stagedRuntimeDirectory, "libexample.so.1")),
+      ).resolves.toBe(false);
       await expect(
-        readFile(join(stagedRuntimeDirectory, "licenses/example.txt"), "utf8"),
-      ).resolves.toBe("license\n");
+        exists(join(stagedRuntimeDirectory, "licenses/example.txt")),
+      ).resolves.toBe(false);
       await expect(
         readFile(join(stagedRuntimeDirectory, "plugins", "node.so"), "utf8"),
       ).resolves.toBe("node plugin\n");
@@ -765,7 +765,6 @@ describe("muon-ui package root export", () => {
     const runtime = join(root, "dist/runtime/linux-amd64");
     await mkdir(native, { recursive: true });
     await mkdir(join(runtime, "plugins"), { recursive: true });
-    await mkdir(join(runtime, "licenses"));
     await writeFile(join(root, "dist/native/muon-256.png"), "icon");
     for (const name of [
       "muon-builder",
@@ -791,17 +790,8 @@ describe("muon-ui package root export", () => {
       );
     await expect(verify()).rejects.toThrow("linux-dependencies.json");
     await writeFile(join(runtime, "linux-dependencies.json"), "{}\n");
+    await expect(verify()).rejects.toThrow("linux-dependencies.json.txt");
     await writeFile(join(runtime, "linux-dependencies.json.txt"), "audit\n");
-    await writeFile(
-      join(runtime, "linux-bundle.json"),
-      JSON.stringify([
-        { file: "libexample.so.1", license: "licenses/example.txt" },
-      ]),
-    );
-    await expect(verify()).rejects.toThrow("libexample.so.1");
-    await writeFile(join(runtime, "libexample.so.1"), "private library");
-    await expect(verify()).rejects.toThrow("licenses/example.txt");
-    await writeFile(join(runtime, "licenses/example.txt"), "license");
     await expect(verify()).resolves.toMatchObject({ stderr: "" });
     await writeFile(join(runtime, "libcef.so"), "CEF");
     await expect(verify()).rejects.toThrow("libcef.so");

@@ -229,7 +229,6 @@ const createFakeMuonPackageDist = async (
           debianLibraries: {},
         }),
       );
-      await writeFile(join(runtimeDirectory, "linux-bundle.json"), "[]\n");
     }
     const nodePluginFileName = target.startsWith("windows-")
       ? "node.dll"

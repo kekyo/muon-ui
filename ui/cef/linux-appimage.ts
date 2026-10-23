@@ -52,7 +52,7 @@ export const createLinuxAppDir = async (
   );
   const logs: FunCityLogEntry[] = [];
   const appRun = await runScriptOnceToText(
-    '#!/bin/sh\nset -eu\nappdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)\nruntime="$appdir/usr/lib/muon"\nexport LD_LIBRARY_PATH="$runtime${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\nexec "$runtime"/{{launcher}} "$@"\n',
+    '#!/bin/sh\nset -eu\nappdir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)\nruntime="$appdir/usr/lib/muon"\nexec "$runtime"/{{launcher}} "$@"\n',
     {
       sourceId: "muon-appimage-apprun",
       logs,

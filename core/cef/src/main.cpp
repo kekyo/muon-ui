@@ -107,12 +107,6 @@ NO_STACK_PROTECTOR static int RunMuon(int argc, char* argv[]) {
   // Initialize the dispatcher before CEF can invoke UI-thread callbacks.
   cardio::dispatcher* dispatcher = nullptr;
 #if CARDIO_WITH_GLIB
-  // Register the compatible modules shipped with the runtime before GIO's
-  // first extension lookup. Their cache keeps module loading lazy.
-  if (const auto module_root = std::getenv("MUON_LINUX_MODULE_ROOT")) {
-    const auto modules = std::string(module_root) + "/lib/gio/modules";
-    g_io_modules_scan_all_in_directory(modules.c_str());
-  }
   cardio::dispatcher_group_glib group;
   cardio::dispatcher_host_glib_auto d(group);
   dispatcher = &d;

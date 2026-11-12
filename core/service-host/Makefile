@@ -11,9 +11,9 @@ CXXFLAGS += -std=c++20 -Wall -Wextra -Wpedantic -Werror
 CFLAGS += -std=c99 -Wall -Wextra -Wpedantic
 LIFECYCLE := $(COMMON)/services/muon_service_lifecycle.cpp $(COMMON)/services/muon_service_controller.cpp
 CARDIO_PC := $(abspath ../../sdk/native/linux-amd64/lib/pkgconfig)
-CARDIO_CFLAGS := $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --cflags muon-plugin-cardio)
-CARDIO_LIBS := $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --libs muon-plugin-cardio)
-NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/muon_filesystem.cpp
+CARDIO_CFLAGS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --cflags muon-plugin-cardio)
+CARDIO_LIBS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --libs muon-plugin-cardio)
+NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/services/muon_service_value.cpp $(COMMON)/services/muon_service_interface.cpp $(COMMON)/muon_filesystem.cpp
 LOGIN := muon_service_login.cpp muon_service_startup.cpp ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp ../cef/src/muon_string_helpers.cpp
 
 .PHONY: all test clean windows-amd64 windows-i686
@@ -63,8 +63,8 @@ define WINDOWS_RULES
 WIN_$(1)_CC := $(2)-gcc
 WIN_$(1)_CXX := $(2)-g++
 WIN_$(1)_PC := $(abspath ../../sdk/native/windows-$(1)/lib/pkgconfig)
-WIN_$(1)_FLAGS := $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --cflags muon-plugin-cardio)
-WIN_$(1)_LIBS := $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --libs muon-plugin-cardio)
+WIN_$(1)_FLAGS = $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --cflags muon-plugin-cardio)
+WIN_$(1)_LIBS = $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --libs muon-plugin-cardio)
 
 windows-$(1): $(OUT)/windows-$(1)/muon-service-host.exe $(OUT)/windows-$(1)/simple-service.dll $(OUT)/windows-$(1)/probe-service.dll $(OUT)/windows-$(1)/session-end.exe $(OUT)/windows-$(1)/transport-test.exe $(OUT)/windows-$(1)/process-driver.exe $(OUT)/windows-$(1)/process-lock-driver.exe
 

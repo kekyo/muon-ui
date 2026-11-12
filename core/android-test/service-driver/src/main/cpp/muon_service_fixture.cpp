@@ -254,11 +254,11 @@ static void Start(const muon_service_context* context,
     return;
   }
   state->work.emplace(Serve(state));
-  const muon_service_instance instance{state, Stop};
+  const muon_service_instance instance{state, Stop, nullptr, nullptr};
   completion(data, &instance, nullptr);
 }
 
-static const muon_service_factory factory{MUON_SERVICE_ABI_VERSION, Start};
+static const muon_service_factory factory{MUON_SERVICE_ABI_VERSION, Start, nullptr};
 
 /** @return Factory for independent socket workers shared by Android and PC tests. */
 extern "C" MUON_PLUGIN_EXPORT const muon_service_factory* muon_get_service_factory() {

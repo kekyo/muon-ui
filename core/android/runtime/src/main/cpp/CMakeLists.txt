@@ -123,6 +123,8 @@ add_library(muon_android_services SHARED
   "${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_value.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_native_service_library.cpp"
   )
 target_compile_features(muon_android_services PRIVATE cxx_std_20)

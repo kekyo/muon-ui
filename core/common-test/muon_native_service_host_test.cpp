@@ -37,7 +37,7 @@ static void Stop(void* data, muon_service_stop_completion complete,
 }
 
 static void CompleteStart(TestInstance& instance) {
-  const auto value = muon_service_instance{&instance, &Stop};
+  const auto value = muon_service_instance{&instance, &Stop, nullptr, nullptr};
   instance.started(instance.start_data, &value, nullptr);
 }
 
@@ -57,8 +57,8 @@ int main() {
   auto loads = 0;
   auto unloads = 0;
   auto logs = std::vector<std::string>{};
-  const auto factory = muon_service_factory{MUON_SERVICE_ABI_VERSION, &Start};
-  const auto bad_factory = muon_service_factory{999, &Start};
+  const auto factory = muon_service_factory{MUON_SERVICE_ABI_VERSION, &Start, nullptr};
+  const auto bad_factory = muon_service_factory{999, &Start, nullptr};
   auto host = MuonNativeServiceHost({
       [&](const std::string& path, std::string& error) {
         ++loads;

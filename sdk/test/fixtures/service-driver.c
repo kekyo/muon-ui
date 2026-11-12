@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
   const muon_service_factory* factory = get_factory();
   if (factory == NULL || factory->abi_version != MUON_SERVICE_ABI_VERSION)
     return 4;
-  const muon_service_host host = {NULL, unexpected_task, write_log};
+  const muon_service_host host = {NULL, unexpected_task, write_log, NULL};
   const muon_service_context alpha = {&host, "alpha", 1, "/tmp", 0, NULL};
   const muon_service_context beta = {&host, "beta", 1, "/tmp", 0, NULL};
   start_result first = {0};

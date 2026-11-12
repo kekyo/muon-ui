@@ -25,14 +25,14 @@ static void start_service(const muon_service_context* context,
     return;
   }
   state->context = context;
-  const muon_service_instance instance = {state, stop_service};
+  const muon_service_instance instance = {state, stop_service, NULL, NULL};
   context->host->log(context->host->user_data, MUON_LOG_LEVEL_INFO,
                      context->service_id);
   completion(completion_data, &instance, NULL);
 }
 
 static const muon_service_factory factory = {
-    MUON_SERVICE_ABI_VERSION, start_service};
+    MUON_SERVICE_ABI_VERSION, start_service, NULL};
 
 /**
  * Returns factory metadata without creating an instance or starting work.

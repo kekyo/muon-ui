@@ -22,6 +22,7 @@ for (const path of [
   'dist/types/index.d.ts',
   'include/muon_plugin_api.h',
   'include/muon_service_api.h',
+  'include/muon_service_value.h',
   'include/cardio.h',
   'make/plugin.mk',
   'templates/service.fc',

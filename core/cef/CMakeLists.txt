@@ -835,6 +835,8 @@ add_executable(muon_service_host
   ${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_value.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_native_service_library.cpp
   ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp)
 target_compile_features(muon_service_host PRIVATE cxx_std_20)

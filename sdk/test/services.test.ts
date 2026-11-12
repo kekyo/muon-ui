@@ -62,7 +62,7 @@ it.each(['c', 'c++'] as const)(
       const artifact = await readServiceArtifact(manifest, ['linux-amd64']);
       expect(artifact.manifest).toMatchObject({
         kind: 'service',
-        abiVersion: 1,
+        abiVersion: 2,
       });
       expect(artifact.manifest).not.toHaveProperty('functions');
       const binary = artifact.targets['linux-amd64']!;
@@ -148,7 +148,10 @@ it('keeps plugin entry and function requirements separate from service artifacts
       /catalog|path arrays/
     );
   }
-  await writeFile(manifest, JSON.stringify({ ...metadata, kind: 'service' }));
+  await writeFile(
+    manifest,
+    JSON.stringify({ ...metadata, kind: 'service', abiVersion: 2 })
+  );
   await expect(readServiceArtifact(manifest, ['linux-amd64'])).rejects.toThrow(
     /functions/
   );

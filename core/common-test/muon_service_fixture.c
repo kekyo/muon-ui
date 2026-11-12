@@ -41,12 +41,12 @@ static void start(const muon_service_context* context,
   }
   state->context = context;
   context->host->log(context->host->user_data, MUON_LOG_LEVEL_INFO, context->service_id);
-  const muon_service_instance instance = {state, stop};
+  const muon_service_instance instance = {state, stop, NULL, NULL};
   complete(data, &instance, NULL);
 }
 
 /** Returns the C99 fixture factory without initializing an instance. */
 MUON_PLUGIN_EXPORT const muon_service_factory* muon_get_service_factory(void) {
-  static const muon_service_factory factory = {MUON_SERVICE_ABI_VERSION, start};
+  static const muon_service_factory factory = {MUON_SERVICE_ABI_VERSION, start, NULL};
   return &factory;
 }

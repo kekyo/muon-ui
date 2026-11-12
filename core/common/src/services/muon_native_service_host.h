@@ -7,9 +7,11 @@
 #pragma once
 
 #include "muon_service_api.h"
+#include "services/muon_service_interface.h"
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,6 +46,25 @@ struct MuonNativeServicePlatform {
 
 /** Private library and instance ownership. */
 struct MuonNativeServiceHostImpl;
+
+/** Copied invocation result; success has a value, failure has a nonempty code. */
+struct MuonServiceResult {
+  std::optional<MuonServiceValue> value; /**< Typed success value, including void. */
+  std::string code; /**< Empty on success; common or declared application code. */
+  std::string message; /**< Copied UTF-8 diagnostic on failure. */
+};
+
+/** One terminal result, delivered on the owner dispatcher. */
+using MuonServiceCallCompletion = std::function<void(MuonServiceResult)>;
+/**
+ * Dispatches an invocation-owned callback with copied arguments.
+ * The completion may outlive cancellation; late completions are ignored.
+ */
+using MuonServiceCallbackHandler = std::function<void(uint64_t,
+    const MuonServiceSignature&, std::vector<MuonServiceValue>, MuonServiceCallCompletion)>;
+/** Receives a copied event scoped to one logical service generation. */
+using MuonServiceEventSink = std::function<void(const std::string&, uint64_t,
+    const std::string&, const MuonServiceValue&)>;
 
 /**
  * Executes the native service ABI on one externally owned dispatcher.
@@ -88,6 +109,46 @@ class MuonNativeServiceHost final {
    */
   void Stop(const std::string& id, uint64_t generation,
             std::function<void()> complete);
+
+  /** @param id Logical service identity.
+   *  @param generation Exact running generation.
+   *  @return Validated metadata for a running generation.
+   *  @throws std::invalid_argument If the generation is not running. */
+  const MuonServiceInterface& Interface(const std::string& id, uint64_t generation) const;
+
+  /** @param id Logical service identity.
+   *  @param generation Exact running generation.
+   *  @return Interface JSON suitable for the page SDK, for a running generation.
+   *  @throws std::invalid_argument If the generation is not running. */
+  std::string InterfaceJson(const std::string& id, uint64_t generation) const;
+
+  /**
+   * Starts a typed call, retaining its inputs and factory through native completion.
+   * @param id Logical service identity.
+   * @param generation Exact running generation.
+   * @param method Declared public method.
+   * @param arguments Owned typed input values.
+   * @param callback Dispatcher for callbacks supplied within those inputs.
+   * @param complete Exactly one deferred terminal result, including cancellation.
+   * @return Nonzero host call identity, distinct from transport request IDs.
+   * @throws std::invalid_argument For stale generation or invalid method/arguments.
+   */
+  uint64_t Invoke(const std::string& id, uint64_t generation, const std::string& method,
+      std::vector<MuonServiceValue> arguments, MuonServiceCallbackHandler callback,
+      MuonServiceCallCompletion complete);
+
+  /**
+   * Cancels one call and invalidates its callbacks, preserving other invocations.
+   * @param id Logical service identity.
+   * @param generation Exact generation that owns the call.
+   * @param call_id Host call identity returned by Invoke.
+   * @remarks Unknown, stale, completed, and repeated cancellations have no effect.
+   *     The native call and input storage remain alive until its final completion.
+   */
+  void Cancel(const std::string& id, uint64_t generation, uint64_t call_id);
+
+  /** @param sink Event receiver on the owner dispatcher; empty detaches it. */
+  void SetEventSink(MuonServiceEventSink sink);
 
   /** @return True when every instance and host completion has settled. */
   bool IsIdle() const;

@@ -11,6 +11,10 @@
 #include <map>
 #include <set>
 
+/** @param snapshot Copied state to encode without creating a reference.
+ *  @return JSON object preserving 64-bit identities as strings. */
+std::string SerializeMuonServiceSnapshot(const MuonServiceSnapshot& snapshot);
+
 /** Pending acquisition associated with one authenticated transport connection. */
 struct MuonServicePendingRequest {
   /** Connection identity assigned by the host, never trusted from JSON. */

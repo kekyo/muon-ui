@@ -92,6 +92,8 @@ class MuonServiceController final {
   std::optional<MuonServiceSnapshot> GetSnapshot(const std::string& id) const;
   /** @return True when no runtime resources or persistence actions remain. */
   bool IsQuiescent() const;
+  /** @return True after whole-application shutdown has rejected new work. */
+  bool IsShuttingDown() const;
 
  private:
   std::shared_ptr<MuonServiceControllerImpl> impl_;

@@ -181,3 +181,7 @@ bool MuonServiceController::IsQuiescent() const {
   return impl_->lifecycle.IsQuiescent() && impl_->events.empty() &&
          !impl_->scheduled && !impl_->dispatching;
 }
+
+bool MuonServiceController::IsShuttingDown() const {
+  return impl_->lifecycle.IsShuttingDown();
+}

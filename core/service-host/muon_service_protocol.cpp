@@ -61,7 +61,7 @@ static const char* StateName(MuonServiceState state) {
   throw std::logic_error("unknown service state");
 }
 
-static std::string Snapshot(const MuonServiceSnapshot& value) {
+std::string SerializeMuonServiceSnapshot(const MuonServiceSnapshot& value) {
   return "{\"id\":" + Quote(value.id) + ",\"state\":" + Quote(StateName(value.state)) +
       ",\"generation\":" + Quote(std::to_string(value.generation)) +
       ",\"revision\":" + Quote(std::to_string(value.revision)) +
@@ -131,7 +131,7 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
       send_(owner, Reply(request, "null"));
     } else if (op == "getState") {
       const auto value = controller_.GetSnapshot(Text(root, "serviceId"));
-      send_(owner, value ? Reply(request, Snapshot(value.value()))
+      send_(owner, value ? Reply(request, SerializeMuonServiceSnapshot(value.value()))
                          : Failure(request, "unknown-service", "service is not configured"));
     } else {
       send_(owner, Failure(request, "invalid-request", "unknown service operation"));

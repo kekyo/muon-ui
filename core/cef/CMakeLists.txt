@@ -1738,6 +1738,15 @@ else()
     )
 endif()
 if(MUON_BUILD_TESTS)
+  add_executable(muon_service_rpc_test
+    ../cef-test/native/muon_service_rpc_test.cpp
+    src/services/muon_service_rpc.cpp)
+  SET_EXECUTABLE_TARGET_PROPERTIES(muon_service_rpc_test)
+  target_compile_features(muon_service_rpc_test PRIVATE cxx_std_20)
+  target_include_directories(muon_service_rpc_test PRIVATE src)
+  target_link_libraries(muon_service_rpc_test PRIVATE muon_rpc_core)
+  MUON_APPLY_SANITIZERS(muon_service_rpc_test)
+  add_test(NAME service_rpc COMMAND muon_service_rpc_test)
   add_executable(muon_server_http_test
     ../cef-test/native/muon_server_http_test.cpp
     src/server/muon_server_http.cpp)

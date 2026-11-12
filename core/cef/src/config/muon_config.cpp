@@ -248,6 +248,8 @@ struct MuonConfigPathBases final {
   bool has_asset_from = false;
   std::filesystem::path notification_icon;
   bool has_notification_icon = false;
+  std::filesystem::path service_registry;
+  bool has_service_registry = false;
 };
 
 struct MuonEmbeddedConfigSlotState final {
@@ -897,6 +899,10 @@ static bool HasNotificationIconPath(yyjson_val* root) {
   return GetObjectValue(registration, "iconPath") != nullptr;
 }
 
+static bool HasServiceRegistryPath(yyjson_val* root) {
+  return GetObjectValue(GetObjectValue(root, "serviceHost"), "registry") != nullptr;
+}
+
 static void UpdateConfigPathBases(
     yyjson_val* root,
     const std::filesystem::path& base_directory,
@@ -927,6 +933,10 @@ static void UpdateConfigPathBases(
   if (HasNotificationIconPath(root)) {
     path_bases->notification_icon = base_directory;
     path_bases->has_notification_icon = true;
+  }
+  if (HasServiceRegistryPath(root)) {
+    path_bases->service_registry = base_directory;
+    path_bases->has_service_registry = true;
   }
 }
 
@@ -959,6 +969,10 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
   if (HasNotificationIconPath(root) && path_bases.has_notification_icon) {
     config->notifications.windows_icon_path = ResolveFilesystemPath(
         path_bases.notification_icon, config->notifications.windows_icon_path);
+  }
+  if (HasServiceRegistryPath(root) && path_bases.has_service_registry) {
+    config->service_registry = ResolveFilesystemPath(
+        path_bases.service_registry, config->service_registry);
   }
 }
 
@@ -3007,6 +3021,23 @@ static bool ReadNotificationsConfig(yyjson_val* root,
   return true;
 }
 
+static bool ReadServiceHostConfig(yyjson_val* root,
+                                  MuonConfig* config,
+                                  std::string* error_message) {
+  const auto value = yyjson_obj_get(root, "serviceHost");
+  if (!value) return true;
+  const auto registry = yyjson_obj_get(value, "registry");
+  if (!yyjson_is_obj(value) || yyjson_obj_size(value) != 1 ||
+      !yyjson_is_str(registry) || yyjson_get_len(registry) == 0 ||
+      std::strlen(yyjson_get_str(registry)) != yyjson_get_len(registry) ||
+      TrimAscii(yyjson_get_str(registry)).empty()) {
+    *error_message = "muon.json serviceHost must contain only a nonempty registry path without NUL";
+    return false;
+  }
+  config->service_registry = FilesystemPathFromUtf8(ReadJsonString(registry));
+  return true;
+}
+
 static bool ReadMuonConfigRoot(yyjson_val* root,
                                MuonConfig* config,
                                std::string* error_message) {
@@ -3015,6 +3046,7 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
     return false;
   }
   return ReadLauncherConfig(root, config, error_message) &&
+         ReadServiceHostConfig(root, config, error_message) &&
          ReadNotificationsConfig(root, config, error_message) &&
          ReadApplicationConfig(root, config, error_message) &&
          ReadNodeConfig(root, config, error_message) &&

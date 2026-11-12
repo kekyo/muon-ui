@@ -111,9 +111,8 @@ class ServiceProcess final {
         const auto id = StringValue(key);
         if (!ValidId(id) || specs_.contains(id))
           throw std::invalid_argument("Invalid or duplicate service identity: " + id);
-        const auto library = StringValue(yyjson_obj_get(value, "library"));
-        if (!std::filesystem::path(library).is_absolute())
-          throw std::invalid_argument("Service library path must be absolute");
+        const auto library = (std::filesystem::path(config).parent_path() /
+            StringValue(yyjson_obj_get(value, "library"))).lexically_normal().string();
         auto* autostart = yyjson_obj_get(value, "autostart");
         if (autostart && !yyjson_is_bool(autostart))
           throw std::invalid_argument("Service autostart must be boolean");

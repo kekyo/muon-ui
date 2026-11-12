@@ -73,10 +73,14 @@ $(OUT)/process-lock-driver: process_lock_driver.cpp muon_service_process_lock_li
 $(OUT)/login-test: muon_service_login_test.cpp muon_service_login.cpp $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
 
-test: $(OUT)/protocol-test $(OUT)/client-test $(OUT)/login-test
+$(OUT)/startup-test: muon_service_startup_test.cpp muon_service_policy_linux.cpp $(LOGIN) $(COMMON)/muon_filesystem.cpp $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
+
+test: $(OUT)/protocol-test $(OUT)/client-test $(OUT)/login-test $(OUT)/startup-test
 	$(OUT)/protocol-test
 	$(OUT)/client-test
 	$(OUT)/login-test
+	$(OUT)/startup-test
 
 # Each architecture uses its SDK-provided shared cardio runtime. Keep compiler
 # runtimes shared too: native factories and the host exchange C++ cardio state.

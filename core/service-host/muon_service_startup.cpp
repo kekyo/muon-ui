@@ -47,10 +47,14 @@ static LoginRegistration ParseStartup(const std::string& startup) {
   }
   return {[registration](bool enabled) -> cardio::promise<void> {
     if (!registration) co_return;
-    co_await RunMuonServiceMetadata([registration, enabled] {
+    // Keep the owning capture outside the co_await expression. GCC 12 can
+    // incorrectly relocate a temporary closure containing short strings.
+    // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=99576
+    const auto apply = [registration, enabled] {
       std::string error;
       if (!SetMuonAutostart(*registration, enabled, &error)) throw std::runtime_error(error);
-    });
+    };
+    co_await RunMuonServiceMetadata(apply);
   }, refresh};
 }
 

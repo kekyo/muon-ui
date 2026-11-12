@@ -77,7 +77,7 @@ describe("public Android builds", () => {
   });
   it("validates service declarations before invoking the APK builder", async () => {
     const root = await project({
-      services: { worker: { runtime: "quickjs", artifact: "worker.json" } },
+      services: { worker: { runtime: "node", entry: "worker.ts" } },
     });
     await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
       /services.*runtime/,

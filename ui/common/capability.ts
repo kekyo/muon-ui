@@ -1364,6 +1364,15 @@ const createModuleSource = (rule: ResolvedRule): string => {
     ) {
       return createEnvironmentsGetConfigValuesExport(rule.id, functionPath);
     }
+    if (
+      rule.namespace === "muon.environments" &&
+      exportName === "getAutostart"
+    ) {
+      return `export const getAutostart = async () => {
+  const value = JSON.parse(await __muonCall(${JSON.stringify(rule.id)}, ${JSON.stringify(functionPath)}, []));
+  return value === null ? undefined : value;
+};`;
+    }
     if (rule.namespace === "muon.executor" && exportName === "spawn") {
       return createExecutorSpawnExport(rule.id, functionPath);
     }

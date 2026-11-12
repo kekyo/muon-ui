@@ -20,8 +20,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createConnection } from "@playwright/mcp";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { expect, it } from "vitest";
 
 const closeConsumerResources = async (
@@ -224,16 +223,38 @@ it.skipIf(
       if(!available)throw new Error('Service capability is unavailable');
       const api=available;
       Object.assign(globalThis,{consumerResult:(async()=>{
+        const sessionFile='service-consumer-session';
+        const session=await window.muon.fs.exists(sessionFile)?Number(await window.muon.fs.readTextFile(sessionFile,'utf8')):0;
+        await window.muon.fs.writeTextFile(sessionFile,String(session+1),'utf8');
+        const managed=['native','extension'];
+        const waitState=async(id:string,state:MuonServiceState['state'])=>{
+          let done!:(value:MuonServiceState)=>void;const complete=new Promise<MuonServiceState>(resolve=>done=resolve);
+          const watch=await api.watchState(id,value=>{if(value.state===state)done(value)});
+          try{return await complete}finally{await watch.close()}
+        };
+        const initial=await Promise.all(managed.map(async id=>await api.getState(id)));
+        let enabled:MuonServiceState[]|undefined;
+        if(session===3){
+          for(const id of managed){await api.setAutostart(id,true);await api.setAutostart(id,true)}
+          enabled=await Promise.all(managed.map(async id=>await waitState(id,'running')));
+        }
         const script=await api.acquire('script');let native:Awaited<ReturnType<typeof api.acquire>>|undefined;
-        let extension:Awaited<ReturnType<typeof api.acquire>>|undefined;let result:unknown;
+        let extension:Awaited<ReturnType<typeof api.acquire>>|undefined;let result:Record<string,unknown>;
         try{native=await api.acquire('native');extension=await api.acquire('extension');
           let received!:(value:unknown)=>void;const event=new Promise(resolve=>received=resolve);
           const subscription=await script.subscribe('progress',value=>received(value));
           await script.call('notify',['event😀']);const notification=await event;await subscription.close();
-          result={native:await native.call('echo',['native\\0日本語😀']),script:await script.call('echo',['script\\0日本語😀']),
+          if(session===2)for(const id of managed){await api.setAutostart(id,false);await api.setAutostart(id,false)}
+          result={session,initial,enabled,
+            native:await native.call('echo',['native\\0日本語😀']),script:await script.call('echo',['script\\0日本語😀']),
             extension:await extension.call('next',[41]),event:notification,
             generations:[native.generation,script.generation,extension.generation],
             references:[(await api.getState('native')).clientReferences,(await api.getState('script')).clientReferences,(await api.getState('extension')).clientReferences]};
+          if(session===2){
+            result.off=await Promise.all(managed.map(async id=>await api.getState(id)));
+            await native.release();await extension.release();
+            result.stopped=await Promise.all(managed.map(async id=>await waitState(id,'stopped')));
+          }
         }catch(error){result={error:String(error)}}
         await script.call('report',[JSON.stringify(result)]);await native?.release();await extension?.release();await script.release();
         document.querySelector('h1')!.textContent=JSON.stringify(result);
@@ -338,7 +359,13 @@ it.skipIf(
         plugins: [
           {
             name: "internal",
-            allow: ["muon.services.*", "muon.browser.close"],
+            allow: [
+              "muon.services.*",
+              "muon.browser.close",
+              "muon.fs.exists",
+              "muon.fs.readTextFile",
+              "muon.fs.writeTextFile",
+            ],
           },
         ],
       },
@@ -544,7 +571,7 @@ it.skipIf(
       references: [1, 1, 1],
     };
     let client: Client | undefined;
-    let mcp: Awaited<ReturnType<typeof createConnection>> | undefined;
+    let mcp: StdioClientTransport | undefined;
     let port: string | undefined;
     let failed = false;
     try {
@@ -583,14 +610,16 @@ it.skipIf(
           `localabstract:webview_devtools_remote_${pid}`,
         )
       ).trim();
-      mcp = await createConnection({
-        browser: { cdpEndpoint: `http://127.0.0.1:${port}` },
+      mcp = new StdioClientTransport({
+        command: process.execPath,
+        args: [
+          resolve("../node_modules/@playwright/mcp/cli.js"),
+          "--cdp-endpoint",
+          `http://127.0.0.1:${port}`,
+        ],
       });
       client = new Client({ name: "muon-service-consumer", version: "1.0.0" });
-      const [clientTransport, serverTransport] =
-        InMemoryTransport.createLinkedPair();
-      await mcp.connect(serverTransport);
-      await client.connect(clientTransport);
+      await client.connect(mcp);
       const evaluated = await client.callTool({
         name: "browser_evaluate",
         arguments: { function: "async()=>await globalThis.consumerResult" },
@@ -633,7 +662,7 @@ it.skipIf(
           "android.permission.POST_NOTIFICATIONS",
         );
         let generations: string[] | undefined;
-        for (let session = 0; session < 2; ++session) {
+        for (let session = 0; session < 5; ++session) {
           const start = messages.length;
           await device(
             "shell",
@@ -656,8 +685,55 @@ it.skipIf(
             report.split(`consumer-result:${nonce}:`)[1]!,
           );
           expect(result).toMatchObject(expected);
-          if (generations) expect(result.generations).toEqual(generations);
+          expect(result.session).toBe(session);
+          if (generations && session < 3)
+            expect(result.generations).toEqual(generations);
           generations = result.generations;
+          if (session === 2) {
+            expect(result.off).toHaveLength(2);
+            for (const state of result.off)
+              expect(state).toMatchObject({
+                autostart: false,
+                resident: false,
+                state: "running",
+                clientReferences: 1,
+              });
+            expect(result.stopped).toHaveLength(2);
+            for (const state of result.stopped)
+              expect(state).toMatchObject({
+                autostart: false,
+                resident: false,
+                state: "stopped",
+                clientReferences: 0,
+              });
+          }
+          if (session === 3) {
+            expect(result.initial).toHaveLength(2);
+            for (const state of result.initial)
+              expect(state).toMatchObject({
+                autostart: false,
+                resident: false,
+                state: "stopped",
+                clientReferences: 0,
+              });
+            expect(result.enabled).toHaveLength(2);
+            for (const state of result.enabled)
+              expect(state).toMatchObject({
+                autostart: true,
+                resident: true,
+                state: "running",
+                clientReferences: 0,
+              });
+          }
+          if (session === 4) {
+            expect(result.initial).toHaveLength(2);
+            for (const state of result.initial)
+              expect(state).toMatchObject({
+                autostart: true,
+                resident: true,
+                clientReferences: 0,
+              });
+          }
           await waitLine(
             start,
             (line) =>
@@ -671,8 +747,10 @@ it.skipIf(
             const json = line.split(`consumer-work:${nonce}:`)[1];
             return json !== undefined && JSON.parse(json).at > closedAt;
           });
+          if (session >= 2) await device("shell", "am", "force-stop", appId);
         }
         await device("shell", "am", "force-stop", appId);
+        await device("uninstall", appId);
       }
     } catch (error) {
       failed = true;

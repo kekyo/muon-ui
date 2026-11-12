@@ -10,7 +10,8 @@ PATH_PROCESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-process.exe
 PATH_PROGRESS = .run/windows-long-path/$(WINDOWS_TARGET)/path-progress.exe
 PATH_AUTOSTART = .run/windows-long-path/$(WINDOWS_TARGET)/path-autostart.exe
 PATH_SHORTCUT = .run/windows-long-path/$(WINDOWS_TARGET)/path-shortcut.exe
-AUTOSTART_SOURCES = ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp
+PATH_SUPPORT = .run/windows-long-path/$(WINDOWS_TARGET)/path-support.o
+AUTOSTART_SOURCES = ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp ../common/src/muon_filesystem.cpp
 
 .PHONY: windows-long-path-fixture windows-path-test windows-path-plugin windows-path-process windows-path-progress windows-path-autostart windows-path-shortcut
 windows-long-path-fixture: $(LONG_PATH_FIXTURE)
@@ -25,9 +26,13 @@ $(PATH_SHORTCUT): plugin-e2e/windows-path-shortcut.cpp
 	mkdir -p "$(@D)"
 	$(WINDOWS_CXX) -std=c++20 -Wall -Wextra -Werror -pedantic -municode -static -o "$@" "$<" -lole32 -luuid
 
-$(PATH_AUTOSTART): plugin-e2e/windows-path-autostart.cpp $(AUTOSTART_SOURCES) ../cef/src/config/muon_autostart.h
+$(PATH_SUPPORT): ../common/src/muon_windows_path.c ../common/include/muon_windows_path.h
 	mkdir -p "$(@D)"
-	$(WINDOWS_CXX) -std=c++20 -Wall -Wextra -Werror -pedantic -municode -static -I../cef/src -o "$@" "$<" $(AUTOSTART_SOURCES) -ladvapi32
+	$(WINDOWS_CC) -std=c99 -Wall -Wextra -Werror -pedantic -I../common/include -c "$<" -o "$@"
+
+$(PATH_AUTOSTART): plugin-e2e/windows-path-autostart.cpp $(AUTOSTART_SOURCES) ../cef/src/config/muon_autostart.h $(PATH_SUPPORT)
+	mkdir -p "$(@D)"
+	$(WINDOWS_CXX) -std=c++20 -Wall -Wextra -Werror -pedantic -municode -static -I../cef/src -I../common/src -I../common/include -o "$@" "$<" $(AUTOSTART_SOURCES) $(PATH_SUPPORT) -ladvapi32
 
 $(PATH_PROGRESS): plugin-e2e/windows-path-progress.c ../../builder/src/launcher_progress.c ../../builder/src/launcher_progress.h ../../builder/src/prepare_progress.h
 	mkdir -p "$(@D)"

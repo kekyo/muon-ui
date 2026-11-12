@@ -30,7 +30,7 @@ $(OUT)/protocol-test: muon_service_protocol_test.cpp muon_service_protocol.cpp $
 $(OUT)/libcardio.so: ../../sdk/native/linux-amd64/lib/libcardio.so | $(OUT)
 	cp $< $@
 
-$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_protocol.cpp $(LIFECYCLE) $(NATIVE) $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
+$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LIFECYCLE) $(NATIVE) $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -ldl -Wl,-rpath,'$$ORIGIN' -o $@
 
 $(OUT)/probe-service.so: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(OUT)/libcardio.so | $(OUT)
@@ -77,8 +77,8 @@ $(OUT)/windows-$(1)/runtimes: ../../sdk/native/windows-$(1)/lib/libcardio.dll | 
 	cp $$$$($$(WIN_$(1)_CXX) -print-file-name=libwinpthread-1.dll) $(OUT)/windows-$(1)/
 	touch $$@
 
-$(OUT)/windows-$(1)/muon-service-host.exe: muon_service_host_windows.cpp muon_service_protocol.cpp $(LIFECYCLE) $(NATIVE) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes
-	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -ladvapi32 -luser32 -o $$@
+$(OUT)/windows-$(1)/muon-service-host.exe: muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LIFECYCLE) $(NATIVE) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -ladvapi32 -luser32 -lole32 -o $$@
 
 $(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@

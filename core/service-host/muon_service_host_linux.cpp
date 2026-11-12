@@ -5,6 +5,7 @@
  */
 
 #include "muon_service_protocol.h"
+#include "muon_service_policy.h"
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
 
@@ -95,6 +96,7 @@ class ServiceProcess final {
       co_await MakeDirectory(std::filesystem::path(endpoint_).parent_path());
       co_await MakeDirectory(data_root_);
       LockEndpoint();
+      co_await MakeDirectory(std::filesystem::path(data_root_) / ".autostart");
       auto file = std::unique_ptr<GFile, decltype(&g_object_unref)>(
           g_file_new_for_path(config.c_str()), g_object_unref);
       const auto contents = co_await cardio::gio::load_contents(file.get());
@@ -128,7 +130,8 @@ class ServiceProcess final {
           }
         }
         co_await MakeDirectory(directory);
-        definitions.push_back({id, yyjson_get_bool(autostart), std::nullopt});
+        const auto preference = co_await LoadMuonServiceAutostart(std::filesystem::path(data_root_) / ".autostart" / id);
+        definitions.push_back({id, yyjson_get_bool(autostart), preference});
         specs_.emplace(id, std::move(spec));
       }
       const auto post = [this](std::function<void()> task) { Post(std::move(task)); };
@@ -144,8 +147,8 @@ class ServiceProcess final {
           [this](const MuonServiceSnapshot& state, auto complete) {
             native_->Stop(state.id, state.generation, std::move(complete));
           },
-          [](const std::string&, bool, auto complete) {
-            complete("Service policy persistence is not available");
+          [this](const std::string& id, bool enabled, auto complete) {
+            cardio::fire_and_forget(SavePolicy(id, enabled, std::move(complete)));
           },
           [this](const MuonServiceEvent& event) {
             protocol_->Notify(event);
@@ -183,6 +186,14 @@ class ServiceProcess final {
   int ExitCode() const { return exit_code_; }
 
  private:
+  cardio::promise<void> SavePolicy(std::string id, bool enabled,
+      std::function<void(const std::string&)> complete) {
+    auto error = std::string{};
+    try { co_await SaveMuonServiceAutostart(std::filesystem::path(data_root_) / ".autostart" / id, enabled); }
+    catch (const std::exception& failure) { error = failure.what(); }
+    complete(error);
+  }
+
   void LockEndpoint() {
     struct stat parent{};
     const auto directory = std::filesystem::path(endpoint_).parent_path().string();

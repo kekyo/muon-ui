@@ -823,6 +823,7 @@ target_link_libraries(muon_service_desktop PUBLIC muon_cardio PRIVATE yyjson)
 MUON_APPLY_SANITIZERS(muon_service_desktop)
 add_executable(muon_service_host
   ../service-host/muon_service_host_${MUON_SERVICE_PLATFORM}.cpp
+  ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
   ../service-host/muon_service_protocol.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp
@@ -838,7 +839,7 @@ set_target_properties(muon_service_host PROPERTIES
   OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
 if(WIN32)
   target_link_libraries(muon_service_desktop PRIVATE muon_windows_path advapi32)
-  target_link_libraries(muon_service_host PRIVATE muon_windows_path advapi32 user32)
+  target_link_libraries(muon_service_host PRIVATE muon_windows_path advapi32 user32 ole32)
   target_compile_definitions(muon_service_desktop PRIVATE _WIN32_WINNT=0x0601)
   target_compile_definitions(muon_service_host PRIVATE _WIN32_WINNT=0x0601)
   target_link_options(muon_service_host PRIVATE -municode)

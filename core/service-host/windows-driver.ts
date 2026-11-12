@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -512,6 +512,196 @@ try {
     ],
   );
   assert(extendedLibrary.stdout.includes('"session":true'));
+
+  const policyConfig = join(directory, "policy-services.json");
+  const policyRoot = join(directory, "policy data");
+  const policyEndpoint = String.raw`\\.\pipe\muon-service-${randomUUID()}`;
+  await writeFile(
+    policyConfig,
+    JSON.stringify({
+      services: {
+        worker: { library: "../simple-service.dll", autostart: true },
+        second: { library: "../simple-service.dll", autostart: false },
+      },
+    }),
+  );
+  const policyArguments = [
+    "--config",
+    "\\\\?\\" + policyConfig,
+    "--endpoint",
+    policyEndpoint,
+    "--data-root",
+    "\\\\?\\" + policyRoot,
+  ];
+  const startPolicyHost = async () => {
+    const host = spawn(
+      join(binaryDirectory, "muon-service-host.exe"),
+      policyArguments,
+      { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+    );
+    children.push(host);
+    const exited = once(host, "exit");
+    let diagnostic = "";
+    host.stderr.on("data", (bytes: Buffer) => {
+      diagnostic += bytes.toString();
+    });
+    for await (const line of createInterface({ input: host.stdout })) {
+      if (JSON.parse(line).ready) break;
+    }
+    assert.equal(host.exitCode, null, diagnostic);
+    const socket = createConnection(policyEndpoint);
+    sockets.push(socket);
+    const callbacks = new Map<
+      string,
+      (response: Record<string, any>) => void
+    >();
+    const ready = new Promise<void>((resolve) => {
+      createInterface({ input: socket }).on("line", (line) => {
+        const response = JSON.parse(line);
+        if (response.event === "ready") {
+          resolve();
+          return;
+        }
+        const callback = callbacks.get(response.requestId);
+        callbacks.delete(response.requestId);
+        callback?.(response);
+      });
+    });
+    await ready;
+    let sequence = 0;
+    const request = async (
+      value: Record<string, unknown>,
+    ): Promise<Record<string, any>> => {
+      const requestId = String(++sequence);
+      const pending = new Promise<Record<string, any>>((resolve) => {
+        callbacks.set(requestId, resolve);
+      });
+      socket.write(JSON.stringify({ ...value, requestId }) + "\n");
+      return await pending;
+    };
+    const shutdown = () => {
+      socket.write(
+        JSON.stringify({ op: "shutdown", requestId: "exit" }) + "\n",
+      );
+    };
+    return { host, exited, request, shutdown };
+  };
+  const firstPolicy = await startPolicyHost();
+  const acquired = await firstPolicy.request({
+    op: "acquire",
+    serviceId: "worker",
+  });
+  assert(acquired.result, JSON.stringify(acquired));
+  const watching = await firstPolicy.request({
+    op: "watchState",
+    serviceId: "worker",
+    operation: "acquire",
+  });
+  assert(watching.result, JSON.stringify(watching));
+  const token = watching.result.token;
+  const changed = firstPolicy.request({
+    op: "watchState",
+    serviceId: "worker",
+    operation: "next",
+    token,
+  });
+  const updates = await Promise.all([
+    firstPolicy.request({
+      op: "setAutostart",
+      serviceId: "worker",
+      enabled: false,
+    }),
+    firstPolicy.request({
+      op: "setAutostart",
+      serviceId: "second",
+      enabled: true,
+    }),
+  ]);
+  for (const response of updates)
+    assert.equal(response.result, null, JSON.stringify(response));
+  const observation = (await changed).result.state;
+  assert.equal(observation.autostart, false);
+  assert.equal(observation.clientReferences, 1);
+  assert.equal(observation.state, "running");
+  await firstPolicy.request({ op: "release", ...acquired.result });
+  for (;;) {
+    const response = await firstPolicy.request({
+      op: "watchState",
+      serviceId: "worker",
+      operation: "next",
+      token,
+    });
+    assert(response.result, JSON.stringify(response));
+    if (response.result.state.state === "stopped") {
+      assert.equal(response.result.state.clientReferences, 0);
+      break;
+    }
+  }
+  const pendingWatch = firstPolicy.request({
+    op: "watchState",
+    serviceId: "worker",
+    operation: "next",
+    token,
+  });
+  await firstPolicy.request({
+    op: "watchState",
+    serviceId: "worker",
+    operation: "release",
+    token,
+  });
+  assert.equal((await pendingWatch).result.state, null);
+  await rename(join(policyRoot, ".autostart"), join(policyRoot, ".backup"));
+  await writeFile(join(policyRoot, ".autostart"), "blocked");
+  const deniedPolicy = await firstPolicy.request({
+    op: "setAutostart",
+    serviceId: "worker",
+    enabled: true,
+  });
+  assert.equal(deniedPolicy.error.code, "persistence-failed");
+  assert.equal(
+    (await firstPolicy.request({ op: "getState", serviceId: "worker" })).result
+      .autostart,
+    false,
+  );
+  await rm(join(policyRoot, ".autostart"));
+  await rename(join(policyRoot, ".backup"), join(policyRoot, ".autostart"));
+  firstPolicy.host.kill("SIGKILL");
+  await firstPolicy.exited;
+  const restoredPolicy = await startPolicyHost();
+  const off = (
+    await restoredPolicy.request({ op: "getState", serviceId: "worker" })
+  ).result;
+  assert.equal(off.state, "stopped");
+  assert.equal(off.generation, "0");
+  assert.equal(off.autostart, false);
+  const secondPolicy = await restoredPolicy.request({
+    op: "acquire",
+    serviceId: "second",
+  });
+  assert(secondPolicy.result, JSON.stringify(secondPolicy));
+  await restoredPolicy.request({ op: "release", ...secondPolicy.result });
+  await restoredPolicy.request({
+    op: "setAutostart",
+    serviceId: "second",
+    enabled: true,
+  });
+  const on = (
+    await restoredPolicy.request({ op: "getState", serviceId: "second" })
+  ).result;
+  assert.equal(on.generation, secondPolicy.result.generation);
+  assert.equal(on.clientReferences, 0);
+  assert.equal(on.resident, true);
+  // Shutdown acknowledgement is best effort; process exit confirms disposal.
+  restoredPolicy.shutdown();
+  assert.equal((await restoredPolicy.exited)[0], 0);
+  await writeFile(join(policyRoot, ".autostart", "worker"), "corrupt");
+  await assert.rejects(
+    execute(join(binaryDirectory, "muon-service-host.exe"), policyArguments, {
+      timeout: 10000,
+    }),
+    /Invalid service autostart preference/,
+  );
+  console.log(JSON.stringify({ policy: true, passed: true }));
 } finally {
   for (const socket of sockets) socket.destroy();
   for (const child of children) {

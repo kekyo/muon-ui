@@ -5,6 +5,7 @@
  */
 
 #include "muon_service_protocol.h"
+#include "muon_service_policy.h"
 #include "muon_filesystem.h"
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
@@ -150,6 +151,7 @@ class ServiceProcess final {
       // Acquire the singleton before loading factories or activating roots.
       listener_ = NewPipe(true);
       MakeDirectory(data_root_);
+      MakeDirectory(data_root_ / ".autostart");
       const auto contents = co_await ReadConfig(config);
       if (session_ending_) { FinishLoop(); co_return; }
       auto document = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
@@ -182,7 +184,9 @@ class ServiceProcess final {
             spec.config.emplace_back(StringValue(setting_key), StringValue(setting_value));
         }
         MakeDirectory(directory);
-        definitions.push_back({id, yyjson_get_bool(autostart), std::nullopt});
+        const auto preference = co_await LoadMuonServiceAutostart(data_root_ / ".autostart" / id);
+        if (session_ending_) { FinishLoop(); co_return; }
+        definitions.push_back({id, yyjson_get_bool(autostart), preference});
         specs_.emplace(id, std::move(spec));
       }
       const auto post = [this](std::function<void()> task) { Post(std::move(task)); };
@@ -198,8 +202,8 @@ class ServiceProcess final {
           [this](const MuonServiceSnapshot& state, auto complete) {
             native_->Stop(state.id, state.generation, std::move(complete));
           },
-          [](const std::string&, bool, auto complete) {
-            complete("Service policy persistence is not available");
+          [this](const std::string& id, bool enabled, auto complete) {
+            cardio::fire_and_forget(SavePolicy(id, enabled, std::move(complete)));
           },
           [this](const MuonServiceEvent& event) {
             protocol_->Notify(event);
@@ -235,6 +239,14 @@ class ServiceProcess final {
   int ExitCode() const { return exit_code_; }
 
  private:
+  cardio::promise<void> SavePolicy(std::string id, bool enabled,
+      std::function<void(const std::string&)> complete) {
+    auto error = std::string{};
+    try { co_await SaveMuonServiceAutostart(data_root_ / ".autostart" / id, enabled); }
+    catch (const std::exception& failure) { error = failure.what(); }
+    complete(error);
+  }
+
   static constexpr UINT kPostedTask = WM_APP + 1;
 
   static LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {

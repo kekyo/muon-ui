@@ -11,10 +11,23 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import { buildService, createServiceProject } from "muon-plugin-sdk";
 import { resolveMuonServices } from "../common/service-config.ts";
 import { stageMuonDesktopServices } from "../cef/services.ts";
+
+beforeAll(async () => {
+  // A clean SDK build can refresh the host's native dependencies. Keep build
+  // time separate from the runtime behavior deadline and build only this host.
+  await mkdir("../core/service-host/.build", { recursive: true });
+  await promisify(execFile)("flock", [
+    "../core/service-host/.build/driver-build.lock",
+    "make",
+    "-C",
+    "../core/service-host",
+    ".build/muon-service-host",
+  ]);
+}, 600000);
 
 it("loads an SDK service from a relocated desktop distribution", async () => {
   const root = await mkdtemp(join(tmpdir(), "muon-service-package-"));
@@ -43,14 +56,6 @@ it("loads an SDK service from a relocated desktop distribution", async () => {
     const relocated = join(root, "relocated");
     await rename(original, relocated);
     await rm(producer, { recursive: true, force: true });
-    await mkdir("../core/service-host/.build", { recursive: true });
-    await promisify(execFile)("flock", [
-      "../core/service-host/.build/driver-build.lock",
-      "make",
-      "-C",
-      "../core/service-host",
-      "all",
-    ]);
     const endpoint = join(root, "control.sock");
     host = spawn(
       resolve("../core/service-host/.build/muon-service-host"),

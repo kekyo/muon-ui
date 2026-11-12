@@ -15,13 +15,13 @@ RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \
   $(COMMON)/src/rpc/muon_rpc_host.cpp
 YYJSON_SOURCE_DIR := ../cef/.deps/src/yyjson-0.12.0/src
 SERVICE_VALUES := $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/services/muon_service_interface.cpp
-SERVICE_HEADERS := $(COMMON)/src/services/muon_native_service_host.h $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_value.h
+SERVICE_HEADERS := $(COMMON)/src/services/muon_service_execution.h $(COMMON)/src/services/muon_native_service_host.h $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_value.h
 CPPFLAGS += -I$(YYJSON_SOURCE_DIR)
 TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-calls $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value $(OUT)/service-interface $(OUT)/service-broker
 QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
 QUICKJS_SOURCE_DIR := $(COMMON)/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
 QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
-TESTS += $(OUT)/quickjs-engine
+TESTS += $(OUT)/quickjs-engine $(OUT)/quickjs-service
 
 .PHONY: all test clean service-driver quickjs-source
 all: $(TESTS)
@@ -41,6 +41,9 @@ $(QUICKJS_OBJECTS): $(OUT)/quickjs/%.o: $(COMMON)/quickjs-source.json $(COMMON)/
 	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
 
 $(OUT)/quickjs-engine: muon_quickjs_engine_test.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(COMMON)/src/quickjs/muon_quickjs_module.cpp $(COMMON)/src/quickjs/muon_quickjs_module.h $(QUICKJS_OBJECTS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) -lm -o $@
+
+$(OUT)/quickjs-service: muon_quickjs_service_host_test.cpp $(COMMON)/src/services/muon_quickjs_service_host.cpp $(COMMON)/src/services/muon_quickjs_service_host.h $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(SERVICE_VALUES) $(SERVICE_HEADERS) $(OUT)/yyjson.o $(QUICKJS_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) -lm -o $@
 
 $(OUT)/rpc: muon_rpc_test.cpp $(RPC_SOURCES) $(COMMON)/src/plugins/muon_plugin_metadata.cpp | $(OUT)

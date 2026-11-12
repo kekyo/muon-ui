@@ -144,7 +144,7 @@ npm run dev:vite -- --no-muon
 省略した場合は `muon.json` の `plugin` 設定をそのまま使用し、`plugin.mode` の省略時は `"validate"` として扱います。
 `validate`モードでは`window.muon`を公開せず、許可したvirtual moduleをimportして関数を呼び出します。import元の検査はビルド時に行い、ネイティブ側ではcapabilityと許可関数を検査します。同じページ内でcapabilityを取得した別のコードからの呼出しは防ぎません。
 Androidでもvalidateモードを使えます。外部プラグインにはABI別ライブラリとメタデータが必要です。ページ条件と対応関数にはAndroid固有の制約があります。[Androidの設定](./android.md#validateモードでimportする)
-デスクトップで`node.project`を設定した場合は、`validate`モードでもNode.js runtimeを準備し、`muon:node`から`createNode()`を呼ぶとsidecarを起動します。`muon:node`に`pluginAccess.plugins[].imports`やallow設定は不要です。Androidの公開APKではNode.js・QuickJSを提供しません。
+デスクトップで`node.project`を設定した場合は、`validate`モードでもNode.js runtimeを準備し、`muon:node`から`createNode()`を呼ぶとsidecarを起動します。`muon:node`に`pluginAccess.plugins[].imports`やallow設定は不要です。Androidの公開APKではNode.jsを提供しません。QuickJSは[サービス](services.md)として利用できます。
 開発サーバーではNodeプロジェクトと`engines.node`のrangeがVite config解決時にpreflightされ、失敗は警告として報告される場合があります。build時にはエラーとして検証されます。
 
 ```ts

@@ -2,7 +2,7 @@
 
 muon-uiのnpmパッケージから、Webアセットを内蔵したAndroid APKを作れます。Viteのビルドと公開CLIを使い、GradleやJNIのソースを編集する必要はありません。配布したAPKの起動に開発サーバーは不要です。
 
-今回の公開範囲はdebug APKと署名済みrelease APKです。FCM、QuickJS、Node.js sidecar、AABの生成は公開していません。
+今回の公開範囲はdebug APKと署名済みrelease APKです。[バックグラウンドサービス](services.md)はC/C++またはQuickJSによるJS/TSで実装できます。FCM、Node.js sidecar、公開CLIによるAABの生成は提供していません。
 
 ## 必要な環境
 
@@ -245,7 +245,7 @@ OS設定画面を開く場合は`muon.android.settings.open()`を使います。
 
 通知操作はアプリが終了していても受信でき、ページ初期化前に受け取ったイベントも保存します。購読と未受領一覧を併用し、`eventId`で重複を除いた後に受領確認してください。APK更新でOS上の通知が削除される場合も、同じアプリIDとデータを維持する更新なら保存済みの未受領イベントを取得できます。自動再投稿は行いません。[イベントと保存上限](./muon-built-in-plugin-reference.md#通知イベントと受領確認)、[Androidの更新時の通知処理](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010)
 
-予約通知、FCM、継続実行サービス、通知から直接処理を完了するバックグラウンド操作は未提供です。通知ボタンは自アプリを開いて操作IDを渡します。
+予約通知、FCM、通知から直接処理を完了するバックグラウンド操作は未提供です。通知ボタンは自アプリを開いて操作IDを渡します。画面の終了後も続ける処理には[サービス](services.md)を使用できます。
 
 ## release APKへ署名する
 
@@ -346,8 +346,8 @@ validateモードではメタデータが必須です。ビルド時にABI別の
 
 登録名、SONAME、ABI、`muon_init_plugin`、依存ライブラリ、16 KiB整列もビルド前に検査します。プラグイン固有の設定値は文字列です。共通設定の`signature`・`salt`はAndroidでは受理せず、メタデータのABI別SHA-256を使います。バッファ、双方向コールバック、返された関数のプロキシとその解放は共通のプラグインABIに従います。[プラグインの開発](./muon-plugin-develop.md)
 
-## 今後の範囲
+## サービスと未対応機能
 
 FCMの通知配送とバックグラウンド処理は後続作業です。今回のAPKはFirebase設定なしで動作します。
 
-QuickJSの正式提供時は、開発PCでJavaScriptを単一ESMへbundleし、組み込みmoduleを外部参照として残す方針です。コードとハッシュ・必要機能の情報をAPKのassetsへ同梱し、アプリと同時に更新します。永続データはコードから分離します。任意のnpmパッケージ、Node.js全体との互換性、JavaScriptだけの独立更新は含めません。
+QuickJSサービスは開発PCで単一ESMへbundleし、許可したnative moduleを外部参照として残します。コードをAPKへ同梱し、アプリと同時に更新します。永続データはコードから分離します。任意のnpmパッケージ、Node.js全体との互換性、JavaScriptだけの独立更新は提供しません。設定と実行環境は[サービスのガイド](services.md)を参照してください。

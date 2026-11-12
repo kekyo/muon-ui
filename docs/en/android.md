@@ -2,7 +2,7 @@
 
 The muon-ui npm package can build Android APKs containing your web assets. Use Vite and the public CLI without editing Gradle or JNI sources. Installed applications do not need a development server.
 
-This release supports debug APKs and signed release APKs. FCM, QuickJS, the Node.js sidecar, and AAB generation are not publicly available.
+This release supports debug APKs and signed release APKs. [Background services](services.md) can use C/C++ or JS/TS hosted by QuickJS. FCM, the Node.js sidecar, and public CLI generation of AABs are not available.
 
 ## Requirements
 
@@ -245,7 +245,7 @@ Use `muon.android.settings.open()` for application details, application notifica
 
 Notification operations can start an exited application. Events received before page initialization are also saved. Combine a subscription with pending-event retrieval, deduplicate by `eventId`, and acknowledge processed events. APK replacement may remove OS notifications, but updates preserving application ID and data retain saved pending events. Muon does not repost automatically. See [events and storage limits](./muon-built-in-plugin-reference.md#notification-events-and-acknowledgement) and [Android update behavior](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010).
 
-Scheduled notifications, FCM, persistent services, and background actions that complete work directly are unavailable. Notification buttons open this application and deliver an action ID.
+Scheduled notifications, FCM, and notification actions that complete work directly in the background are unavailable. Notification buttons open this application and deliver an action ID. Use [services](services.md) for work that continues after the UI closes.
 
 
 ## Sign a release APK
@@ -347,8 +347,8 @@ Metadata is required in validate mode. The build checks ABI hashes and resolves 
 
 The builder also validates registration names, SONAME, ABI, `muon_init_plugin`, dependencies, and 16 KiB alignment. Plugin-specific configuration values must be strings. Common `signature` and `salt` settings are rejected on Android; use the metadata's ABI-specific SHA-256 hashes. Buffers, callbacks in both directions, returned native function proxies, and their release follow the shared plugin ABI. See [plugin development](./muon-plugin-develop.md).
 
-## Follow-up scope
+## Services and unsupported features
 
 FCM notification delivery and background processing remain follow-up work. Current APKs run without Firebase configuration.
 
-The intended QuickJS deployment model bundles JavaScript into a single ESM file on the build host, keeping builtin modules external. Code, its hash, and required feature metadata will be included in APK assets and updated with the application. Persistent data stays separate. Arbitrary npm packages, full Node.js compatibility, and independent JavaScript updates are outside this initial model.
+QuickJS services are bundled into a single ESM file on the build host, keeping allowed native modules external. Code is included in the APK and updated with the application. Persistent data stays separate. Arbitrary npm packages, full Node.js compatibility, and independent JavaScript updates are unsupported. See the [service guide](services.md) for configuration and runtime facilities.

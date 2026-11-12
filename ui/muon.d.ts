@@ -31,6 +31,8 @@ declare global {
     readonly android?: MuonAndroidApi;
     /** Native local notifications, present only when enabled and permitted. */
     readonly notifications?: MuonNotificationsApi;
+    /** Configured background services, present when permitted by the plugin policy. */
+    readonly services?: MuonServicesApi;
     /** CEF-only page-owned loopback HTTP servers, present when permitted. */
     readonly server?: MuonServerApi;
     /**
@@ -41,6 +43,59 @@ declare global {
      * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
+  }
+
+  /** A copied service observation that does not keep its runtime alive. */
+  interface MuonServiceState {
+    /** Logical identity declared in muon.json. */
+    readonly id: string;
+    /** Actual runtime state, independently of the autostart preference. */
+    readonly state: "stopped" | "starting" | "running" | "stopping" | "failed";
+    /** Decimal generation identity; "0" means the runtime has never started. */
+    readonly generation: string;
+    /** Decimal identity of the last committed autostart setting operation. */
+    readonly revision: string;
+    /** Effective persistent preference, falling back to the application default. */
+    readonly autostart: boolean;
+    /** Whether the host currently owns the single resident reference. */
+    readonly resident: boolean;
+    /** Number of page references, including acquisitions still starting. */
+    readonly clientReferences: number;
+    /** Last runtime failure, or an empty string when there is no failure. */
+    readonly error: string;
+  }
+
+  /** One page-owned reference to an acquired service generation. */
+  interface MuonServiceHandle {
+    /** Configured service identity. */
+    readonly id: string;
+    /** Decimal generation identity, preserved without conversion to a JS number. */
+    readonly generation: string;
+    /**
+     * Releases only this reference, leaving other pages and resident policy intact.
+     * @returns Completion of reference release; repeated calls share this promise.
+     * @remarks Page destruction also reclaims references through the native owner.
+     * Releasing the final reference requests shutdown but does not await disposal.
+     */
+    readonly release: () => Promise<void>;
+  }
+
+  /** Configured application services with lifetimes independent of their UI pages. */
+  interface MuonServicesApi {
+    /**
+     * Reserves a reference and starts the service when necessary.
+     * @param id - Logical service identity declared by the application.
+     * @returns A handle after startup succeeds; rejects on startup failure.
+     * @remarks Every successful call owns a distinct reference. Reopening a page
+     * can acquire an existing generation retained by the host or another page.
+     */
+    readonly acquire: (id: string) => Promise<MuonServiceHandle>;
+    /**
+     * Reads current runtime and desired lifetime without creating a reference.
+     * @param id - Logical service identity declared by the application.
+     * @returns A copied state observation.
+     */
+    readonly getState: (id: string) => Promise<MuonServiceState>;
   }
 
   /** Options for creating a page-owned native HTTP server. */

@@ -124,7 +124,7 @@ const verifyManifest = (entry, commits, expectedHashes) => {
     `${entry.abi}: configure arguments mismatch`
   );
   expectCondition(
-    manifest.libffi.cflags === '-O3 -g -fPIC',
+    manifest.libffi.cflags === '-O3 -g -fPIC -Wno-deprecated-declarations',
     `${entry.abi}: CFLAGS mismatch`
   );
   expectCondition(

@@ -7,6 +7,9 @@
 #include "muon_service_protocol.h"
 #include "muon_service_policy.h"
 #include "muon_service_startup.h"
+#include "muon_service_plugins.h"
+#include "muon_cardio_post.h"
+#include "services/muon_quickjs_service_plugins.h"
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
 #include "services/muon_service_broker.h"
@@ -32,6 +35,7 @@
 #include <filesystem>
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 
 static void Check(bool success, const char* operation) {
@@ -120,6 +124,8 @@ class ServiceProcess final {
     broker_.reset();
     controller_.reset();
     quickjs_.reset();
+    plugin_startup_.reset();
+    plugins_.reset();
     native_.reset();
     if (listener_ >= 0) close(listener_);
     if (signal_fd_ >= 0) close(signal_fd_);
@@ -172,6 +178,7 @@ class ServiceProcess final {
         co_await MakeDirectory(directory);
         const auto preference = co_await LoadMuonServiceAutostart(std::filesystem::path(data_root_) / ".autostart" / id);
         definitions.push_back({id, yyjson_get_bool(autostart), preference});
+        if (yyjson_arr_size(yyjson_obj_get(value, "plugins"))) plugin_services_.insert(id);
         if (runtime == "native") specs_.emplace(id, std::move(spec));
         else scripts_.emplace(id, MuonQuickJsServiceSpec{
             id, spec.library_path, {}, spec.data_directory, std::move(spec.config)});
@@ -183,7 +190,14 @@ class ServiceProcess final {
           [](const std::string& id, muon_log_level, const std::string& message) {
             std::cerr << id << ": " << message << '\n';
           }});
-      quickjs_ = std::make_unique<MuonQuickJsServiceHost>(MuonQuickJsServicePlatform{
+      plugins_ = CreateMuonDesktopServicePlugins(yyjson_doc_get_root(document.get()),
+          std::filesystem::path(config).parent_path(), dispatcher_, [this](std::function<void()> task) {
+            muon_internal::FireAndForgetOnDispatcher(&dispatcher_, [this, task = std::move(task)] {
+              task();
+              MaybeFinish();
+            });
+          });
+      auto quickjs_platform = MuonQuickJsServicePlatform{
           post,
           [this](std::chrono::milliseconds delay, std::function<void()> task) {
             auto cancellation = std::make_shared<cardio::cancellation_source>();
@@ -196,7 +210,14 @@ class ServiceProcess final {
           },
           [this](const std::string& id, uint64_t generation, const std::string& reason) {
             controller_->RuntimeExited(id, generation, reason);
-          }, {64 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(2)}, std::chrono::seconds(10)});
+          }, {64 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(2)}, std::chrono::seconds(10),
+          [this](const MuonQuickJsServiceSpec& spec, uint64_t generation, MuonQuickJsEngine& engine,
+              std::function<void()> wake, std::function<void(const std::string&)> fault) {
+            return plugin_startup_ ? plugin_startup_->Attach(spec.id, generation, engine, std::move(wake), std::move(fault))
+                                   : MuonQuickJsServiceExtension{};
+          }};
+      if (plugins_) plugin_startup_ = std::make_unique<MuonQuickJsServicePlugins>(*plugins_, quickjs_platform.delay);
+      quickjs_ = std::make_unique<MuonQuickJsServiceHost>(std::move(quickjs_platform));
       controller_ = std::make_unique<MuonServiceController>(definitions, MuonServiceBackend{
           [this](const MuonServiceSnapshot& state, auto complete) {
             if (scripts_.contains(state.id))
@@ -284,7 +305,8 @@ class ServiceProcess final {
     try {
       spec.source = co_await ReadTextFile(spec.filename, timeout.get_cancellation());
       timeout.cancel();
-      quickjs_->Start(spec, state.generation, complete);
+      if (plugin_services_.contains(state.id)) plugin_startup_->Start(*quickjs_, spec, state.generation, complete);
+      else quickjs_->Start(spec, state.generation, complete);
     } catch (const std::exception& failure) { error = failure.what(); }
     timeout.cancel();
     if (!error.empty()) complete(error);
@@ -525,7 +547,8 @@ class ServiceProcess final {
     if (!initialized_ || finishing_ || policy_jobs_ != 0) return;
     if (!controller_->IsShuttingDown()) {
       if (ever_connected_ && !bootstrap_open_ && peers_.empty() &&
-          controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && runtime_jobs_ == 0)
+          controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && (!plugins_ || plugins_->IsIdle()) &&
+          (!plugin_startup_ || plugin_startup_->IsIdle()) && runtime_jobs_ == 0)
         controller_->Shutdown("No service references remain");
       else return;
     }
@@ -536,7 +559,8 @@ class ServiceProcess final {
       transport_stopping_ = true;
       transport_cancellation_.cancel();
     }
-    if (controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && runtime_jobs_ == 0 && posted_ == 0) {
+    if (controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && (!plugins_ || plugins_->IsIdle()) &&
+          (!plugin_startup_ || plugin_startup_->IsIdle()) && runtime_jobs_ == 0 && posted_ == 0) {
       std::vector<std::shared_ptr<Peer>> peers;
       for (const auto& [owner, peer] : peers_) {
         (void)owner;
@@ -555,6 +579,9 @@ class ServiceProcess final {
   std::map<std::string, MuonNativeServiceSpec> specs_;
   std::map<std::string, MuonQuickJsServiceSpec> scripts_;
   std::unique_ptr<MuonQuickJsServiceHost> quickjs_;
+  std::unique_ptr<MuonServicePluginPool> plugins_;
+  std::unique_ptr<MuonQuickJsServicePlugins> plugin_startup_;
+  std::set<std::string> plugin_services_;
   size_t runtime_jobs_ = 0;
   std::unique_ptr<MuonServiceLoginPolicy> login_;
   size_t policy_jobs_ = 0;

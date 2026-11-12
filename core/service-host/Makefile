@@ -18,6 +18,9 @@ NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muo
 QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
 QUICKJS_SOURCE_DIR := ../common/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
 QUICKJS_SOURCES := $(COMMON)/quickjs/muon_quickjs_engine.cpp $(COMMON)/services/muon_quickjs_service_host.cpp $(COMMON)/services/muon_service_execution_router.cpp
+QUICKJS_SOURCES += $(COMMON)/quickjs/muon_quickjs_module.cpp $(COMMON)/services/muon_service_plugin_pool.cpp $(COMMON)/services/muon_quickjs_plugin_bindings.cpp $(COMMON)/services/muon_quickjs_service_plugins.cpp
+PLUGIN_SOURCES := muon_service_plugins.cpp $(COMMON)/plugins/muon_plugin_runtime.cpp $(COMMON)/plugins/muon_plugin_metadata.cpp $(COMMON)/plugins/muon_traffic_type_metadata.cpp $(COMMON)/plugins/muon_function_wrapper_lifecycle.cpp $(COMMON)/muon_sha256.cpp $(COMMON)/config/muon_glob.cpp $(COMMON)/plugins/muon_plugin_policy.cpp $(COMMON)/plugins/muon_type_metadata.cpp $(COMMON)/rpc/muon_rpc.cpp $(COMMON)/rpc/muon_rpc_host.cpp
+CPPFLAGS += -I../../deps/tra-ffic/include -I../../deps/sha2
 QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
 CPPFLAGS += -isystem $(QUICKJS_SOURCE_DIR)
 LOGIN := muon_service_login.cpp muon_service_startup.cpp ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp ../cef/src/muon_string_helpers.cpp
@@ -46,8 +49,11 @@ $(OUT)/protocol-test: muon_service_protocol_test.cpp muon_service_protocol.cpp $
 $(OUT)/libcardio.so: ../../sdk/native/linux-amd64/lib/libcardio.so | $(OUT)
 	cp $< $@
 
-$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $(QUICKJS_OBJECTS) $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -ldl -lm -Wl,-rpath,'$$ORIGIN' -o $@
+$(OUT)/sha2.o: ../../deps/sha2/sha2.c | $(OUT)
+	$(CC) -std=c99 -D_DEFAULT_SOURCE -I../../deps/sha2 -c $< -o $@
+
+$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $(QUICKJS_OBJECTS) $(OUT)/yyjson.o $(OUT)/sha2.o $(OUT)/libcardio.so | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(shell pkg-config --cflags libffi) $(filter-out %.so,$^) $(CARDIO_LIBS) $(shell pkg-config --libs libffi) -ldl -lm -Wl,-rpath,'$$ORIGIN' -o $@
 
 $(OUT)/probe-service.so: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) -shared $< $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
@@ -81,6 +87,7 @@ WIN_$(1)_CXX := $(2)-g++
 WIN_$(1)_PC := $(abspath ../../sdk/native/windows-$(1)/lib/pkgconfig)
 WIN_$(1)_FLAGS = $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --cflags muon-plugin-cardio)
 WIN_$(1)_LIBS = $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --libs muon-plugin-cardio)
+WIN_$(1)_FFI := ../cef/.deps/libffi-$(if $(filter i686,$(1)),mingw32,mingw64)
 
 windows-$(1): $(OUT)/windows-$(1)/muon-service-host.exe $(OUT)/windows-$(1)/simple-service.dll $(OUT)/windows-$(1)/probe-service.dll $(OUT)/windows-$(1)/session-end.exe $(OUT)/windows-$(1)/transport-test.exe $(OUT)/windows-$(1)/process-driver.exe $(OUT)/windows-$(1)/process-lock-driver.exe
 
@@ -107,8 +114,14 @@ $(OUT)/windows-$(1)/runtimes: ../../sdk/native/windows-$(1)/lib/libcardio.dll | 
 	cp $$$$($$(WIN_$(1)_CXX) -print-file-name=libwinpthread-1.dll) $(OUT)/windows-$(1)/
 	touch $$@
 
-$(OUT)/windows-$(1)/muon-service-host.exe: muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes
-	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -o $$@
+$$(WIN_$(1)_FFI)/lib/libffi.a:
+	bash ../cef/build_libffi_mingw32.sh $(if $(filter i686,$(1)),mingw32,mingw64)
+
+$(OUT)/windows-$(1)/sha2.o: ../../deps/sha2/sha2.c | $(OUT)/windows-$(1)
+	$$(WIN_$(1)_CC) -std=c99 -D_DEFAULT_SOURCE -I../../deps/sha2 -c $$< -o $$@
+
+$(OUT)/windows-$(1)/muon-service-host.exe: muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/sha2.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes $$(WIN_$(1)_FFI)/lib/libffi.a
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -I$$(WIN_$(1)_FFI)/include -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -o $$@
 
 $(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@

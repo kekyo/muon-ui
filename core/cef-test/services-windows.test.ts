@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { buildPlugin, readPluginArtifact } from "muon-plugin-sdk";
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -36,9 +37,35 @@ const root = win32.join(remoteBase, "run-" + randomUUID());
 const relayPath = win32.join(remoteBase, "muon-cdp-relay.exe");
 const artifacts = resolve(".run/services-windows", target.target);
 let agent: RemoteAgent | undefined;
+const nativeAllow = [
+  "echo",
+  "echoInt64",
+  "echoUint64",
+  "echoBytes",
+  "callback",
+  "fail",
+  "makeEcho",
+  "wrapped",
+].map((name) => "fixture.api." + name);
+let nativeLibrary = "";
+let nativeSignature = "";
+let nativeBundle = "";
 let cdpHost = "";
 
 beforeAll(async () => {
+  const nativeTarget = target.target;
+  const manifest = await buildPlugin({
+    configPath: resolve("../common-test/muon-service-plugin.build.json"),
+    outputDirectory: resolve(".run/service-native-fixture", nativeTarget),
+    target: nativeTarget,
+  });
+  const artifact = await readPluginArtifact(manifest, [nativeTarget]);
+  nativeLibrary = artifact.targets[nativeTarget]!.library;
+  nativeSignature = artifact.manifest.targets[nativeTarget]!.library.sha256;
+  nativeBundle = await buildMuonQuickJsService(
+    resolve("../common-test/services/quickjs-native-service.ts"),
+    ["fixture:api"],
+  );
   await promisify(execFile)("make", ["-C", "../service-host", target.target], {
     maxBuffer: 4 * 1024 * 1024,
   });
@@ -188,16 +215,38 @@ it.each(["simple", "validate"] as const)(
       Buffer.from(
         await buildMuonQuickJsService(
           resolve("../../sdk/test/fixtures/quickjs-service.ts"),
+          [],
         ),
       ),
     );
+    const nativeScript = win32.join(directory, "native-script.mjs");
+    const nativePlugin = win32.join(directory, "fixture.dll");
+    await remote.files.writeFile(nativeScript, Buffer.from(nativeBundle));
+    await remote.files.writeFile(nativePlugin, await readFile(nativeLibrary));
     const registry = win32.join(directory, "muon-services.json");
     const library = win32.join(runtime, "probe-service.dll");
     await remote.files.writeFile(
       registry,
       Buffer.from(
         JSON.stringify({
+          plugins: [
+            {
+              name: "fixture",
+              library: nativePlugin,
+              signature: nativeSignature,
+              salt: "",
+              config: {},
+              allow: nativeAllow,
+              expectedFunctions: nativeAllow,
+            },
+          ],
           services: {
+            nativeScript: {
+              runtime: "quickjs",
+              script: nativeScript,
+              autostart: true,
+              plugins: nativeAllow,
+            },
             script: { runtime: "quickjs", script, autostart: true },
             resident: {
               library,
@@ -506,6 +555,40 @@ it.each(["simple", "validate"] as const)(
         callback: "outer-native",
         event: 47,
       });
+      const nativeGeneration = await evaluate<string>(
+        "globalThis.nativeHandle = await serviceApi.acquire('nativeScript'); return nativeHandle.generation;",
+      );
+      expect(
+        await evaluate(`
+        const bytes = new Uint8Array(1024 * 1024).fill(197);
+        const echoed = await nativeHandle.call('echoBytes', [bytes]);
+        let received;
+        const event = new Promise(resolve => received = resolve);
+        const subscription = await nativeHandle.subscribe('progress', received);
+        await nativeHandle.call('emit', ['native event']);
+        const notified = await event;
+        await subscription.close();
+        return {
+          text: await nativeHandle.call('echo', ['日本語😀']),
+          signed: String(await nativeHandle.call('echoInt64', [-(1n << 63n)])),
+          unsigned: String(await nativeHandle.call('echoUint64', [(1n << 64n) - 1n])),
+          bytes: echoed.length === bytes.length && echoed.every(value => value === 197),
+          callback: await nativeHandle.call('callback', ['outer', async value => await scriptHandle.call('echo', [value + '-reentrant'])]),
+          proxy: await nativeHandle.call('proxy', ['owned']),
+          failure: (await nativeHandle.call('failure', [])).includes('fixture native failure'),
+          event: notified,
+        };
+      `),
+      ).toEqual({
+        text: "日本語😀",
+        signed: "-9223372036854775808",
+        unsigned: "18446744073709551615",
+        bytes: true,
+        callback: "outer-reentrant",
+        proxy: "owned",
+        failure: true,
+        event: "native event",
+      });
       await evaluate(`
         globalThis.rpcEvents = [];
         globalThis.rpcEvent = new Promise(resolve => globalThis.rpcNext = resolve);
@@ -657,6 +740,16 @@ it.each(["simple", "validate"] as const)(
           "return await scriptHandle.call('echo', ['after-ui-close']);",
         ),
       ).toBe("after-ui-close");
+      expect(
+        await evaluate(
+          "globalThis.nativeHandle = await serviceApi.acquire('nativeScript'); return nativeHandle.generation;",
+        ),
+      ).toBe(nativeGeneration);
+      expect(
+        await evaluate(
+          "return await nativeHandle.call('echo', ['native-after-ui-close']);",
+        ),
+      ).toBe("native-after-ui-close");
       const resident = await observeClose(ports[0]);
       await evaluate("await settingsApi.setAutostart(true); return true;");
       const shutdown = await Promise.allSettled([

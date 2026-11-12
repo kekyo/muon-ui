@@ -833,6 +833,7 @@ add_executable(muon_service_host
   ../service-host/muon_service_login.cpp
   ../service-host/muon_service_startup.cpp
   ../service-host/muon_service_protocol.cpp
+  ../service-host/muon_service_plugins.cpp
   src/config/muon_autostart.cpp
   src/config/muon_paths.cpp
   src/config/muon_startup.cpp
@@ -845,7 +846,11 @@ add_executable(muon_service_host
   ${MUON_COMMON_ROOT}/src/services/muon_service_broker.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_native_service_library.cpp
   ${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_engine.cpp
+  ${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_module.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_quickjs_service_host.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_plugin_pool.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_quickjs_plugin_bindings.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_quickjs_service_plugins.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_execution_router.cpp
   ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp)
 target_compile_features(muon_service_host PRIVATE cxx_std_20)
@@ -853,7 +858,7 @@ target_include_directories(muon_service_host PRIVATE
   src
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
   "${MUON_COMMON_ROOT}/../../sdk/include")
-target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson muon_service_quickjs ${CMAKE_DL_LIBS})
+target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson muon_service_quickjs muon_plugin_runtime_core ${CMAKE_DL_LIBS})
 set_target_properties(muon_service_host PROPERTIES
   OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
 if(WIN32)

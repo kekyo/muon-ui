@@ -45,8 +45,9 @@ class MuonServiceClient final {
   MuonServiceClient& operator=(const MuonServiceClient&) = delete;
   /**
    * Invokes a permitted lifetime operation and decodes its response envelope.
-   * @param operation acquire, release, or getState; no administrative operations.
-   * @param json JSON object containing serviceId and, for release, exact refId/generation.
+   * @param operation acquire, release, getState, setAutostart, or watchState.
+   * @param json Operation arguments; native owner and request identities are never
+   *     accepted from the caller. Whole-application shutdown is not permitted.
    * @returns JSON result after success; rejects native, transport, and page errors.
    */
   cardio::promise<std::string> Call(std::string operation, std::string json);

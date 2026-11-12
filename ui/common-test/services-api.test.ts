@@ -65,6 +65,91 @@ it("observes stopped service state without acquiring a reference", async () => {
   );
 });
 
+it("commits autostart without reserving a service reference", async () => {
+  let saved: (() => void) | undefined;
+  const call = vi.fn(async () => {
+    await new Promise<void>((resolve) => {
+      saved = resolve;
+    });
+    return null;
+  });
+  const api = createMuonServicesApi(call);
+  const setting = api.setAutostart("worker", false);
+  expect(call).toHaveBeenCalledExactlyOnceWith(
+    "setAutostart",
+    '{"serviceId":"worker","enabled":false}',
+  );
+  saved!();
+  await setting;
+  await expect(
+    api.setAutostart("worker", 1 as unknown as boolean),
+  ).rejects.toThrow("boolean");
+  expect(call).toHaveBeenCalledTimes(1);
+});
+
+it("observes initial and changed states without acquiring, then closes a pending observation", async () => {
+  vi.useFakeTimers();
+  try {
+    const initial = {
+      id: "worker",
+      state: "stopped",
+      generation: "0",
+      revision: "0",
+      autostart: false,
+      resident: false,
+      clientReferences: 0,
+      error: "",
+    };
+    let next: ((json: string) => void) | undefined;
+    const call = vi.fn(async (name: string, json: string) => {
+      expect(name).toBe("watchState");
+      const request = JSON.parse(json);
+      expect(request.serviceId).toBe("worker");
+      if (request.operation === "acquire")
+        return JSON.stringify({ token: "9007199254740993", state: initial });
+      expect(request.token).toBe("9007199254740993");
+      if (request.operation === "next")
+        return await new Promise<string>((resolve) => {
+          next = resolve;
+        });
+      expect(request.operation).toBe("release");
+      next!(JSON.stringify({ state: null }));
+      return null;
+    });
+    const listener = vi.fn();
+    const watcher = await createMuonServicesApi(call).watchState(
+      "worker",
+      listener,
+    );
+    expect(listener).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listener).toHaveBeenCalledExactlyOnceWith(initial);
+    const running = {
+      ...initial,
+      state: "running",
+      generation: "1",
+      autostart: true,
+      resident: true,
+    };
+    next!(JSON.stringify({ state: running }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(listener).toHaveBeenLastCalledWith(running);
+    expect(listener).toHaveBeenCalledTimes(2);
+    const closing = watcher.close();
+    expect(watcher.close()).toBe(closing);
+    await closing;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      call.mock.calls.filter(
+        ([, json]) => JSON.parse(json).operation === "release",
+      ),
+    ).toHaveLength(1);
+    expect(listener).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("preserves native startup failures and releases failures idempotently", async () => {
   const failure = new Error("Foreground service start rejected");
   const denied = createMuonServicesApi(async () => {

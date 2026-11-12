@@ -215,6 +215,8 @@ const jsIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const defaultMuonCapabilityFunctionPaths = [
   "muon.services.acquire",
   "muon.services.getState",
+  "muon.services.setAutostart",
+  "muon.services.watchState",
   "muon.server.createServer",
   "muon.browser.reload",
   "muon.browser.hardReload",

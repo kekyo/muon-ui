@@ -80,6 +80,25 @@ declare global {
     readonly release: () => Promise<void>;
   }
 
+  /** A non-owning state observer, automatically removed when its page disappears. */
+  interface MuonServiceWatcher {
+    /**
+     * Stops observation and settles any pending state request.
+     * @returns Completion of removal; repeated calls share this promise.
+     * @remarks Does not release service references or change autostart settings.
+     */
+    readonly close: () => Promise<void>;
+  }
+
+  /**
+   * Receives the initial service state and subsequent coalesced observations.
+   * @param state - Copied current state; retaining it does not keep a service alive.
+   * @returns Optional asynchronous processing, during which changes are coalesced.
+   */
+  type MuonServiceStateListener = (
+    state: MuonServiceState,
+  ) => void | Promise<void>;
+
   /** Configured application services with lifetimes independent of their UI pages. */
   interface MuonServicesApi {
     /**
@@ -96,6 +115,27 @@ declare global {
      * @returns A copied state observation.
      */
     readonly getState: (id: string) => Promise<MuonServiceState>;
+    /**
+     * Persists the user preference and updates the host's resident reference.
+     * @param id - Logical service identity declared by the application.
+     * @param enabled - Whether the host should retain one resident reference.
+     * @returns After persistence and policy update, without waiting for runtime stop.
+     * @remarks OFF preserves every other page's reference. Startup failures remain
+     * visible in getState/watchState independently of this saved preference.
+     */
+    readonly setAutostart: (id: string, enabled: boolean) => Promise<void>;
+    /**
+     * Observes service state without acquiring a runtime reference.
+     * @param id - Logical service identity declared by the application.
+     * @param listener - Receives initial state after this method returns, then changes.
+     * @returns A page-owned observer with idempotent asynchronous close.
+     * @remarks Slow listeners receive the latest state, not a history of transitions.
+     * Listener failures are logged; a disconnected host closes the observation.
+     */
+    readonly watchState: (
+      id: string,
+      listener: MuonServiceStateListener,
+    ) => Promise<MuonServiceWatcher>;
   }
 
   /** Options for creating a page-owned native HTTP server. */

@@ -61,6 +61,40 @@ it("does not give a state observer acquisition or release permission", () => {
   ]);
 });
 
+it.each(["android", "cef"] as const)(
+  "exports only service management operations authorized for %s",
+  async (backend) => {
+    const call = vi.fn(async () => null);
+    vi.stubGlobal("__muon_plugin_call", call);
+    const resolver = createMuonCapabilityModuleResolver("/app", {
+      backend,
+      imports: [
+        {
+          sources: ["src/**"],
+          allow: ["muon.services.setAutostart", "muon.services.watchState"],
+        },
+      ],
+    });
+    const id = resolver.resolveId("muon:services", "/app/src/main.ts")!.id;
+    const api = (await import(
+      "data:text/javascript," + encodeURIComponent(resolver.load(id)!)
+    )) as MuonServicesApi;
+    expect(Object.keys(api).sort()).toEqual(["setAutostart", "watchState"]);
+    await api.setAutostart("worker", false);
+    expect(call).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      "muon.services.setAutostart",
+      backend === "cef"
+        ? ['{"serviceId":"worker","enabled":false}', ""]
+        : ['{"serviceId":"worker","enabled":false}'],
+    );
+    expect(resolver.getRuntimePluginConfig().capabilities[0]!.allow).toEqual([
+      "muon.services.setAutostart",
+      "muon.services.watchState",
+    ]);
+  },
+);
+
 it("installs only allowed CEF methods while retaining handle release", async () => {
   const released = vi.fn(async () => null);
   const namespace: Record<string, unknown> = {};

@@ -15,7 +15,7 @@
  *  @return JSON object preserving 64-bit identities as strings. */
 std::string SerializeMuonServiceSnapshot(const MuonServiceSnapshot& snapshot);
 
-/** Pending acquisition associated with one authenticated transport connection. */
+/** Pending operation associated with one authenticated transport connection. */
 struct MuonServicePendingRequest {
   /** Connection identity assigned by the host, never trusted from JSON. */
   std::string owner;
@@ -23,11 +23,22 @@ struct MuonServicePendingRequest {
   std::string request;
 };
 
+/** A connection-owned state subscription that never reserves a runtime reference. */
+struct MuonServiceObservation {
+  std::string owner; /**< Authenticated owner of this subscription. */
+  std::string service; /**< Configured logical service being observed. */
+  std::string delivered; /**< Last JSON state delivered to the observer. */
+  std::string latest; /**< Most recent coalesced JSON state. */
+  std::optional<std::string> request; /**< At most one waiting next request. */
+};
+
 /**
  * Minimal lifetime protocol used by independent desktop service hosts.
  *
  * Requests carry a string requestId and an op (acquire, release, getState,
- * shutdown). Service and reference identities are string fields. Response
+ * setAutostart, watchState, shutdown). Watches use acquire/next/release operations
+ * and coalesce state while their consumer is busy. Watches and setting changes
+ * never acquire a client reference. Service and reference identities are strings. Response
  * result/error envelopes use the same requestId. All methods run on the owner
  * dispatcher. Transport authentication and framing are platform responsibilities.
  */
@@ -55,4 +66,7 @@ class MuonServiceProtocol final {
   std::function<void(const std::string&, const std::string&)> send_;
   std::set<std::string> owners_;
   std::map<uint64_t, MuonServicePendingRequest> pending_;
+  std::map<uint64_t, MuonServicePendingRequest> policies_;
+  std::map<uint64_t, MuonServiceObservation> observations_;
+  uint64_t observation_id_ = 0;
 };

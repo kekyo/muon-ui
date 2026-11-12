@@ -67,6 +67,31 @@ static cardio::promise<void> Tests(bool& passed) {
   {
     Channel channel;
     MuonServiceClient client([&](cardio::cancellation) -> cardio::promise<MuonServiceTransport> {
+      co_return channel.Transport();
+    });
+    auto enabled = client.Call("setAutostart", R"({"serviceId":"worker","enabled":false,"op":"shutdown"})");
+    co_await channel.WaitSent(1);
+    assert(channel.sent.size() == 1);
+    assert(channel.sent[0].find("\"enabled\":false") != std::string::npos);
+    assert(channel.sent[0].find("shutdown") == std::string::npos);
+    channel.Emit("{\"requestId\":\"1\",\"result\":null}\n");
+    assert(co_await enabled == "null");
+    auto next = client.Call("watchState", R"({"serviceId":"worker","operation":"next","token":"9007199254740993","owner":"forged"})");
+    co_await channel.WaitSent(2);
+    assert(channel.sent[1].find("9007199254740993") != std::string::npos);
+    assert(channel.sent[1].find("forged") == std::string::npos);
+    channel.Emit("{\"requestId\":\"2\",\"result\":{\"state\":null}}\n");
+    assert(co_await next == "{\"state\":null}");
+    bool rejected = false;
+    try { co_await client.Call("setAutostart", R"({"serviceId":"worker","enabled":"false"})"); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    assert(rejected);
+    assert(channel.sent.size() == 2);
+    co_await client.Close();
+  }
+  {
+    Channel channel;
+    MuonServiceClient client([&](cardio::cancellation) -> cardio::promise<MuonServiceTransport> {
       ++channel.connects;
       co_return channel.Transport();
     });

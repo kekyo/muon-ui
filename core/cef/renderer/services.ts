@@ -25,7 +25,13 @@ export const installMuonCefServicesApi = (
     MuonServiceOperation,
     (json: string, owner: string) => Promise<unknown>
   >();
-  for (const name of ['acquire', 'release', 'getState'] as const) {
+  for (const name of [
+    'acquire',
+    'release',
+    'getState',
+    'setAutostart',
+    'watchState',
+  ] as const) {
     const value = namespace['__' + name];
     if (typeof value === 'function')
       native.set(

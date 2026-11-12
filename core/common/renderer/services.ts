@@ -38,6 +38,23 @@ export interface MuonServiceHandle {
   readonly release: () => Promise<void>;
 }
 
+/** A non-owning state observer, automatically removed when its page disappears. */
+export interface MuonServiceWatcher {
+  /**
+   * Stops observation and settles any pending state request.
+   * @returns Completion of removal; repeated calls share this promise.
+   * @remarks Does not release service references or change autostart settings.
+   */
+  readonly close: () => Promise<void>;
+}
+
+/**
+ * Receives the initial service state and subsequent coalesced observations.
+ * @param state - Copied current state; retaining it does not keep a service alive.
+ * @returns Optional asynchronous processing, during which changes are coalesced.
+ */
+export type MuonServiceStateListener = (state: MuonServiceState) => void | Promise<void>;
+
 /** Configured application services with lifetimes independent of their UI pages. */
 export interface MuonServicesApi {
   /**
@@ -54,10 +71,28 @@ export interface MuonServicesApi {
    * @returns A copied state observation.
    */
   readonly getState: (id: string) => Promise<MuonServiceState>;
+  /**
+   * Persists the user preference and updates the host's resident reference.
+   * @param id - Logical service identity declared by the application.
+   * @param enabled - Whether the host should retain one resident reference.
+   * @returns After persistence and policy update, without waiting for runtime stop.
+   * @remarks OFF preserves every other page's reference. Startup failures remain
+   * visible in getState/watchState independently of this saved preference.
+   */
+  readonly setAutostart: (id: string, enabled: boolean) => Promise<void>;
+  /**
+   * Observes service state without acquiring a runtime reference.
+   * @param id - Logical service identity declared by the application.
+   * @param listener - Receives initial state after this method returns, then changes.
+   * @returns A page-owned observer with idempotent asynchronous close.
+   * @remarks Slow listeners receive the latest state, not a history of transitions.
+   * Listener failures are logged; a disconnected host closes the observation.
+   */
+  readonly watchState: (id: string, listener: MuonServiceStateListener) => Promise<MuonServiceWatcher>;
 }
 
 /** Internal native operation names, interpreted with the authenticated page owner. */
-export type MuonServiceOperation = 'acquire' | 'release' | 'getState';
+export type MuonServiceOperation = 'acquire' | 'release' | 'getState' | 'setAutostart' | 'watchState';
 
 const checkedId = (id: string): string => {
   if (typeof id !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(id))
@@ -78,6 +113,21 @@ const decimal = (value: unknown, allowZero: boolean): value is string =>
   /^(0|[1-9][0-9]{0,19})$/.test(value) &&
   (allowZero || value !== '0') &&
   BigInt(value) <= 18446744073709551615n;
+
+const checkedState = (value: unknown, serviceId: string): MuonServiceState => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('Invalid native service state');
+  const state = value as Record<string, unknown>;
+  if (
+    state.id !== serviceId ||
+    !['stopped', 'starting', 'running', 'stopping', 'failed'].includes(state.state as string) ||
+    !decimal(state.generation, true) || !decimal(state.revision, true) ||
+    typeof state.autostart !== 'boolean' || typeof state.resident !== 'boolean' ||
+    !Number.isSafeInteger(state.clientReferences) || Number(state.clientReferences) < 0 ||
+    typeof state.error !== 'string'
+  ) throw new Error('Invalid native service state');
+  return Object.freeze(state) as unknown as MuonServiceState;
+};
 
 /**
  * Creates the page facade shared by desktop and Android native transports.
@@ -119,21 +169,49 @@ export const createMuonServicesApi = (
   },
   getState: async (id) => {
     const serviceId = checkedId(id);
-    const value = readObject(await call('getState', JSON.stringify({ serviceId })));
-    if (
-      value.id !== serviceId ||
-      !['stopped', 'starting', 'running', 'stopping', 'failed'].includes(
-        value.state as string
-      ) ||
-      !decimal(value.generation, true) ||
-      !decimal(value.revision, true) ||
-      typeof value.autostart !== 'boolean' ||
-      typeof value.resident !== 'boolean' ||
-      !Number.isSafeInteger(value.clientReferences) ||
-      Number(value.clientReferences) < 0 ||
-      typeof value.error !== 'string'
-    )
-      throw new Error('Invalid native service state');
-    return Object.freeze(value) as unknown as MuonServiceState;
+    return checkedState(readObject(await call('getState', JSON.stringify({ serviceId }))), serviceId);
+  },
+  setAutostart: async (id, enabled) => {
+    const serviceId = checkedId(id);
+    if (typeof enabled !== 'boolean') throw new TypeError('enabled must be boolean');
+    await call('setAutostart', JSON.stringify({ serviceId, enabled }));
+  },
+  watchState: async (id, listener) => {
+    const serviceId = checkedId(id);
+    if (typeof listener !== 'function') throw new TypeError('listener must be a function');
+    const initial = readObject(await call('watchState', JSON.stringify({ serviceId, operation: 'acquire' })));
+    if (!decimal(initial.token, false)) throw new Error('Invalid native service observation');
+    const token = initial.token;
+    const state = checkedState(initial.state, serviceId);
+    let closed = false;
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> => {
+      closed = true;
+      closing ??= (async () => {
+        await call('watchState', JSON.stringify({ serviceId, operation: 'release', token }));
+      })();
+      return closing;
+    };
+    // Defer the initial callback until its owner has received the close handle.
+    // Each next request waits at the host; there is no timer-based state polling.
+    setTimeout(async () => {
+      let current = state;
+      try {
+        while (!closed) {
+          try { await listener(current); }
+          catch (error) { console.error('Muon service state listener failed', error); }
+          if (closed) break;
+          const result = readObject(await call('watchState', JSON.stringify({ serviceId, operation: 'next', token })));
+          if (closed || result.state === null) break;
+          current = checkedState(result.state, serviceId);
+        }
+      } catch (error) {
+        if (!closed) console.error('Muon service state observation failed', error);
+      } finally {
+        try { await close(); }
+        catch (error) { console.error('Muon service state observation cleanup failed', error); }
+      }
+    }, 0);
+    return Object.freeze({ close });
   },
 });

@@ -8,6 +8,10 @@ declare module "muon:services" {
   export const acquire: MuonServicesApi["acquire"];
   /** Observe actual runtime state and desired lifetime without acquiring a reference. */
   export const getState: MuonServicesApi["getState"];
+  /** Save the autostart preference while preserving other pages' references. */
+  export const setAutostart: MuonServicesApi["setAutostart"];
+  /** Observe initial and changed state without keeping the service running. */
+  export const watchState: MuonServicesApi["watchState"];
 }
 
 declare module "muon:notifications" {

@@ -159,7 +159,8 @@ static void StartWriter(const std::shared_ptr<MuonServiceClientImpl>& impl) {
 
 static cardio::promise<std::string> Call(std::shared_ptr<MuonServiceClientImpl> impl,
                                         std::string operation, std::string json) {
-  if (operation != "acquire" && operation != "release" && operation != "getState")
+  if (operation != "acquire" && operation != "release" && operation != "getState" &&
+      operation != "setAutostart" && operation != "watchState")
     throw std::invalid_argument("Unsupported service client operation");
   auto doc = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
       yyjson_read(json.data(), json.size(), 0), yyjson_doc_free);
@@ -172,6 +173,19 @@ static cardio::promise<std::string> Call(std::shared_ptr<MuonServiceClientImpl> 
     Text(root, "generation");
     payload += ",\"refId\":" + Json(yyjson_obj_get(root, "refId")) +
                ",\"generation\":" + Json(yyjson_obj_get(root, "generation"));
+  } else if (operation == "setAutostart") {
+    auto* enabled = yyjson_obj_get(root, "enabled");
+    if (!yyjson_is_bool(enabled)) throw std::invalid_argument("enabled must be boolean");
+    payload += ",\"enabled\":" + Json(enabled);
+  } else if (operation == "watchState") {
+    const auto action = Text(root, "operation");
+    if (action != "acquire" && action != "next" && action != "release")
+      throw std::invalid_argument("Unsupported service observation operation");
+    payload += ",\"operation\":" + Json(yyjson_obj_get(root, "operation"));
+    if (action != "acquire") {
+      Text(root, "token");
+      payload += ",\"token\":" + Json(yyjson_obj_get(root, "token"));
+    }
   }
   if (impl->closed) throw std::runtime_error(impl->failure);
   if (impl->sequence == std::numeric_limits<uint64_t>::max())

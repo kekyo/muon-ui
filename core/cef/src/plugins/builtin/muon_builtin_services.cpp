@@ -47,6 +47,12 @@ static void Release(muon_completion_func completion, const char* json, const cha
 static void GetState(muon_completion_func completion, const char* json, const char* owner) {
   cardio::fire_and_forget(Invoke(session, completion, "getState", json ? json : "", owner ? owner : ""));
 }
+static void SetAutostart(muon_completion_func completion, const char* json, const char* owner) {
+  cardio::fire_and_forget(Invoke(session, completion, "setAutostart", json ? json : "", owner ? owner : ""));
+}
+static void WatchState(muon_completion_func completion, const char* json, const char* owner) {
+  cardio::fire_and_forget(Invoke(session, completion, "watchState", json ? json : "", owner ? owner : ""));
+}
 static void ReleaseOwner(const char* owner) { if (session && owner) session->ReleaseOwner(owner); }
 
 static cardio::promise<void> StopAsync(std::shared_ptr<MuonServiceSession> state,
@@ -67,8 +73,12 @@ static const muon_plugin_function_metadata release_function = {
     "__release", reinterpret_cast<muon_native_function>(&Release), {2, arguments, &string_type}, "release"};
 static const muon_plugin_function_metadata state_function = {
     "__getState", reinterpret_cast<muon_native_function>(&GetState), {2, arguments, &string_type}, "getState"};
+static const muon_plugin_function_metadata autostart_function = {
+    "__setAutostart", reinterpret_cast<muon_native_function>(&SetAutostart), {2, arguments, &string_type}, "setAutostart"};
+static const muon_plugin_function_metadata watch_function = {
+    "__watchState", reinterpret_cast<muon_native_function>(&WatchState), {2, arguments, &string_type}, "watchState"};
 static const muon_plugin_function_metadata* const functions[] = {
-    &acquire_function, &release_function, &state_function, nullptr};
+    &acquire_function, &release_function, &state_function, &autostart_function, &watch_function, nullptr};
 static const muon_plugin_namespace service_namespace{"muon.services", kMuonServiceSetupScript, functions};
 static const muon_plugin_namespace* const namespaces[] = {&service_namespace, nullptr};
 static const muon_plugin_metadata metadata{namespaces, &Stop, &ReleaseOwner};

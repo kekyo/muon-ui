@@ -9,6 +9,7 @@
 
 #include <charconv>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 
 static std::string Quote(const std::string& value) {
@@ -95,6 +96,8 @@ void MuonServiceProtocol::CloseOwner(const std::string& owner) {
     if (it->second.owner == owner) it = pending_.erase(it);
     else ++it;
   }
+  std::erase_if(policies_, [&](const auto& item) { return item.second.owner == owner; });
+  std::erase_if(observations_, [&](const auto& item) { return item.second.owner == owner; });
   controller_.ReleaseOwner(owner);
 }
 
@@ -110,6 +113,12 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
     if (request.size() > 128) return false;
     for (const auto& [id, pending] : pending_) {
       if (pending.owner == owner && pending.request == request) return false;
+    }
+    for (const auto& [id, pending] : policies_) {
+      if (pending.owner == owner && pending.request == request) return false;
+    }
+    for (const auto& [id, observation] : observations_) {
+      if (observation.owner == owner && observation.request == request) return false;
     }
     const auto op = Text(root, "op");
     if (op == "shutdown") {
@@ -133,6 +142,60 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
       const auto value = controller_.GetSnapshot(Text(root, "serviceId"));
       send_(owner, value ? Reply(request, SerializeMuonServiceSnapshot(value.value()))
                          : Failure(request, "unknown-service", "service is not configured"));
+    } else if (op == "setAutostart") {
+      const auto service = Text(root, "serviceId");
+      auto* enabled = yyjson_obj_get(root, "enabled");
+      if (!yyjson_is_bool(enabled)) throw std::invalid_argument("enabled must be boolean");
+      if (!controller_.GetSnapshot(service)) {
+        send_(owner, Failure(request, "unknown-service", "service is not configured"));
+      } else if (const auto identity = controller_.SetAutostart(service, yyjson_get_bool(enabled))) {
+        policies_.emplace(identity, MuonServicePendingRequest{owner, request});
+      } else {
+        send_(owner, Failure(request, "unavailable", "service policy change is unavailable"));
+      }
+    } else if (op == "watchState") {
+      const auto service = Text(root, "serviceId");
+      const auto operation = Text(root, "operation");
+      if (operation == "acquire") {
+        const auto state = controller_.GetSnapshot(service);
+        if (!state) {
+          send_(owner, Failure(request, "unknown-service", "service is not configured"));
+        } else if (controller_.IsShuttingDown() || observation_id_ == std::numeric_limits<uint64_t>::max()) {
+          send_(owner, Failure(request, "unavailable", "service observation is unavailable"));
+        } else {
+          const auto identity = ++observation_id_;
+          const auto json = SerializeMuonServiceSnapshot(*state);
+          observations_.emplace(identity, MuonServiceObservation{owner, service, json, json, std::nullopt});
+          send_(owner, Reply(request, "{\"token\":" + Quote(std::to_string(identity)) + ",\"state\":" + json + "}"));
+        }
+      } else if (operation == "next" || operation == "release") {
+        const auto found = observations_.find(Identity(root, "token"));
+        const auto owned = found != observations_.end() &&
+            found->second.owner == owner && found->second.service == service;
+        if (operation == "release") {
+          auto waiting = std::optional<std::string>{};
+          if (owned) {
+            waiting = found->second.request;
+            observations_.erase(found);
+          }
+          if (waiting) send_(owner, Reply(*waiting, "{\"state\":null}"));
+          send_(owner, Reply(request, "null"));
+        } else if (!owned) {
+          send_(owner, Failure(request, "invalid-watch", "service observation does not belong to this page"));
+        } else {
+          auto& observation = found->second;
+          if (observation.request) {
+            send_(owner, Failure(request, "invalid-watch", "a state observation is already pending"));
+          } else if (observation.delivered != observation.latest) {
+            observation.delivered = observation.latest;
+            send_(owner, Reply(request, "{\"state\":" + observation.delivered + "}"));
+          } else {
+            observation.request = request;
+          }
+        }
+      } else {
+        throw std::invalid_argument("unknown service observation operation");
+      }
     } else {
       send_(owner, Failure(request, "invalid-request", "unknown service operation"));
     }
@@ -144,6 +207,38 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
 }
 
 void MuonServiceProtocol::Notify(const MuonServiceEvent& event) {
+  if (event.kind == MuonServiceEventKind::AutostartResult) {
+    const auto found = policies_.find(event.operation_id);
+    if (found == policies_.end()) return;
+    const auto pending = found->second;
+    policies_.erase(found);
+    if (owners_.contains(pending.owner))
+      send_(pending.owner, event.success ? Reply(pending.request, "null")
+          : Failure(pending.request, "persistence-failed", event.error));
+    return;
+  }
+  if (event.kind == MuonServiceEventKind::Changed) {
+    // A watch may be opened while older notifications are queued. Reading the
+    // current snapshot avoids moving that observer backwards through the queue.
+    const auto state = controller_.GetSnapshot(event.snapshot.id);
+    if (!state) return;
+    const auto json = SerializeMuonServiceSnapshot(*state);
+    auto replies = std::vector<std::pair<std::string, std::string>>{};
+    for (auto& [identity, observation] : observations_) {
+      if (observation.service != state->id) continue;
+      observation.latest = json;
+      if (observation.request && observation.delivered != json) {
+        replies.emplace_back(observation.owner, Reply(*observation.request, "{\"state\":" + json + "}"));
+        observation.request.reset();
+        observation.delivered = json;
+      }
+    }
+    // The transport can close an owner while replying. Never retain an iterator
+    // or reference to that owner's subscriptions across an outbound callback.
+    for (const auto& [owner, response] : replies)
+      if (owners_.contains(owner)) send_(owner, response);
+    return;
+  }
   if (!event.reference) return;
   const auto& reference = event.reference.value();
   if (!owners_.contains(reference.owner_id)) return;

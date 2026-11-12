@@ -1657,6 +1657,7 @@ if(MINGW)
   foreach(MUON_MINGW_RUNTIME_TARGET
       muon_ui
       cardio_shared
+      muon_service_host
       muon_node_plugin)
     list(APPEND MUON_RUNTIME_COPY_COMMANDS
       COMMAND ${CMAKE_COMMAND}

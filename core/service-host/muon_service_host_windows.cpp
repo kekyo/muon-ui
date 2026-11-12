@@ -119,9 +119,9 @@ class ServiceProcess final {
  public:
   ServiceProcess(cardio::dispatcher_group& group,
                  cardio::dispatcher_host_win32_auto& dispatcher,
-                 std::wstring endpoint, std::filesystem::path data_root)
+                 std::wstring endpoint, std::filesystem::path data_root, bool bootstrap)
       : group_(group), dispatcher_(dispatcher), endpoint_(std::move(endpoint)),
-        data_root_(std::move(data_root)) {
+        data_root_(std::move(data_root)), bootstrap_live_(bootstrap) {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = WindowProcedure;
     window_class.hInstance = GetModuleHandleW(nullptr);
@@ -210,9 +210,17 @@ class ServiceProcess final {
           [this](const std::string& owner, const std::string& json) { Send(owner, json); });
       ++io_count_;
       cardio::fire_and_forget(Accept());
+      if (bootstrap_live_) {
+        bootstrap_ = std::make_shared<Handle>(GetStdHandle(STD_INPUT_HANDLE));
+        Check(bootstrap_->value && bootstrap_->value != INVALID_HANDLE_VALUE,
+              "open bootstrap input");
+        ++io_count_;
+        cardio::fire_and_forget(WatchBootstrap());
+      }
       controller_->Activate();
       initialized_ = true;
       std::cout << "{\"ready\":true}" << std::endl;
+      MaybeFinish();
     } catch (const std::exception& error) {
       std::cerr << error.what() << '\n';
       exit_code_ = 1;
@@ -400,10 +408,34 @@ class ServiceProcess final {
     MaybeFinish();
   }
 
+  cardio::promise<void> WatchBootstrap() {
+    try {
+      for (;;) {
+        char bytes[256];
+        const auto size = co_await cardio::win32::read(bootstrap_->value,
+            std::as_writable_bytes(std::span(bytes)), transport_cancellation_.get_cancellation());
+        if (size == 0) break;
+      }
+    } catch (const cardio::canceled_exception&) {
+    } catch (const std::system_error& error) {
+      if (error.code().value() != ERROR_BROKEN_PIPE) {
+        exit_code_ = 1;
+        controller_->Shutdown(error.what());
+      }
+    } catch (const std::exception& error) {
+      exit_code_ = 1;
+      controller_->Shutdown(error.what());
+    }
+    bootstrap_live_ = false;
+    ever_connected_ = true;
+    --io_count_;
+    MaybeFinish();
+  }
+
   void MaybeFinish() {
     if (!initialized_ || finishing_) return;
     if (!controller_->IsShuttingDown()) {
-      if (ever_connected_ && peers_.empty() && controller_->IsQuiescent() && native_->IsIdle())
+      if (!bootstrap_live_ && ever_connected_ && peers_.empty() && controller_->IsQuiescent() && native_->IsIdle())
         controller_->Shutdown("No service references remain");
       else return;
     }
@@ -432,6 +464,7 @@ class ServiceProcess final {
   std::filesystem::path data_root_;
   std::shared_ptr<void> security_;
   std::shared_ptr<Handle> listener_;
+  std::shared_ptr<Handle> bootstrap_;
   std::map<std::string, MuonNativeServiceSpec> specs_;
   std::unique_ptr<MuonNativeServiceHost> native_;
   std::unique_ptr<MuonServiceController> controller_;
@@ -450,6 +483,7 @@ class ServiceProcess final {
   bool finishing_ = false;
   bool session_ending_ = false;
   bool loop_finished_ = false;
+  bool bootstrap_live_ = false;
 };
 
 int wmain(int argc, wchar_t** argv) {
@@ -457,21 +491,25 @@ int wmain(int argc, wchar_t** argv) {
     std::map<std::wstring, std::wstring> arguments;
     for (int index = 1; index + 1 < argc; index += 2)
       arguments.emplace(argv[index], argv[index + 1]);
-    if (argc != 7 || arguments.size() != 3 || !arguments.contains(L"--config") ||
+    const auto bootstrap = arguments.contains(L"--bootstrap");
+    if (argc != (bootstrap ? 9 : 7) || arguments.size() != (bootstrap ? 4 : 3) ||
+        (bootstrap && arguments.at(L"--bootstrap") != L"stdin") || !arguments.contains(L"--config") ||
         !arguments.contains(L"--endpoint") || !arguments.contains(L"--data-root"))
-      throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint PIPE --data-root DIR");
+      throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint PIPE --data-root DIR [--bootstrap stdin]");
     const auto& endpoint = arguments.at(L"--endpoint");
     constexpr auto prefix = L"\\\\.\\pipe\\muon-service-";
     if (!endpoint.starts_with(prefix) || endpoint.size() <= std::wcslen(prefix) ||
         endpoint.size() > 256 || endpoint.find(L'\\', std::wcslen(prefix)) != std::wstring::npos)
       throw std::invalid_argument("Service endpoint must be a local muon-service named pipe");
     for (const auto* key : {L"--config", L"--data-root"}) {
-      if (!std::filesystem::path(arguments.at(key)).is_absolute())
+      const auto path = std::filesystem::path(arguments.at(key));
+      if (!path.is_absolute() && !path.native().starts_with(L"\\\\") &&
+          !path.native().starts_with(L"//"))
         throw std::invalid_argument("Service file paths must be absolute");
     }
     cardio::dispatcher_group group;
     cardio::dispatcher_host_win32_auto dispatcher(group);
-    ServiceProcess process(group, dispatcher, endpoint, arguments.at(L"--data-root"));
+    ServiceProcess process(group, dispatcher, endpoint, arguments.at(L"--data-root"), bootstrap);
     cardio::fire_and_forget(process.Run(arguments.at(L"--config")));
     dispatcher.park();
     return process.ExitCode();

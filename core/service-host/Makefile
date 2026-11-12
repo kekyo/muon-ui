@@ -16,7 +16,7 @@ CARDIO_LIBS := $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --libs muon-plugi
 NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/muon_filesystem.cpp
 
 .PHONY: all test clean windows-amd64 windows-i686
-all: $(OUT)/muon-service-host $(OUT)/probe-service.so $(OUT)/linux-client-driver
+all: $(OUT)/muon-service-host $(OUT)/probe-service.so $(OUT)/linux-client-driver $(OUT)/linux-process-driver
 
 $(OUT):
 	mkdir -p $@
@@ -42,6 +42,9 @@ $(OUT)/client-test: ../common-test/muon_service_client_test.cpp $(COMMON)/servic
 $(OUT)/linux-client-driver: linux_client_driver.cpp muon_service_transport_linux.cpp $(COMMON)/services/muon_service_client.cpp $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
 
+$(OUT)/linux-process-driver: linux_process_driver.cpp muon_service_process_linux.cpp muon_service_transport_linux.cpp $(COMMON)/services/muon_service_session.cpp $(COMMON)/services/muon_service_client.cpp $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
+
 test: $(OUT)/protocol-test $(OUT)/client-test
 	$(OUT)/protocol-test
 	$(OUT)/client-test
@@ -55,7 +58,7 @@ WIN_$(1)_PC := $(abspath ../../sdk/native/windows-$(1)/lib/pkgconfig)
 WIN_$(1)_FLAGS := $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --cflags muon-plugin-cardio)
 WIN_$(1)_LIBS := $$(shell PKG_CONFIG_PATH=$$(WIN_$(1)_PC) pkg-config --libs muon-plugin-cardio)
 
-windows-$(1): $(OUT)/windows-$(1)/muon-service-host.exe $(OUT)/windows-$(1)/simple-service.dll $(OUT)/windows-$(1)/probe-service.dll $(OUT)/windows-$(1)/session-end.exe $(OUT)/windows-$(1)/transport-test.exe
+windows-$(1): $(OUT)/windows-$(1)/muon-service-host.exe $(OUT)/windows-$(1)/simple-service.dll $(OUT)/windows-$(1)/probe-service.dll $(OUT)/windows-$(1)/session-end.exe $(OUT)/windows-$(1)/transport-test.exe $(OUT)/windows-$(1)/process-driver.exe
 
 $(OUT)/windows-$(1):
 	mkdir -p $$@
@@ -88,6 +91,9 @@ $(OUT)/windows-$(1)/session-end.exe: windows_session_test.cpp | $(OUT)/windows-$
 
 $(OUT)/windows-$(1)/transport-test.exe: windows_transport_test.cpp muon_service_transport_windows.cpp $(COMMON)/services/muon_service_client.cpp $(COMMON)/muon_filesystem.cpp $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes
 	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -ladvapi32 -luser32 -o $$@
+
+$(OUT)/windows-$(1)/process-driver.exe: windows_process_driver.cpp muon_service_process_windows.cpp muon_service_transport_windows.cpp $(COMMON)/services/muon_service_session.cpp $(COMMON)/services/muon_service_client.cpp $(COMMON)/muon_filesystem.cpp $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -ladvapi32 -luser32 -lole32 -o $$@
 endef
 
 $(eval $(call WINDOWS_RULES,amd64,x86_64-w64-mingw32,libgcc_s_seh-1.dll))

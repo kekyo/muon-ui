@@ -360,6 +360,158 @@ try {
       console.log(JSON.stringify({ mode, shutdown, passed: true }));
     }
   }
+  for (const resident of [false, true]) {
+    for (const action of ["detach", "hold"]) {
+      const port = await availablePort();
+      const endpoint = String.raw`\\.\pipe\muon-service-${randomUUID()}`;
+      const config = join(directory, "launch registry.json");
+      await writeFile(
+        config,
+        JSON.stringify({
+          services: {
+            worker: {
+              library: "../probe-service.dll",
+              autostart: resident,
+              config: { port: String(port) },
+            },
+          },
+        }),
+      );
+      const driver = join(binaryDirectory, "process-driver.exe");
+      const ui = spawn(
+        driver,
+        [
+          action,
+          join(binaryDirectory, "muon-service-host.exe"),
+          config,
+          endpoint,
+          join(directory, "launch data"),
+        ],
+        { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+      );
+      children.push(ui);
+      const uiExit = once(ui, "exit");
+      const uiClosed = once(ui, "close");
+      let diagnostic = "";
+      ui.stderr!.on("data", (data: Buffer) => {
+        diagnostic += data.toString();
+      });
+      const firstLine = once(createInterface({ input: ui.stdout! }), "line");
+      const [line] = await Promise.race([
+        firstLine,
+        (async () => {
+          await uiClosed;
+          throw new Error("UI launcher exited before readiness: " + diagnostic);
+        })(),
+      ]);
+      const launch = JSON.parse(line);
+      assert.equal(launch.launched, true);
+      const observer = spawn(driver, ["wait", String(launch.pid)], {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      children.push(observer);
+      const hostExit = once(observer, "exit");
+      if (action === "hold") {
+        const [waiting] = await once(
+          createInterface({ input: observer.stdout! }),
+          "line",
+        );
+        assert.equal(JSON.parse(waiting).waiting, true);
+        ui.kill("SIGKILL");
+      }
+      const [uiCode] = await uiExit;
+      if (action === "detach") assert.equal(uiCode, 0, diagnostic);
+      if (resident) {
+        const socket = createConnection(endpoint);
+        sockets.push(socket);
+        await once(socket, "connect");
+        const replies = createInterface({ input: socket })[
+          Symbol.asyncIterator
+        ]();
+        assert.equal(JSON.parse((await replies.next()).value!).event, "ready");
+        socket.write(
+          '{"requestId":"acquire","op":"acquire","serviceId":"worker"}\n',
+        );
+        const reference = JSON.parse((await replies.next()).value!).result;
+        assert.equal(reference.serviceId, "worker");
+        const business = createConnection({ host: "127.0.0.1", port });
+        sockets.push(business);
+        await once(business, "connect");
+        const nonce = randomUUID();
+        const response = once(createInterface({ input: business }), "line");
+        business.write(nonce + "\n");
+        const value = JSON.parse((await response)[0]);
+        assert.equal(value.nonce, nonce);
+        assert.equal(value.pid, launch.pid);
+        assert.equal(value.generation, reference.generation);
+        business.destroy();
+        socket.write('{"requestId":"exit","op":"shutdown"}\n');
+      }
+      const [hostCode] = await hostExit;
+      assert.equal(hostCode, 0);
+      console.log(
+        JSON.stringify({ bootstrap: action, resident, passed: true }),
+      );
+    }
+  }
+  const sessionPort = await availablePort();
+  const sessionConfig = join(directory, "session registry.json");
+  await writeFile(
+    sessionConfig,
+    JSON.stringify({
+      services: {
+        worker: {
+          library: "../probe-service.dll",
+          autostart: true,
+          config: { port: String(sessionPort) },
+        },
+      },
+    }),
+  );
+  const session = await execute(join(binaryDirectory, "process-driver.exe"), [
+    "session",
+    join(binaryDirectory, "muon-service-host.exe"),
+    sessionConfig,
+    String.raw`\\.\pipe\muon-service-${randomUUID()}`,
+    join(directory, "session data"),
+  ]);
+  assert(session.stdout.includes('"session":true'));
+  console.log(JSON.stringify({ session: true, passed: true }));
+  const extendedArguments = await execute(
+    join(binaryDirectory, "process-driver.exe"),
+    [
+      "session",
+      "\\\\?\\" + join(binaryDirectory, "muon-service-host.exe"),
+      "\\\\?\\" + sessionConfig,
+      String.raw`\\.\pipe\muon-service-${randomUUID()}`,
+      "\\\\?\\" + join(directory, "extended data"),
+    ],
+  );
+  assert(extendedArguments.stdout.includes('"session":true'));
+  await writeFile(
+    sessionConfig,
+    JSON.stringify({
+      services: {
+        worker: {
+          library: "\\\\?\\" + join(binaryDirectory, "probe-service.dll"),
+          autostart: true,
+          config: { port: String(sessionPort) },
+        },
+      },
+    }),
+  );
+  const extendedLibrary = await execute(
+    join(binaryDirectory, "process-driver.exe"),
+    [
+      "session",
+      join(binaryDirectory, "muon-service-host.exe"),
+      sessionConfig,
+      String.raw`\\.\pipe\muon-service-${randomUUID()}`,
+      join(directory, "extended library data"),
+    ],
+  );
+  assert(extendedLibrary.stdout.includes('"session":true'));
 } finally {
   for (const socket of sockets) socket.destroy();
   for (const child of children) {

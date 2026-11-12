@@ -35,6 +35,7 @@ public final class MuonServiceDriverActivity extends Activity {
         setContentView(layout);
         client = new MuonServiceClient(this);
         String mode = getIntent().getStringExtra("mode");
+        if ("connection".equals(mode)) { connectionLifetime(layout); return; }
         if ("preferences".equals(mode) || "inspect-preferences".equals(mode)) {
             preferences(layout, "inspect-preferences".equals(mode));
             return;
@@ -63,6 +64,58 @@ public final class MuonServiceDriverActivity extends Activity {
     }
 
     private interface Result { void complete(JSONObject value); }
+
+    private void connectionLifetime(LinearLayout layout) {
+        request("acquire", "alpha.v1-test", original -> {
+            try {
+                request("watchState", new JSONObject().put("serviceId", "alpha.v1-test")
+                        .put("operation", "acquire"), watcher -> {
+                    try {
+                        client.invoke("watchState", new JSONObject().put("serviceId", "alpha.v1-test")
+                                .put("operation", "next").put("token", watcher.getString("token")),
+                                new MuonServiceClient.Completion() {
+                            @Override public void complete(JSONObject value) { fail("Unexpected state change"); }
+                            @Override public void fail(String error) {
+                                status.setText(error);
+                                status.setContentDescription("service-driver-disconnected");
+                            }
+                        });
+                        status.setText(original.put("uiPid", Process.myPid()).toString());
+                        status.setContentDescription("service-driver-ready");
+                    } catch (JSONException error) { fail(error.toString()); }
+                });
+                for (String action : new String[]{"old-acquire", "new-acquire", "old-release"}) {
+                    Button button = new Button(this);
+                    button.setText(action);
+                    button.setContentDescription(action);
+                    button.setOnClickListener(view -> {
+                        try {
+                            boolean fresh = action.equals("new-acquire");
+                            if (fresh) secondClient = new MuonServiceClient(this);
+                            MuonServiceClient owner = fresh ? secondClient : client;
+                            JSONObject argument = action.equals("old-release")
+                                    ? new JSONObject().put("serviceId", original.getString("serviceId"))
+                                            .put("refId", original.getString("refId"))
+                                            .put("generation", original.getString("generation"))
+                                    : new JSONObject().put("serviceId", "alpha.v1-test");
+                            owner.invoke(action.equals("old-release") ? "release" : "acquire", argument,
+                                    new MuonServiceClient.Completion() {
+                                @Override public void complete(JSONObject value) {
+                                    status.setText(value.toString());
+                                    status.setContentDescription("service-driver-" + action + "-accepted");
+                                }
+                                @Override public void fail(String error) {
+                                    status.setText(error);
+                                    status.setContentDescription("service-driver-" + action + "-rejected");
+                                }
+                            });
+                        } catch (JSONException error) { fail(error.toString()); }
+                    });
+                    layout.addView(button);
+                }
+            } catch (JSONException error) { fail(error.toString()); }
+        });
+    }
 
     private void preferences(LinearLayout layout, boolean inspect) {
         secondClient = new MuonServiceClient(this);

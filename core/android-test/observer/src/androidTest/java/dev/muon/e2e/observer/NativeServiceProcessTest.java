@@ -148,6 +148,35 @@ public final class NativeServiceProcessTest {
         }
     }
 
+    @Test public void endsOldPageConnectionsWhenTheHostProcessDies() throws Exception {
+        JSONObject original = startDriver("connection", "ready");
+        int oldProcess;
+        try (Socket alpha = connect("alpha")) {
+            oldProcess = challenge(alpha).getInt("pid");
+            device.executeShellCommand("run-as " + APPLICATION + " kill -9 " + oldProcess);
+            assertEquals(-1, alpha.getInputStream().read());
+        }
+        assertNotNull(device.wait(Until.findObject(By.desc("service-driver-disconnected")), 60000));
+        device.findObject(By.desc("old-acquire")).click();
+        UiObject2 old = device.wait(Until.findObject(By.desc(Pattern.compile(
+                "service-driver-old-acquire-(accepted|rejected)"))), 60000);
+        assertNotNull(old);
+        assertEquals("A dead page connection cannot join a new host", "service-driver-old-acquire-rejected",
+                old.getContentDescription());
+        device.findObject(By.desc("new-acquire")).click();
+        JSONObject next = preferenceState("new-acquire-accepted");
+        // The host restarts its identity counters. The old connection must not
+        // forward the old reference even when those values happen to match.
+        assertEquals(original.getString("refId"), next.getString("refId"));
+        assertEquals(original.getString("generation"), next.getString("generation"));
+        try (Socket alpha = connect("alpha")) {
+            assertTrue(oldProcess != challenge(alpha).getInt("pid"));
+            device.findObject(By.desc("old-release")).click();
+            assertNotNull(device.wait(Until.findObject(By.desc("service-driver-old-release-rejected")), 60000));
+            challenge(alpha);
+        }
+    }
+
     @Test public void changesAutostartAndClosesAPendingWatchThroughThePublicPageApi() throws Exception {
         device.executeShellCommand("am start -W -n " + APPLICATION + "/dev.muon.runtime.MuonAppActivity");
         pageReady();

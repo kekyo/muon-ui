@@ -36,6 +36,7 @@ final class MuonServiceClient implements AutoCloseable {
     private Messenger remote;
     private boolean bound;
     private boolean closed;
+    private String terminalError = "Service page session was released";
     private int nextRequest = 1;
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -65,7 +66,7 @@ final class MuonServiceClient implements AutoCloseable {
     }
 
     void invoke(String operation, JSONObject arguments, Completion completion) {
-        if (closed) { completion.fail("Service page session was released"); return; }
+        if (closed) { completion.fail(terminalError); return; }
         int id = nextRequest++;
         pending.put(id, completion);
         try {
@@ -103,6 +104,10 @@ final class MuonServiceClient implements AutoCloseable {
     }
 
     private void disconnected(String error) {
+        // A replacement process can reuse reference/generation counters. Never
+        // reconnect this owner or forward its old handles into that process.
+        closed = true;
+        terminalError = error;
         if (remote != null) {
             try { remote.send(message(0, new JSONObject().put("operation", "close"))); }
             catch (JSONException | RemoteException ignored) { /* Binder death also releases this owner. */ }

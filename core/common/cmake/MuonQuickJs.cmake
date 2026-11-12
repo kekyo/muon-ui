@@ -19,11 +19,19 @@ function(muon_add_quickjs target source_root)
   set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON C_EXTENSIONS ON)
   target_compile_features(${target} PRIVATE c_std_11)
   target_compile_definitions(${target} PRIVATE _GNU_SOURCE CONFIG_VERSION="${version}")
-  target_compile_options(${target} PRIVATE -fwrapv)
+  # Match upstream's normal interpreter build even when the embedding host is
+  # Debug. An unoptimized interpreter changes the cost of bounded JS turns
+  # enough to reject valid maximum-size messages on supported devices.
+  target_compile_options(${target} PRIVATE -fwrapv -O2)
   target_include_directories(${target} SYSTEM PUBLIC "${source_root}")
   if(UNIX)
     target_link_libraries(${target} PUBLIC ${CMAKE_DL_LIBS} m)
   elseif(WIN32)
+    target_compile_definitions(${target} PRIVATE __USE_MINGW_ANSI_STDIO)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+      # Upstream CONFIG_M32 requires SSE math for correct FP rounding.
+      target_compile_options(${target} PRIVATE -msse2 -mfpmath=sse)
+    endif()
     target_link_libraries(${target} PUBLIC winpthread)
   endif()
 endfunction()

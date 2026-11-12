@@ -18,12 +18,30 @@ SERVICE_VALUES := $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/se
 SERVICE_HEADERS := $(COMMON)/src/services/muon_native_service_host.h $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_value.h
 CPPFLAGS += -I$(YYJSON_SOURCE_DIR)
 TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-calls $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value $(OUT)/service-interface $(OUT)/service-broker
+QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
+QUICKJS_SOURCE_DIR := $(COMMON)/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
+QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
+TESTS += $(OUT)/quickjs-engine
 
-.PHONY: all test clean service-driver
+.PHONY: all test clean service-driver quickjs-source
 all: $(TESTS)
 
 $(OUT):
 	mkdir -p $@
+
+quickjs-source:
+	node $(COMMON)/prepare-quickjs-source.mjs
+
+$(OUT)/quickjs:
+	mkdir -p $@
+
+# The verified dependency is immutable; its profile and preparation script are
+# the build inputs. Do not modify the downloaded third-party source directory.
+$(QUICKJS_OBJECTS): $(OUT)/quickjs/%.o: $(COMMON)/quickjs-source.json $(COMMON)/prepare-quickjs-source.mjs Makefile | quickjs-source $(OUT)/quickjs
+	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
+
+$(OUT)/quickjs-engine: muon_quickjs_engine_test.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(QUICKJS_OBJECTS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) -lm -o $@
 
 $(OUT)/rpc: muon_rpc_test.cpp $(RPC_SOURCES) $(COMMON)/src/plugins/muon_plugin_metadata.cpp | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@

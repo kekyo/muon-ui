@@ -407,7 +407,8 @@ try {
       });
       malformed.on("error", () => {});
       malformed.resume();
-      malformed.write("x".repeat(1024 * 1024 + 1));
+      // A service frame permits 8 MiB so 1 MiB of escaped text can cross RPC.
+      malformed.write("x".repeat(8 * 1024 * 1024 + 1));
       await malformedClose;
 
       const stalled = createConnection(endpoint);

@@ -16,37 +16,8 @@ set(MUON_ANDROID_PLUGIN_REGISTRY_ROOT
 set(QUICKJS_ROOT
   "${CMAKE_CURRENT_LIST_DIR}/../../../../.native-dependencies/quickjs/quickjs-2026-06-04")
 
-if(NOT EXISTS "${QUICKJS_ROOT}/quickjs.c")
-  message(FATAL_ERROR
-    "Prepare the verified QuickJS source before configuring CMake.")
-endif()
-
-add_library(quickjs_android STATIC
-  "${QUICKJS_ROOT}/quickjs.c"
-  "${QUICKJS_ROOT}/dtoa.c"
-  "${QUICKJS_ROOT}/libregexp.c"
-  "${QUICKJS_ROOT}/libunicode.c"
-  "${QUICKJS_ROOT}/cutils.c"
-  )
-set_target_properties(quickjs_android PROPERTIES
-  POSITION_INDEPENDENT_CODE ON
-  C_EXTENSIONS ON
-  )
-target_compile_features(quickjs_android PRIVATE c_std_11)
-target_compile_definitions(quickjs_android PRIVATE
-  _GNU_SOURCE
-  CONFIG_VERSION="2026-06-04"
-  )
-target_compile_options(quickjs_android PRIVATE
-  -fwrapv
-  )
-target_include_directories(quickjs_android SYSTEM PUBLIC
-  "${QUICKJS_ROOT}"
-  )
-target_link_libraries(quickjs_android PUBLIC
-  dl
-  m
-  )
+include("${MUON_COMMON_ROOT}/cmake/MuonQuickJs.cmake")
+muon_add_quickjs(quickjs_android "${QUICKJS_ROOT}")
 
 add_library(muon_javascript_runtime SHARED
   muon_javascript_runtime_jni.cpp

@@ -4,7 +4,7 @@
 // https://github.com/kekyo/muon-ui
 
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, win32 } from "node:path";
 import { promisify } from "node:util";
@@ -97,6 +97,15 @@ it.each(["simple", "validate"] as const)(
     if (!agent) throw new Error("Windows agent is unavailable");
     const remote = agent;
     const directory = win32.join(root, mode);
+    const appId = "dev.muon.services." + randomUUID();
+    const registrationId =
+      appId +
+      "-" +
+      createHash("sha256")
+        .update(appId + "\n" + win32.join(directory, "profile"))
+        .digest("hex")
+        .slice(0, 16);
+    const runKey = String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
     const assets = win32.join(directory, "assets", "main");
     await remote.files.mkdir(assets, { recursive: true });
     const runNode = async (source: string): Promise<string> => {
@@ -111,6 +120,11 @@ it.each(["simple", "validate"] as const)(
         const finished = await child.waitForExit({ timeoutMs: 30000 });
         expect(finished.root.exitCode, await child.stderrText()).toBe(0);
         return await child.stdoutText();
+      } catch (error) {
+        throw new Error(
+          `${String(error)}\nstdout: ${await child.stdoutText()}\nstderr: ${await child.stderrText()}`,
+          { cause: error },
+        );
       } finally {
         await child.releaseAsync();
       }
@@ -127,6 +141,10 @@ it.each(["simple", "validate"] as const)(
     const functions = [
       "muon.services.acquire",
       "muon.services.getState",
+      "muon.services.setAutostart",
+      "muon.services.watchState",
+      "muon.environments.getAutostart",
+      "muon.environments.setAutostart",
       "muon.browser.close",
       "muon.browser.shutdown",
     ];
@@ -135,7 +153,7 @@ it.each(["simple", "validate"] as const)(
       functionPaths: functions,
       imports: [{ sources: ["main.ts"], allow: functions }],
     });
-    for (const name of ["services", "browser"]) {
+    for (const name of ["services", "browser", "environments"]) {
       const id = resolver.resolveId(
         "muon:" + name,
         "/windows-services/main.ts",
@@ -155,6 +173,8 @@ it.each(["simple", "validate"] as const)(
       try {
         globalThis.serviceApi=${mode === "simple" ? "window.muon.services" : "await import('./services.mjs')"};
         globalThis.browserApi=${mode === "simple" ? "window.muon.browser" : "await import('./browser.mjs')"};
+        globalThis.settingsApi=${mode === "simple" ? "window.muon.environments" : "await import('./environments.mjs')"};
+        globalThis.observer=await serviceApi.watchState('resident', state=>document.querySelector('#state').textContent=JSON.stringify(state));
       } catch(error) {globalThis.setupError=String(error);}
       finishPageReady();</script>`),
     );
@@ -184,7 +204,7 @@ it.each(["simple", "validate"] as const)(
       config,
       Buffer.from(
         JSON.stringify({
-          launcher: { appId: "dev.muon.services." + randomUUID() },
+          launcher: { appId },
           serviceHost: { registry },
           asset: { sourcePath: win32.join(directory, "assets") },
           browser: {
@@ -214,6 +234,7 @@ it.each(["simple", "validate"] as const)(
     let client: Client | undefined;
     let closeMcp: (() => Promise<void>) | undefined;
     let hostPid: number | undefined;
+    const applications: WindowsTestProcess[] = [];
     const observers: RemoteManagedProcess[] = [];
     const diagnostics: unknown[] = [];
     const disconnect = async () => {
@@ -239,7 +260,9 @@ it.each(["simple", "validate"] as const)(
       return JSON.parse(value) as T;
     };
     const capture = async () => {
-      if (application)
+      // The independent host inherits the first launch's log files, so retain
+      // those diagnostics after later UI sessions replace the current process.
+      for (const application of applications)
         diagnostics.push({
           pid: application.id,
           stdout: await application.stdoutText(),
@@ -309,14 +332,14 @@ it.each(["simple", "validate"] as const)(
         { timeout: 30000, interval: 100 },
       );
       const cdpEndpoint = `http://${cdpHost}:${relayPort}`;
-      const start = async (iteration: number) => {
+      const launch = async (iteration: number, login: boolean) => {
         const captureDirectory = win32.join(directory, "capture-" + iteration);
         await remote.files.mkdir(captureDirectory, { recursive: true });
         application = await launchWindowsTestProcess(
           remote,
           {
             path: win32.join(runtime, "muon-core.exe"),
-            arguments: ["-c", config],
+            arguments: ["-c", config, ...(login ? ["--muon-autostart"] : [])],
             workingDirectory: directory,
           },
           captureDirectory,
@@ -334,6 +357,10 @@ it.each(["simple", "validate"] as const)(
           stdoutText: async () => await readLog("muon-stdout.log"),
           stderrText: async () => await readLog("muon-stderr.log"),
         };
+        applications.push(application);
+      };
+      const start = async (iteration: number, login: boolean) => {
+        await launch(iteration, login);
         await vi.waitUntil(
           async () => {
             if (!(await application!.rootSnapshot()).running)
@@ -366,7 +393,36 @@ it.each(["simple", "validate"] as const)(
           ),
         ).toEqual({ api: "function", error: null });
       };
-      await start(1);
+      await launch(0, true);
+      expect(
+        (
+          await remote.processes.waitForExit(application!.id, {
+            timeoutMs: 30000,
+          })
+        ).exitCode,
+        await application!.stderrText(),
+      ).toBe(0);
+      await capture();
+      const atLogin = await probe();
+      await start(1, false);
+      expect(await evaluate("return await settingsApi.getAutostart();")).toBe(
+        false,
+      );
+      expect(
+        await evaluate(
+          "return (await serviceApi.getState('resident')).clientReferences;",
+        ),
+      ).toBe(0);
+      expect(
+        await evaluate(
+          "await settingsApi.setAutostart(true); return await settingsApi.getAutostart();",
+        ),
+      ).toBe(true);
+      expect(
+        await evaluate(
+          "await settingsApi.setAutostart(false); return await settingsApi.getAutostart();",
+        ),
+      ).toBe(false);
       const first = await evaluate<{ generation: string }>(
         "globalThis.handle=await serviceApi.acquire('resident');globalThis.borrowed=await serviceApi.acquire('borrowed');return {generation:handle.generation};",
       );
@@ -376,6 +432,30 @@ it.each(["simple", "validate"] as const)(
         "const temporary=await serviceApi.acquire('resident');await temporary.release();return true;",
       );
       const before = await probe();
+      expect(before.pid).toBe(atLogin.pid);
+      expect(before.generation).toBe(atLogin.generation);
+      expect(
+        await evaluate(
+          "await serviceApi.setAutostart('resident', false); return await serviceApi.getState('resident');",
+        ),
+      ).toMatchObject({
+        autostart: false,
+        resident: false,
+        clientReferences: 1,
+        state: "running",
+      });
+      expect(
+        await evaluate(
+          "await serviceApi.setAutostart('resident', true); await serviceApi.setAutostart('resident', true); return await serviceApi.getState('resident');",
+        ),
+      ).toMatchObject({
+        autostart: true,
+        resident: true,
+        clientReferences: 1,
+        generation: before.generation,
+      });
+      await runNode(`import {execFile} from 'node:child_process';import {promisify} from 'node:util';
+        await promisify(execFile)('reg.exe',${JSON.stringify(["query", runKey, "/v", registrationId])});`);
       const borrowed = await observeClose(ports[1]);
       const closed = await Promise.allSettled([
         evaluate("await browserApi.close();return true;"),
@@ -394,24 +474,56 @@ it.each(["simple", "validate"] as const)(
       expect(withoutUi.pid).toBe(before.pid);
       expect(withoutUi.generation).toBe(before.generation);
       expect(withoutUi.count).toBeGreaterThan(before.count);
-      await start(2);
+      await start(2, false);
       expect(
         await evaluate(
           "globalThis.handle=await serviceApi.acquire('resident');return handle.generation;",
         ),
       ).toBe(first.generation);
       const resident = await observeClose(ports[0]);
+      await evaluate("await settingsApi.setAutostart(true); return true;");
       const shutdown = await Promise.allSettled([
         evaluate("await browserApi.shutdown(0);return true;"),
         remote.processes.waitForExit(application!.id, { timeoutMs: 30000 }),
       ]);
-      expect(shutdown[1].status).toBe("fulfilled");
+      diagnostics.push({
+        phase: "shutdown",
+        results: shutdown.map((result) =>
+          result.status === "rejected"
+            ? { status: result.status, reason: String(result.reason) }
+            : result,
+        ),
+        processes: (await remote.processes.list()).filter((process) =>
+          process.path.toLowerCase().startsWith(runtime.toLowerCase() + "\\"),
+        ),
+      });
+      expect(shutdown[1].status, JSON.stringify(diagnostics.at(-1))).toBe(
+        "fulfilled",
+      );
       if (shutdown[1].status === "fulfilled")
         expect(shutdown[1].value.exitCode).toBe(0);
       expect(
         (await resident.waitForExit({ timeoutMs: 30000 })).root.exitCode,
         await resident.stderrText(),
       ).toBe(0);
+      await capture();
+      await disconnect();
+      await start(3, true);
+      expect(await evaluate("return await settingsApi.getAutostart();")).toBe(
+        true,
+      );
+      const fromLogin = await probe();
+      expect(fromLogin.pid).not.toBe(before.pid);
+      await evaluate(
+        "await settingsApi.setAutostart(false); await serviceApi.setAutostart('resident', false); return true;",
+      );
+      const loginExit = await Promise.allSettled([
+        evaluate("await browserApi.shutdown(0); return true;"),
+        remote.processes.waitForExit(application!.id, { timeoutMs: 30000 }),
+      ]);
+      expect(loginExit[1].status).toBe("fulfilled");
+      if (loginExit[1].status === "fulfilled")
+        expect(loginExit[1].value.exitCode).toBe(0);
     } finally {
       try {
         await capture();
@@ -429,6 +541,9 @@ it.each(["simple", "validate"] as const)(
             await remote.processes.kill(hostPid);
           for (const observer of observers) await observer.releaseAsync();
           await relay?.releaseAsync();
+          await runNode(`import {execFile} from 'node:child_process';import {promisify} from 'node:util';
+            try { await promisify(execFile)('reg.exe',${JSON.stringify(["delete", runKey, "/v", registrationId, "/f"])}); }
+            catch {}`);
         }
       }
     }

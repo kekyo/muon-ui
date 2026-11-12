@@ -2470,19 +2470,19 @@ declare global {
      */
     readonly getRuntimeInfo: () => Promise<MuonRuntimeInfo>;
     /**
-     * Return whether the current muon application starts with the user session.
+     * Return whether login automatically displays this application's UI.
      *
-     * @returns A promise for the autostart state, or `undefined` when unknown.
-     * @remarks The active launch source selects the platform backend. muon uses
-     * XDG Autostart on POSIX desktop environments and the current user's Run
-     * registry entry on Windows.
+     * @returns The saved UI preference, or `undefined` for an unsupported launch source.
+     * @remarks Service residency is configured independently with `services.setAutostart`.
+     * The OS login entry is retained while UI auto-display or any service autostart is enabled.
      */
     readonly getAutostart: () => Promise<boolean | undefined>;
     /**
-     * Enable or disable startup with the user session.
+     * Configure automatic UI display at the next user login.
      *
-     * @param enabled - Whether autostart should be enabled.
-     * @returns A promise that resolves when the platform backend updates the setting.
+     * @param enabled - Whether login should display the UI.
+     * @returns A promise that resolves after the UI preference is saved.
+     * @remarks Service residency and the current UI lifetime are independent of this preference.
      */
     readonly setAutostart: (enabled: boolean) => Promise<void>;
   }

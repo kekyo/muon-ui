@@ -1,0 +1,46 @@
+#include "muon_service_api.h"
+#include <stdlib.h>
+
+/* Each logical service owns its context and resources until stop completes. */
+typedef struct service_state {
+  const muon_service_context* context;
+} service_state;
+
+static void stop_service(void* user_data,
+                         muon_service_stop_completion completion,
+                         void* completion_data) {
+  service_state* state = (service_state*)user_data;
+  state->context->host->log(state->context->host->user_data,
+                            MUON_LOG_LEVEL_INFO, "Service stopped.");
+  free(state);
+  completion(completion_data);
+}
+
+static void start_service(const muon_service_context* context,
+                          muon_service_start_completion completion,
+                          void* completion_data) {
+  service_state* state = (service_state*)malloc(sizeof(service_state));
+  if (state == NULL) {
+    completion(completion_data, NULL, "Service allocation failed.");
+    return;
+  }
+  state->context = context;
+  const muon_service_instance instance = {state, stop_service};
+  context->host->log(context->host->user_data, MUON_LOG_LEVEL_INFO,
+                     context->service_id);
+  completion(completion_data, &instance, NULL);
+}
+
+static const muon_service_factory factory = {
+    MUON_SERVICE_ABI_VERSION, start_service};
+
+/**
+ * Returns factory metadata without creating an instance or starting work.
+ * @return Borrowed factory descriptor valid until this library is unloaded.
+ */
+#ifdef __cplusplus
+extern "C"
+#endif
+MUON_PLUGIN_EXPORT const muon_service_factory* muon_get_service_factory(void) {
+  return &factory;
+}

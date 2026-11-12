@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project({{name}} LANGUAGES {{cmakeLanguage}})
 find_package(MuonPlugin CONFIG REQUIRED {{components}})
-add_library({{name}} SHARED plugin.{{extension}})
+add_library({{name}} SHARED {{sourceFile}})
 target_link_libraries({{name}} PRIVATE Muon::{{cmakeTarget}})
 set_target_properties({{name}} PROPERTIES
   C_STANDARD 99 C_STANDARD_REQUIRED YES

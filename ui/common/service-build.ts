@@ -85,5 +85,7 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
     throw new Error(
       "QuickJS service bundles cannot depend on external modules or assets.",
     );
+  if (Buffer.byteLength(files[0]!.code, "utf8") > 8 * 1024 * 1024)
+    throw new Error("QuickJS service bundles cannot exceed 8 MiB.");
   return files[0]!.code;
 };

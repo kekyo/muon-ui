@@ -101,6 +101,24 @@ it("rejects Node builtins instead of producing a browser placeholder", async () 
   ).rejects.toThrow(/QuickJS.*node:fs\/promises/);
 });
 
+it("rejects source bundles beyond the shared host size limit during the build", async () => {
+  await writeFile(
+    join(root, "large-service.ts"),
+    `globalThis.payload = '${"x".repeat(8 * 1024 * 1024)}'; export default {};`,
+  );
+  let message = "";
+  try {
+    await resolveMuonServices(
+      { worker: { runtime: "quickjs", entry: "large-service.ts" } },
+      root,
+      ["linux-amd64"],
+    );
+  } catch (error) {
+    message = String(error);
+  }
+  expect(message).toMatch(/8 MiB/);
+});
+
 it.each([
   { runtime: "quickjs", entry: "service.ts", artifact: "native.json" },
   { runtime: "quickjs" },

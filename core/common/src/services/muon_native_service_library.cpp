@@ -20,7 +20,15 @@ std::shared_ptr<const muon_service_factory> LoadMuonNativeServiceFactory(
     const std::string& path, std::string& error) {
   error.clear();
   const auto native_path = muon_internal::FilesystemPathFromUtf8(path);
-  if (!native_path.is_absolute()) {
+#if defined(_WIN32)
+  // MinGW's filesystem parser does not recognize extended Windows/UNC roots.
+  // The shared I/O converter below validates and preserves their exact spelling.
+  const auto absolute = native_path.is_absolute() || native_path.native().starts_with(L"\\\\") ||
+                        native_path.native().starts_with(L"//");
+#else
+  const auto absolute = native_path.is_absolute();
+#endif
+  if (!absolute) {
     error = "native service library path must be absolute";
     return {};
   }

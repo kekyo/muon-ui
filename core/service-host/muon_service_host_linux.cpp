@@ -6,6 +6,7 @@
 
 #include "muon_service_protocol.h"
 #include "muon_service_policy.h"
+#include "muon_service_startup.h"
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
 
@@ -91,18 +92,21 @@ class ServiceProcess final {
     if (lock_ >= 0) close(lock_);
   }
 
-  cardio::promise<void> Run(std::string config, sigset_t signals) {
+  cardio::promise<void> Run(std::string config, sigset_t signals, std::string startup) {
     try {
       co_await MakeDirectory(std::filesystem::path(endpoint_).parent_path());
       co_await MakeDirectory(data_root_);
       LockEndpoint();
       co_await MakeDirectory(std::filesystem::path(data_root_) / ".autostart");
-      auto file = std::unique_ptr<GFile, decltype(&g_object_unref)>(
-          g_file_new_for_path(config.c_str()), g_object_unref);
-      const auto contents = co_await cardio::gio::load_contents(file.get());
+      auto contents = std::string(R"({"services":{}})");
+      if (!config.empty()) {
+        auto file = std::unique_ptr<GFile, decltype(&g_object_unref)>(
+            g_file_new_for_path(config.c_str()), g_object_unref);
+        const auto loaded = co_await cardio::gio::load_contents(file.get());
+        contents.assign(reinterpret_cast<const char*>(loaded.bytes.data()), loaded.bytes.size());
+      }
       auto document = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
-          yyjson_read(reinterpret_cast<const char*>(contents.bytes.data()),
-                      contents.bytes.size(), 0), yyjson_doc_free);
+          yyjson_read(contents.data(), contents.size(), 0), yyjson_doc_free);
       if (!document) throw std::invalid_argument("Invalid service registry JSON");
       auto* services = yyjson_obj_get(yyjson_doc_get_root(document.get()), "services");
       if (!yyjson_is_obj(services)) throw std::invalid_argument("Missing service registry");
@@ -134,6 +138,7 @@ class ServiceProcess final {
         definitions.push_back({id, yyjson_get_bool(autostart), preference});
         specs_.emplace(id, std::move(spec));
       }
+      login_ = std::move(co_await CreateMuonServiceLoginPolicy(data_root_, definitions, std::move(startup)));
       const auto post = [this](std::function<void()> task) { Post(std::move(task)); };
       native_ = std::make_unique<MuonNativeServiceHost>(MuonNativeServicePlatform{
           LoadMuonNativeServiceFactory, post,
@@ -156,7 +161,13 @@ class ServiceProcess final {
               std::cout << SerializeMuonServiceSnapshot(event.snapshot) << std::endl;
           }, post});
       protocol_ = std::make_unique<MuonServiceProtocol>(*controller_,
-          [this](const std::string& owner, const std::string& json) { Send(owner, json); });
+          [this](const std::string& owner, const std::string& json) { Send(owner, json); },
+          MuonServiceUiPolicy{[this] { return login_->UiEnabled(); },
+            [this](bool enabled, auto complete) {
+              cardio::fire_and_forget(SavePolicy("", enabled, std::move(complete)));
+            }, [this](std::string startup, auto complete) {
+              cardio::fire_and_forget(ConfigureStartup(std::move(startup), std::move(complete)));
+            }});
       OpenListener();
       signal_fd_ = signalfd(-1, &signals, SFD_CLOEXEC | SFD_NONBLOCK);
       Check(signal_fd_ >= 0, "signalfd");
@@ -186,12 +197,26 @@ class ServiceProcess final {
   int ExitCode() const { return exit_code_; }
 
  private:
-  cardio::promise<void> SavePolicy(std::string id, bool enabled,
+  cardio::promise<void> ConfigureStartup(std::string startup,
       std::function<void(const std::string&)> complete) {
-    auto error = std::string{};
-    try { co_await SaveMuonServiceAutostart(std::filesystem::path(data_root_) / ".autostart" / id, enabled); }
+    ++policy_jobs_;
+    std::string error;
+    try { co_await ConfigureMuonServiceLoginPolicy(*login_, std::move(startup)); }
     catch (const std::exception& failure) { error = failure.what(); }
     complete(error);
+    --policy_jobs_;
+    MaybeFinish();
+  }
+
+  cardio::promise<void> SavePolicy(std::string id, bool enabled,
+      std::function<void(const std::string&)> complete) {
+    ++policy_jobs_;
+    auto error = std::string{};
+    try { co_await login_->Set(id, enabled); }
+    catch (const std::exception& failure) { error = failure.what(); }
+    complete(error);
+    --policy_jobs_;
+    MaybeFinish();
   }
 
   void LockEndpoint() {
@@ -401,7 +426,7 @@ class ServiceProcess final {
   }
 
   void MaybeFinish() {
-    if (!initialized_ || finishing_) return;
+    if (!initialized_ || finishing_ || policy_jobs_ != 0) return;
     if (!controller_->IsShuttingDown()) {
       if (ever_connected_ && !bootstrap_open_ && peers_.empty() &&
           controller_->IsQuiescent() && native_->IsIdle())
@@ -432,6 +457,8 @@ class ServiceProcess final {
   std::string endpoint_;
   std::string data_root_;
   std::map<std::string, MuonNativeServiceSpec> specs_;
+  std::unique_ptr<MuonServiceLoginPolicy> login_;
+  size_t policy_jobs_ = 0;
   std::unique_ptr<MuonNativeServiceHost> native_;
   std::unique_ptr<MuonServiceController> controller_;
   std::unique_ptr<MuonServiceProtocol> protocol_;
@@ -458,12 +485,13 @@ int main(int argc, char** argv) {
     for (int index = 1; index + 1 < argc; index += 2)
       arguments.emplace(argv[index], argv[index + 1]);
     const auto bootstrap = arguments.contains("--bootstrap") && arguments.at("--bootstrap") == "stdin";
-    if ((argc != 7 && !(argc == 9 && bootstrap)) ||
-        arguments.size() != static_cast<size_t>(bootstrap ? 4 : 3) || !arguments.contains("--config") ||
+    const auto count = 3 + static_cast<int>(bootstrap) + static_cast<int>(arguments.contains("--startup"));
+    if (argc != count * 2 + 1 || arguments.size() != static_cast<size_t>(count) || !arguments.contains("--config") ||
         !arguments.contains("--endpoint") || !arguments.contains("--data-root"))
       throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint SOCKET --data-root DIR");
     for (const auto& [key, path] : arguments) {
-      if (key != "--bootstrap" && !std::filesystem::path(path).is_absolute())
+      if (key != "--bootstrap" && key != "--startup" && !(key == "--config" && path.empty()) &&
+          !std::filesystem::path(path).is_absolute())
         throw std::invalid_argument(key + " must be an absolute path");
     }
     // Block before GIO or a native service can create supporting threads.
@@ -483,7 +511,8 @@ int main(int argc, char** argv) {
     cardio::dispatcher_group_glib group;
     cardio::dispatcher_host_glib dispatcher(group);
     ServiceProcess process(group, dispatcher, arguments.at("--endpoint"), arguments.at("--data-root"), bootstrap);
-    cardio::fire_and_forget(process.Run(arguments.at("--config"), signals));
+    cardio::fire_and_forget(process.Run(arguments.at("--config"), signals,
+        arguments.contains("--startup") ? arguments.at("--startup") : ""));
     dispatcher.park();
     return process.ExitCode();
   } catch (const std::exception& error) {

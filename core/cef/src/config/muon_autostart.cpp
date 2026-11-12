@@ -83,7 +83,7 @@ static bool ValidateAutostartOptions(const MuonAutostartOptions& options,
        options.appimage_id.find_first_not_of(
            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") !=
            std::string::npos)) {
-    *error_message = "Invalid AppImage application ID";
+    *error_message = "Invalid autostart application ID";
     return false;
   }
   return true;
@@ -585,7 +585,8 @@ static bool GetWindowsAutostartStatus(const MuonAutostartOptions& options,
     return false;
   }
 
-  const auto value_name = options.executable_path.stem().wstring();
+  const auto value_name = options.appimage_id.empty() ? options.executable_path.stem().wstring() :
+      muon_internal::FilesystemPathFromUtf8(options.appimage_id).wstring();
   DWORD type = 0;
   DWORD byte_count = 0;
   result = RegQueryValueExW(key, value_name.c_str(), nullptr, &type, nullptr,
@@ -627,7 +628,8 @@ static bool GetWindowsAutostartStatus(const MuonAutostartOptions& options,
 static bool SetWindowsAutostart(const MuonAutostartOptions& options,
                                 bool enabled,
                                 std::string* error_message) {
-  const auto value_name = options.executable_path.stem().wstring();
+  const auto value_name = options.appimage_id.empty() ? options.executable_path.stem().wstring() :
+      muon_internal::FilesystemPathFromUtf8(options.appimage_id).wstring();
   if (enabled) {
     const auto command = CreateWindowsRunCommand(options);
     if (command.size() > kWindowsRunCommandMaxLength) {

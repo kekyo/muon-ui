@@ -5,7 +5,15 @@
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -48,6 +56,14 @@ it("persists independent autostart overrides through host death while observers 
     const registry = join(directory, "services.json");
     const endpoint = join(directory, "control.sock");
     const data = join(directory, "data");
+    const registration = join(directory, "xdg/autostart/service-app.desktop");
+    const startup = JSON.stringify({
+      executable: join(directory, "service-app"),
+      source: "normal",
+      id: "",
+      arguments: ["--muon-autostart", "-c", registry],
+      refresh: true,
+    });
     await writeFile(
       registry,
       JSON.stringify({
@@ -60,8 +76,24 @@ it("persists independent autostart overrides through host death while observers 
     const launch = async () => {
       const child = spawn(
         resolve("../service-host/.build/muon-service-host"),
-        ["--config", registry, "--endpoint", endpoint, "--data-root", data],
-        { stdio: ["ignore", "pipe", "pipe"] },
+        [
+          "--config",
+          registry,
+          "--endpoint",
+          endpoint,
+          "--data-root",
+          data,
+          "--startup",
+          startup,
+        ],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: join(directory, "xdg"),
+            XDG_CONFIG_DIRS: join(directory, "system-xdg"),
+          },
+        },
       );
       children.push(child);
       const exited = once(child, "exit");
@@ -70,10 +102,17 @@ it("persists independent autostart overrides through host death while observers 
         diagnostic += bytes.toString();
       });
       const lines = createInterface({ input: child.stdout });
+      let readyOutput = false;
       for await (const line of lines) {
-        if (JSON.parse(line).ready) break;
+        if (JSON.parse(line).ready) {
+          readyOutput = true;
+          break;
+        }
       }
-      if (child.exitCode !== null) throw new Error(diagnostic);
+      if (!readyOutput) {
+        await exited;
+        throw new Error(diagnostic);
+      }
       const socket = createConnection(endpoint);
       sockets.push(socket);
       const pending = new Map<
@@ -115,6 +154,10 @@ it("persists independent autostart overrides through host death while observers 
       return { child, exited, call, api: createMuonServicesApi(call) };
     };
     const first = await launch();
+    expect(await first.call("getUiAutostart", "{}")).toBe("false");
+    expect(await readFile(registration, "utf8")).toContain(
+      '"--muon-autostart"',
+    );
     const handle = await first.api.acquire("worker");
     const states: MuonServiceState[] = [];
     let stopped: (() => void) | undefined;
@@ -128,7 +171,11 @@ it("persists independent autostart overrides through host death while observers 
     await Promise.all([
       first.api.setAutostart("worker", false),
       first.api.setAutostart("second", true),
+      first.call("setUiAutostart", '{"enabled":true}'),
     ]);
+    expect(await first.call("getUiAutostart", "{}")).toBe("true");
+    await first.call("setUiAutostart", '{"enabled":false}');
+    await access(registration);
     expect(await first.api.getState("worker")).toMatchObject({
       state: "running",
       autostart: false,
@@ -160,6 +207,7 @@ it("persists independent autostart overrides through host death while observers 
     await first.exited;
 
     const restored = await launch();
+    expect(await restored.call("getUiAutostart", "{}")).toBe("false");
     expect(await restored.api.getState("worker")).toMatchObject({
       state: "stopped",
       autostart: false,
@@ -180,6 +228,12 @@ it("persists independent autostart overrides through host death while observers 
       clientReferences: 0,
       resident: true,
     });
+    await restored.api.setAutostart("second", false);
+    await expect(access(registration)).rejects.toThrow();
+    await restored.call("setUiAutostart", '{"enabled":true}');
+    await access(registration);
+    await restored.call("setUiAutostart", '{"enabled":false}');
+    await expect(access(registration)).rejects.toThrow();
     await restored.call("shutdown", "{}");
     expect((await restored.exited)[0]).toBe(0);
     await writeFile(join(data, ".autostart", "worker"), "corrupt");

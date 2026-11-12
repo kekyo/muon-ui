@@ -33,7 +33,7 @@ static void CALLBACK CompletePolicyMetadata(PTP_CALLBACK_INSTANCE, void* context
   task->completed.resolve(std::move(error));
 }
 
-static cardio::promise<void> Metadata(std::function<void()> work) {
+cardio::promise<void> RunMuonServiceMetadata(std::function<void()> work) {
   auto task = std::make_unique<PolicyMetadataTask>();
   task->work = std::move(work);
   auto result = task->completed.get_promise();
@@ -53,7 +53,7 @@ struct PolicyFile {
 
 static cardio::promise<void> Close(std::shared_ptr<PolicyFile> file) {
   if (file->handle == INVALID_HANDLE_VALUE) co_return;
-  co_await Metadata([file] {
+  co_await RunMuonServiceMetadata([file] {
     CheckPolicy(CloseHandle(std::exchange(file->handle, INVALID_HANDLE_VALUE)) != 0,
         "close service preference");
   });
@@ -62,7 +62,7 @@ static cardio::promise<void> Close(std::shared_ptr<PolicyFile> file) {
 cardio::promise<std::optional<bool>> LoadMuonServiceAutostart(std::filesystem::path path) {
   const auto native = muon_internal::FilesystemPathForIo(path, muon_internal::FilesystemIoUsage::File);
   auto file = std::make_shared<PolicyFile>();
-  co_await Metadata([file, native] {
+  co_await RunMuonServiceMetadata([file, native] {
     file->handle = CreateFileW(native.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (file->handle == INVALID_HANDLE_VALUE) {
@@ -102,7 +102,7 @@ cardio::promise<void> SaveMuonServiceAutostart(std::filesystem::path path, bool 
     staging += L"0123456789abcdef"[value & 15];
   }
   auto file = std::make_shared<PolicyFile>();
-  co_await Metadata([file, staging] {
+  co_await RunMuonServiceMetadata([file, staging] {
     file->handle = CreateFileW(staging.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
         FILE_FLAG_OVERLAPPED | FILE_FLAG_WRITE_THROUGH, nullptr);
     CheckPolicy(file->handle != INVALID_HANDLE_VALUE, "create service preference staging file");
@@ -112,20 +112,20 @@ cardio::promise<void> SaveMuonServiceAutostart(std::filesystem::path path, bool 
     const auto byte = enabled ? std::byte{'1'} : std::byte{'0'};
     const auto size = co_await cardio::win32::write(file->handle, {&byte, 1});
     if (size != 1) throw std::runtime_error("Service preference write made no progress");
-    co_await Metadata([file] { CheckPolicy(FlushFileBuffers(file->handle) != 0, "flush service preference"); });
+    co_await RunMuonServiceMetadata([file] { CheckPolicy(FlushFileBuffers(file->handle) != 0, "flush service preference"); });
   } catch (...) { failure = std::current_exception(); }
   try { co_await Close(file); }
   catch (...) { if (!failure) failure = std::current_exception(); }
   if (!failure) {
     try {
-      co_await Metadata([staging, native] {
+      co_await RunMuonServiceMetadata([staging, native] {
         CheckPolicy(MoveFileExW(staging.c_str(), native.c_str(),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0, "commit service preference");
       });
     } catch (...) { failure = std::current_exception(); }
   }
   if (failure) {
-    try { co_await Metadata([staging] { DeleteFileW(staging.c_str()); }); }
+    try { co_await RunMuonServiceMetadata([staging] { DeleteFileW(staging.c_str()); }); }
     catch (...) { /* Preserve the failed commit, not an orphan-cleanup diagnostic. */ }
     std::rethrow_exception(failure);
   }

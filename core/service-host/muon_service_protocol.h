@@ -32,6 +32,15 @@ struct MuonServiceObservation {
   std::optional<std::string> request; /**< At most one waiting next request. */
 };
 
+/** Native-only UI preference adapter; UI settings never acquire service references. */
+struct MuonServiceUiPolicy {
+  std::function<bool()> get; /**< Reads the committed UI auto-display preference. */
+  /** Persists UI policy; completion receives empty text on success. */
+  std::function<void(bool, std::function<void(const std::string&)>)> set;
+  /** Updates trusted launch paths; not exposed by the renderer service API. */
+  std::function<void(std::string, std::function<void(const std::string&)>)> configure{};
+};
+
 /**
  * Minimal lifetime protocol used by independent desktop service hosts.
  *
@@ -45,9 +54,11 @@ struct MuonServiceObservation {
 class MuonServiceProtocol final {
  public:
   /** @param controller Serialized lifetime controller, which must outlive this object.
-   *  @param send Writes a JSON response or event to an authenticated live owner. */
+   *  @param send Writes a JSON response or event to an authenticated live owner.
+   *  @param ui Native UI auto-display settings, absent in lifecycle-only drivers. */
   MuonServiceProtocol(MuonServiceController& controller,
-                       std::function<void(const std::string&, const std::string&)> send);
+                       std::function<void(const std::string&, const std::string&)> send,
+                       MuonServiceUiPolicy ui = {});
   /** @param owner New host-assigned connection identity.
    *  @return True if the identity was newly registered. */
   bool OpenOwner(const std::string& owner);
@@ -69,4 +80,6 @@ class MuonServiceProtocol final {
   std::map<uint64_t, MuonServicePendingRequest> policies_;
   std::map<uint64_t, MuonServiceObservation> observations_;
   uint64_t observation_id_ = 0;
+  MuonServiceUiPolicy ui_;
+  std::set<std::pair<std::string, std::string>> ui_pending_;
 };

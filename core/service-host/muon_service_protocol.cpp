@@ -83,8 +83,8 @@ static std::string Failure(const std::string& request, const std::string& code,
 }
 
 MuonServiceProtocol::MuonServiceProtocol(MuonServiceController& controller,
-    std::function<void(const std::string&, const std::string&)> send)
-    : controller_(controller), send_(std::move(send)) {}
+    std::function<void(const std::string&, const std::string&)> send, MuonServiceUiPolicy ui)
+    : controller_(controller), send_(std::move(send)), ui_(std::move(ui)) {}
 
 bool MuonServiceProtocol::OpenOwner(const std::string& owner) {
   return !owner.empty() && owners_.insert(owner).second;
@@ -98,6 +98,7 @@ void MuonServiceProtocol::CloseOwner(const std::string& owner) {
   }
   std::erase_if(policies_, [&](const auto& item) { return item.second.owner == owner; });
   std::erase_if(observations_, [&](const auto& item) { return item.second.owner == owner; });
+  std::erase_if(ui_pending_, [&](const auto& item) { return item.first == owner; });
   controller_.ReleaseOwner(owner);
 }
 
@@ -111,6 +112,7 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
   try {
     request = Text(root, "requestId");
     if (request.size() > 128) return false;
+    if (ui_pending_.contains({owner, request})) return false;
     for (const auto& [id, pending] : pending_) {
       if (pending.owner == owner && pending.request == request) return false;
     }
@@ -121,7 +123,32 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
       if (observation.owner == owner && observation.request == request) return false;
     }
     const auto op = Text(root, "op");
-    if (op == "shutdown") {
+    if (op == "configureStartup") {
+      if (!ui_.configure || controller_.IsShuttingDown())
+        throw std::invalid_argument("Login startup configuration is unavailable");
+      auto* startup = yyjson_obj_get(root, "startup");
+      if (!yyjson_is_obj(startup)) throw std::invalid_argument("startup must be an object");
+      auto text = std::unique_ptr<char, decltype(&std::free)>(yyjson_val_write(startup, 0, nullptr), std::free);
+      if (!text) throw std::bad_alloc();
+      ui_pending_.emplace(owner, request);
+      ui_.configure(text.get(), [this, owner, request](const std::string& error) {
+        if (ui_pending_.erase({owner, request}) == 0) return;
+        send_(owner, error.empty() ? Reply(request, "null") : Failure(request, "registration-failed", error));
+      });
+    } else if (op == "getUiAutostart") {
+      if (!ui_.get) throw std::invalid_argument("UI autostart is unavailable");
+      send_(owner, Reply(request, ui_.get() ? "true" : "false"));
+    } else if (op == "setUiAutostart") {
+      if (!ui_.set || controller_.IsShuttingDown())
+        throw std::invalid_argument("UI autostart is unavailable");
+      auto* enabled = yyjson_obj_get(root, "enabled");
+      if (!yyjson_is_bool(enabled)) throw std::invalid_argument("enabled must be boolean");
+      ui_pending_.emplace(owner, request);
+      ui_.set(yyjson_get_bool(enabled), [this, owner, request](const std::string& error) {
+        if (ui_pending_.erase({owner, request}) == 0) return;
+        send_(owner, error.empty() ? Reply(request, "null") : Failure(request, "persistence-failed", error));
+      });
+    } else if (op == "shutdown") {
       controller_.Shutdown("application exit");
       send_(owner, Reply(request, "null"));
     } else if (op == "acquire") {

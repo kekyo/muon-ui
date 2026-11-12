@@ -7,6 +7,7 @@
 
 #include <cardio.h>
 #include <filesystem>
+#include <functional>
 #include <optional>
 
 /**
@@ -26,3 +27,12 @@ cardio::promise<std::optional<bool>> LoadMuonServiceAutostart(std::filesystem::p
  * byte, 0 or 1; references and runtime generations are never persisted.
  */
 cardio::promise<void> SaveMuonServiceAutostart(std::filesystem::path path, bool enabled);
+
+/**
+ * Runs a platform operation which has no asynchronous system API.
+ * @param work Finite metadata work; must not wait for another queued job.
+ * @return After the platform pool completes, resumed on the owner dispatcher.
+ * @remarks Used for login registration and Win32 file metadata. Service work and
+ * file contents continue to use cardio asynchronous I/O directly.
+ */
+cardio::promise<void> RunMuonServiceMetadata(std::function<void()> work);

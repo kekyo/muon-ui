@@ -824,7 +824,13 @@ MUON_APPLY_SANITIZERS(muon_service_desktop)
 add_executable(muon_service_host
   ../service-host/muon_service_host_${MUON_SERVICE_PLATFORM}.cpp
   ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
+  ../service-host/muon_service_login.cpp
+  ../service-host/muon_service_startup.cpp
   ../service-host/muon_service_protocol.cpp
+  src/config/muon_autostart.cpp
+  src/config/muon_paths.cpp
+  src/config/muon_startup.cpp
+  src/muon_string_helpers.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp
@@ -832,6 +838,7 @@ add_executable(muon_service_host
   ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp)
 target_compile_features(muon_service_host PRIVATE cxx_std_20)
 target_include_directories(muon_service_host PRIVATE
+  src
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
   "${MUON_COMMON_ROOT}/../../sdk/include")
 target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson ${CMAKE_DL_LIBS})

@@ -15,6 +15,28 @@ struct PolicyObjectDeleter {
 template <typename T>
 using PolicyObject = std::unique_ptr<T, PolicyObjectDeleter>;
 
+static void RunMetadataTask(GTask* task, gpointer, gpointer data, GCancellable*) {
+  const auto& work = *static_cast<std::function<void()>*>(data);
+  try { work(); g_task_return_boolean(task, TRUE); }
+  catch (const std::exception& error) {
+    g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "%s", error.what());
+  } catch (...) {
+    g_task_return_new_error(task, G_IO_ERROR, G_IO_ERROR_FAILED, "Service metadata operation failed");
+  }
+}
+
+cardio::promise<void> RunMuonServiceMetadata(std::function<void()> work) {
+  co_await cardio::gio::submit<void>(
+      [work = std::move(work)](GCancellable* cancellation, GAsyncReadyCallback callback, gpointer data) {
+        auto task = PolicyObject<GTask>(g_task_new(nullptr, cancellation, callback, data));
+        g_task_set_task_data(task.get(), new std::function<void()>(work),
+            [](gpointer value) { delete static_cast<std::function<void()>*>(value); });
+        g_task_run_in_thread(task.get(), RunMetadataTask);
+      }, [](GObject*, GAsyncResult* result, GError** error) {
+        g_task_propagate_boolean(G_TASK(result), error);
+      });
+}
+
 cardio::promise<std::optional<bool>> LoadMuonServiceAutostart(std::filesystem::path path) {
   auto file = PolicyObject<GFile>(g_file_new_for_path(path.c_str()));
   auto input = PolicyObject<GFileInputStream>{};

@@ -124,13 +124,17 @@ try {
   const raceBusiness = createConnection({ host: "127.0.0.1", port: racePort });
   sockets.push(raceBusiness);
   await once(raceBusiness, "connect");
-  const raceResponse = once(createInterface({ input: raceBusiness }), "line");
-  const raceNonce = randomUUID();
-  raceBusiness.write(raceNonce + "\n");
-  const raceValue = JSON.parse((await raceResponse)[0]);
-  assert.equal(raceValue.nonce, raceNonce);
-  assert.equal(raceValue.pid, joined[0]!.pid);
-  raceBusiness.destroy();
+  const raceResponses = createInterface({ input: raceBusiness })[Symbol.asyncIterator]();
+  const businessClosed = once(raceBusiness, "close");
+  for (let request = 0; request < 3; ++request) {
+    const nonce = randomUUID();
+    if (request === 2) raceBusiness.end(nonce + "\n");
+    else raceBusiness.write(nonce + "\n");
+    const value = JSON.parse((await raceResponses.next()).value!);
+    assert.equal(value.nonce, nonce);
+    assert.equal(value.pid, joined[0]!.pid);
+  }
+  await businessClosed;
   const raceObserver = spawn(
     join(binaryDirectory, "process-driver.exe"),
     ["wait", String(joined[0]!.pid)],

@@ -84,20 +84,28 @@ static cardio::promise<void> Serve(Fixture* state) {
   const auto cancellation = state->cancellation.get_cancellation();
   try {
     for (;;) {
-      co_await WaitSocket(state->listener, false, true, cancellation);
+      if (cancellation.is_cancellation_requested()) throw cardio::canceled_exception();
 #if defined(_WIN32)
       state->client = accept(state->listener, nullptr, nullptr);
 #else
       state->client = accept4(state->listener, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
 #endif
-      if (state->client == invalid_socket) continue;
+      if (state->client == invalid_socket) {
+        if (!RetrySocket()) throw std::runtime_error("Fixture accept failed");
+        co_await WaitSocket(state->listener, false, true, cancellation);
+        continue;
+      }
       std::string input;
       for (;;) {
-        co_await WaitSocket(state->client, false, false, cancellation);
+        if (cancellation.is_cancellation_requested()) throw cardio::canceled_exception();
         char buffer[256];
         const auto size = recv(state->client, buffer, sizeof(buffer), 0);
         if (size == 0) break;
-        if (size < 0) { if (RetrySocket()) continue; break; }
+        if (size < 0) {
+          if (!RetrySocket()) break;
+          co_await WaitSocket(state->client, false, false, cancellation);
+          continue;
+        }
         input.append(buffer, static_cast<size_t>(size));
         const auto end = input.find('\n');
         if (end == std::string::npos) {
@@ -113,14 +121,21 @@ static cardio::promise<void> Serve(Fixture* state) {
             "\",\"count\":" + std::to_string(++state->count) + "}\n";
         size_t sent = 0;
         while (sent < reply.size()) {
-          co_await WaitSocket(state->client, true, false, cancellation);
+          if (cancellation.is_cancellation_requested()) throw cardio::canceled_exception();
+          // Winsock records FD_WRITE initially and after WSAEWOULDBLOCK, not
+          // before every send. Attempt nonblocking I/O before awaiting readiness;
+          // likewise recv observes EOF before a previously delivered FD_CLOSE
+          // could be discarded by a new event registration.
 #if defined(_WIN32)
           const auto written = send(state->client, reply.data() + sent,
                                     static_cast<int>(reply.size() - sent), 0);
 #else
           const auto written = send(state->client, reply.data() + sent, reply.size() - sent, MSG_NOSIGNAL);
 #endif
-          if (written < 0 && RetrySocket()) continue;
+          if (written < 0 && RetrySocket()) {
+            co_await WaitSocket(state->client, true, false, cancellation);
+            continue;
+          }
           if (written <= 0) throw std::runtime_error("Fixture response failed");
           sent += static_cast<size_t>(written);
         }
@@ -186,6 +201,9 @@ static void Start(const muon_service_context* context,
     return;
   }
   state->listener = socket(AF_INET, SOCK_STREAM, 0);
+  unsigned long nonblocking = 1;
+  const bool nonblocking_ready = state->listener != invalid_socket &&
+      ioctlsocket(state->listener, FIONBIO, &nonblocking) == 0;
   const int exclusive = 1;
   setsockopt(state->listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
              reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
@@ -198,7 +216,11 @@ static void Start(const muon_service_context* context,
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   address.sin_port = htons(static_cast<uint16_t>(port));
-  if (state->listener == invalid_socket || bind(state->listener, reinterpret_cast<sockaddr*>(&address),
+  if (state->listener == invalid_socket ||
+#if defined(_WIN32)
+      !nonblocking_ready ||
+#endif
+      bind(state->listener, reinterpret_cast<sockaddr*>(&address),
       sizeof(address)) != 0 ||
       listen(state->listener, 4) != 0) {
 #if defined(_WIN32)

@@ -3,6 +3,13 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+declare module "muon:services" {
+  /** Acquire a page-owned reference, starting the configured service when necessary. */
+  export const acquire: MuonServicesApi["acquire"];
+  /** Observe actual runtime state and desired lifetime without acquiring a reference. */
+  export const getState: MuonServicesApi["getState"];
+}
+
 declare module "muon:notifications" {
   /** Post or update a native notification without implicitly requesting permission. */
   export const post: MuonNotificationsApi["post"];

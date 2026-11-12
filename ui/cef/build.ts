@@ -68,6 +68,7 @@ import {
 } from "./windows-code-signing.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "../common/app-icon.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
+import { expandMuonServicePermissions } from "../common/capability.ts";
 import type { MuonProgressCallback } from "../common/progress.js";
 import {
   assertMuonNodeProjectAssetSourceIsSafe,
@@ -473,13 +474,26 @@ const applyRuntimePluginConfig = (
     );
   }
   const plugin: JsonObject = sourcePlugin ?? {};
+  const merged: JsonObject = { ...plugin, ...runtimePluginConfig };
+  if (Array.isArray(merged.plugins)) {
+    merged.plugins = merged.plugins.map((entry) => {
+      if (
+        !isJsonObject(entry) ||
+        entry.name !== "internal" ||
+        !Array.isArray(entry.allow) ||
+        !entry.allow.every((value) => typeof value === "string")
+      )
+        return entry;
+      return {
+        ...entry,
+        allow: expandMuonServicePermissions(entry.allow as string[]),
+      };
+    });
+  }
 
   return {
     ...sourceConfig,
-    plugin: {
-      ...plugin,
-      ...runtimePluginConfig,
-    },
+    plugin: merged,
   };
 };
 

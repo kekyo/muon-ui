@@ -10,6 +10,7 @@ import { getMuonAndroidBuiltinFunctionPaths } from "../../core/android/function-
 
 declare const __MUON_NOTIFICATION_RENDERER_SOURCE__: string;
 declare const __MUON_SERVER_RENDERER_SOURCE__: string;
+declare const __MUON_SERVICE_RENDERER_SOURCE__: string;
 
 /**
  * Import-side capability rule for muon plugin virtual modules.
@@ -212,6 +213,8 @@ const moduleNamePattern =
   /^[A-Za-z_$][A-Za-z0-9_$]*:[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$/u;
 const jsIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 const defaultMuonCapabilityFunctionPaths = [
+  "muon.services.acquire",
+  "muon.services.getState",
   "muon.server.createServer",
   "muon.browser.reload",
   "muon.browser.hardReload",
@@ -335,6 +338,20 @@ const globToRegExp = (glob: string, separator: string): RegExp => {
 
 const isGlobMatch = (glob: string, value: string, separator: string): boolean =>
   globToRegExp(glob, separator).test(value);
+
+/**
+ * Grants handle release whenever service acquisition is permitted.
+ * @param allow - Application-owned native permission patterns.
+ * @returns Patterns plus the internal release route, without other authority.
+ * @remarks Release still requires an exact reference owned by the calling page.
+ */
+export const expandMuonServicePermissions = (
+  allow: readonly string[],
+): readonly string[] =>
+  allow.some((pattern) => isGlobMatch(pattern, "muon.services.acquire", ".")) &&
+  !allow.some((pattern) => isGlobMatch(pattern, "muon.services.release", "."))
+    ? [...allow, "muon.services.release"]
+    : [...allow];
 
 /**
  * Selects producer catalog entries using the runtime's dot-separated glob policy.
@@ -493,7 +510,7 @@ const createRuleRuntimeEntry = (
   id: string,
 ): MuonCapabilityRuntimeEntry => ({
   id,
-  allow: [...rule.allow],
+  allow: expandMuonServicePermissions(rule.allow),
 });
 
 const validateCapabilityRule = (rule: MuonCapabilityImportOptions): void => {
@@ -1295,7 +1312,7 @@ const createModuleSource = (rule: ResolvedRule): string => {
     rule.namespace,
     rule.rule.allow,
     rule.functionPaths,
-  );
+  ).filter(([, path]) => path !== "muon.services.release");
   if (exportedFunctions.length === 0) {
     const hasWildcardAllow = rule.rule.allow.some(containsGlob);
     throw new Error(
@@ -1321,6 +1338,15 @@ const createModuleSource = (rule: ResolvedRule): string => {
         exportName === "removeTray"),
   );
   const exports = exportedFunctions.map(([exportName, functionPath]) => {
+    if (rule.namespace === "muon.services") {
+      return (
+        "export const " +
+        exportName +
+        " = __muonServices[" +
+        JSON.stringify(exportName) +
+        "];"
+      );
+    }
     if (rule.backend === "android") {
       return createGenericFunctionExport(exportName, rule.id, functionPath);
     }
@@ -1378,6 +1404,7 @@ if (typeof __muonCall !== "function") {
 
 ${rule.backend === "cef" && rule.namespace === "muon.notifications" ? `${__MUON_NOTIFICATION_RENDERER_SOURCE__}\nconst __muonNotifications = MuonNotificationRenderer.createMuonCefNotificationsApi(async (name, args) => await __muonCall(${JSON.stringify(rule.id)}, 'muon.notifications.' + name, args));\n` : ""}
 ${rule.backend === "cef" && rule.namespace === "muon.server" ? `${__MUON_SERVER_RENDERER_SOURCE__}\nconst __muonServer = MuonServerRenderer.createMuonCefServerApi(async (json, body, owner) => await __muonCall(${JSON.stringify(rule.id)}, 'muon.server.createServer', [json, body, owner]));\n` : ""}
+${rule.namespace === "muon.services" ? __MUON_SERVICE_RENDERER_SOURCE__ + "\nconst __muonServices = MuonServiceRenderer.createMuonServicesApi(async (name, json) => await __muonCall(" + JSON.stringify(rule.id) + ', "muon.services." + name, ' + (rule.backend === "cef" ? '[json, ""]' : "[json]") + "));\n" : ""}
 ${usesBrowserContextMenuHelpers ? `${createBrowserContextMenuHelpers()}\n\n` : ""}
 ${usesBrowserTrayHelpers ? `${createBrowserTrayHelpers()}\n\n` : ""}
 ${exports.join("\n\n")}

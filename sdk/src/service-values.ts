@@ -239,3 +239,43 @@ export const decodeServiceValue = (
     { bytes: 1024 * 1024, nodes: 65536 },
     0
   );
+
+/**
+ * Encodes an invocation's arguments with one shared size and nesting budget.
+ * @param types - Validated ordered parameter types.
+ * @param values - Public JavaScript argument values.
+ * @param callbacks - Callback registration scoped to the parent invocation.
+ * @returns Detached JSON-compatible arguments.
+ * @throws TypeError for arity, type, or aggregate size violations.
+ */
+export const encodeServiceArguments = (
+  types: readonly ServiceType[],
+  values: readonly unknown[],
+  callbacks: ServiceCallbackEncoder | undefined
+): readonly unknown[] => {
+  if (!Array.isArray(values) || values.length !== types.length) return fail();
+  const budget = { bytes: 1024 * 1024, nodes: 65536 };
+  return types.map((type, index) =>
+    convert(type, values[index], true, callbacks, undefined, budget, 0)
+  );
+};
+
+/**
+ * Decodes an invocation's arguments with one shared size and nesting budget.
+ * @param types - Validated ordered parameter types.
+ * @param values - JSON-compatible arguments received from the transport.
+ * @param callbacks - Invocation-scoped callback resolution, if permitted.
+ * @returns Detached JavaScript arguments.
+ * @throws TypeError for arity, type, or aggregate size violations.
+ */
+export const decodeServiceArguments = (
+  types: readonly ServiceType[],
+  values: unknown,
+  callbacks: ServiceCallbackDecoder | undefined
+): readonly unknown[] => {
+  if (!Array.isArray(values) || values.length !== types.length) return fail();
+  const budget = { bytes: 1024 * 1024, nodes: 65536 };
+  return types.map((type, index) =>
+    convert(type, values[index], false, undefined, callbacks, budget, 0)
+  );
+};

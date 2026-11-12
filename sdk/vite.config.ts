@@ -19,10 +19,15 @@ export default defineConfig(({ mode }) => ({
     lib: {
       entry:
         mode === 'cjs'
-          ? { index: 'src/index.ts', artifact: 'src/artifact.ts' }
+          ? {
+              index: 'src/index.ts',
+              artifact: 'src/artifact.ts',
+              services: 'src/services.ts',
+            }
           : {
               index: 'src/index.ts',
               artifact: 'src/artifact.ts',
+              services: 'src/services.ts',
               cli: 'src/cli.ts',
             },
       formats: [mode === 'cjs' ? 'cjs' : 'es'],

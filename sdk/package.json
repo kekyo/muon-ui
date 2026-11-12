@@ -19,6 +19,11 @@
       "import": "./dist/artifact.mjs",
       "require": "./dist/artifact.cjs"
     },
+    "./services": {
+      "types": "./dist/types/services.d.ts",
+      "import": "./dist/services.mjs",
+      "require": "./dist/services.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [

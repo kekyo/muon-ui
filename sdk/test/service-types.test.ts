@@ -39,7 +39,7 @@ it.each(['ES2022', 'DOM', 'Node'] as const)(
       await writeFile(
         join(directory, 'consumer.ts'),
         `
-      import { bindServiceClient, createServiceClient, defineServiceInterface, type ServiceCancellationSignal } from ${JSON.stringify(fileURLToPath(new URL('../dist/types/services.js', import.meta.url)))};
+      import { bindServiceClient, createServiceClient, defineServiceInterface, defineService, createServiceRuntime, type ServiceCancellationSignal } from ${JSON.stringify(fileURLToPath(new URL('../dist/types/services.js', import.meta.url)))};
       const definition = defineServiceInterface({ schemaVersion: 1, methods: {
         ping: { parameters: [], returns: 'uint64', errors: [] }
       }, events: {} });
@@ -47,6 +47,23 @@ it.each(['ES2022', 'DOM', 'Node'] as const)(
       const signal: ServiceCancellationSignal = ${environment !== 'ES2022' ? 'new AbortController().signal' : '{ aborted: false, addEventListener: () => {}, removeEventListener: () => {} }'};
       const result: Promise<bigint> = client.call('ping', [], { signal });
       void result;
+      const service = defineService({ interface: definition, start: context => ({
+        methods: { ping: call => {
+          const signal: ServiceCancellationSignal = call.signal;
+          const generation: string = context.generation;
+          // @ts-expect-error configuration is immutable
+          context.config.changed = 'bad';
+          void signal; void generation; return 1n;
+        } }, stop: async reason => { const message: string = reason; void message; }
+      }) });
+      const runtime = createServiceRuntime(service, {
+        callback: async () => ({ status: 'ok', value: '1' }), emit: () => {}
+      });
+      const started: Promise<void> = runtime.start({id:'worker',generation:'1',config:{},dataDirectory:'/private'});
+      void started;
+      // @ts-expect-error method return type is derived from the schema
+      defineService({interface: definition, start: () => ({methods:{ping:()=> 'wrong'},stop:()=>{}})});
+
       ${
         environment === 'DOM'
           ? `

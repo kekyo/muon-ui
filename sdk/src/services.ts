@@ -42,3 +42,15 @@ export type {
   ServiceTransport,
   ServiceTransportAction,
 } from './service-connection.ts';
+export { createServiceRuntime, defineService } from './service-runtime.ts';
+export type {
+  ServiceDefinition,
+  ServiceImplementation,
+  ServiceInvocationContext,
+  ServiceMethods,
+  ServiceRuntime,
+  ServiceRuntimeBridge,
+  ServiceRuntimeInput,
+  ServiceRuntimeResult,
+  ServiceStartContext,
+} from './service-runtime.ts';

@@ -8,6 +8,10 @@ import type {
   ServiceTransport,
 } from '../src/service-connection.ts';
 import type { ServiceInterface } from '../src/service-interface.ts';
+import type {
+  createServiceRuntime,
+  defineService,
+} from '../src/service-runtime.ts';
 
 const definition = {
   schemaVersion: 1,
@@ -30,6 +34,8 @@ it('ships working service clients in both ESM and CommonJS entries', async () =>
     './dist/services.cjs'
   );
   for (const module of [esm, cjs] as {
+    createServiceRuntime: typeof createServiceRuntime;
+    defineService: typeof defineService;
     createServiceConnection: (
       definition: ServiceInterface,
       transport: ServiceTransport
@@ -38,6 +44,31 @@ it('ships working service clients in both ESM and CommonJS entries', async () =>
     const client = module.createServiceConnection(definition, transport);
     expect(await client.call('ping', [])).toBe(18446744073709551615n);
     await client.close();
+    const runtime = module.createServiceRuntime(
+      module.defineService({
+        interface: definition,
+        start: () => ({ methods: { ping: () => 37n }, stop: () => {} }),
+      }),
+      {
+        callback: async () => ({
+          status: 'error',
+          code: 'callback-failed',
+          message: 'unused',
+        }),
+        emit: () => {},
+      }
+    );
+    await runtime.start({
+      id: 'test',
+      generation: '1',
+      config: {},
+      dataDirectory: '/private/test',
+    });
+    expect(await runtime.invoke('1', 'ping', [])).toEqual({
+      status: 'ok',
+      value: '37',
+    });
+    await runtime.stop('released');
   }
 });
 

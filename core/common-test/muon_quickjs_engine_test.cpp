@@ -123,6 +123,26 @@ int main() {
   }
   {
     MuonQuickJsEngine engine(limits);
+    // QuickJS can turn an uncatchable interrupt into a rejected async promise
+    // while returning successfully from JS_Eval/JS_Call. The host still needs
+    // a terminal failure, even if an outer author promise never settles.
+    assert(Fails(engine, "(async () => { for (;;) {} })()"));
+    const auto callback = engine.Evaluate(
+        "async () => { for (;;) {} }", "async-call.js", JS_EVAL_TYPE_GLOBAL);
+    bool failed = false;
+    try { JS_FreeValue(engine.Context(), engine.Call(callback, JS_UNDEFINED, {})); }
+    catch (const std::runtime_error&) { failed = true; }
+    JS_FreeValue(engine.Context(), callback);
+    assert(failed);
+    JS_FreeValue(engine.Context(), engine.Evaluate(
+        "(async () => { await 0; for (;;) {} })()", "async-job.js", JS_EVAL_TYPE_GLOBAL));
+    failed = false;
+    try { engine.RunJobs(16); }
+    catch (const std::runtime_error&) { failed = true; }
+    assert(failed);
+  }
+  {
+    MuonQuickJsEngine engine(limits);
     // Destruction also frees an unfinished chain of jobs without running more
     // application code during teardown.
     JS_FreeValue(engine.Context(), engine.Evaluate(

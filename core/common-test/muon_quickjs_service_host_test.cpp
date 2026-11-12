@@ -43,7 +43,10 @@ int main() {
     globalThis.__muonServiceRuntime = {
       async start(input) { identity = input.id; await 0; },
       async invoke(id, method, args) {
-        if (method === 'spin') for (;;) {}
+        if (method === 'spin') {
+          void (async () => { for (;;) {} })();
+          return await new Promise(() => {});
+        }
         await 0;
         return {status:'ok', value:identity + ':' + args[0]};
       },
@@ -71,6 +74,7 @@ int main() {
   host.Execution().invoke("first", 1, "spin", {}, {}, collect);
   pump();
   assert(results.size() == 3 && !results.back().value);
+  assert(failures == std::vector<std::string>{"first"});
   host.Execution().invoke("second", 1, "echo", {{std::string("still alive")}}, {}, collect);
   pump();
   assert(std::get<std::string>(results.back().value->data) == "second:still alive");
@@ -117,7 +121,7 @@ int main() {
   timers.clear();
   for (const auto& [id, expire] : deadlines) { (void)id; expire(); }
   pump();
-  assert(stopped == 3 && host.IsIdle() && failures == std::vector<std::string>{"stop-timeout"});
+  assert(stopped == 3 && host.IsIdle() && failures == (std::vector<std::string>{"first", "stop-timeout"}));
   const auto invalid_result = R"(
     globalThis.__muonServiceInterface = {schemaVersion:1,methods:{
       invalid:{parameters:[],returns:'string',errors:[]}

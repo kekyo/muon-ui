@@ -19,6 +19,7 @@ struct MuonQuickJsEngineImpl {
   JSRuntime* runtime = nullptr;
   JSContext* context = nullptr;
   std::atomic<bool> interrupted{false};
+  bool turn_interrupted = false;
   size_t depth = 0;
   std::chrono::steady_clock::time_point deadline;
 
@@ -41,22 +42,25 @@ struct Execution {
   MuonQuickJsEngineImpl& engine;
   explicit Execution(MuonQuickJsEngineImpl& value) : engine(value) {
     engine.RequireOwner();
-    if (engine.depth++ == 0)
+    if (engine.depth++ == 0) {
+      engine.turn_interrupted = false;
       engine.deadline = std::chrono::steady_clock::now() + engine.limits.execution_time;
+    }
   }
   ~Execution() { --engine.depth; }
 };
 
 static int Interrupt(JSRuntime*, void* opaque) {
-  const auto& engine = *static_cast<MuonQuickJsEngineImpl*>(opaque);
+  auto& engine = *static_cast<MuonQuickJsEngineImpl*>(opaque);
   try {
-    if (engine.should_interrupt && engine.should_interrupt()) return 1;
+    if (engine.should_interrupt && engine.should_interrupt()) engine.turn_interrupted = true;
   } catch (...) {
     // A host predicate must never unwind through the C engine.
-    return 1;
+    engine.turn_interrupted = true;
   }
-  return engine.interrupted.load(std::memory_order_relaxed) ||
+  engine.turn_interrupted = engine.turn_interrupted || engine.interrupted.load(std::memory_order_relaxed) ||
       (engine.depth && std::chrono::steady_clock::now() >= engine.deadline);
+  return engine.turn_interrupted;
 }
 
 static std::string String(JSContext* context, JSValueConst value) {
@@ -122,6 +126,10 @@ JSValue MuonQuickJsEngine::Evaluate(const std::string& source,
   Execution scope(*impl_);
   const auto result = JS_Eval(impl_->context, source.c_str(), source.size(), filename.c_str(), flags);
   if (JS_IsException(result)) throw std::runtime_error(Exception(impl_->context));
+  if (impl_->turn_interrupted) {
+    JS_FreeValue(impl_->context, result);
+    throw std::runtime_error("QuickJS execution interrupted");
+  }
   return result;
 }
 
@@ -136,6 +144,10 @@ JSValue MuonQuickJsEngine::Call(JSValueConst function, JSValueConst receiver,
   const auto result = JS_Call(impl_->context, function, receiver,
       static_cast<int>(borrowed.size()), borrowed.data());
   if (JS_IsException(result)) throw std::runtime_error(Exception(impl_->context));
+  if (impl_->turn_interrupted) {
+    JS_FreeValue(impl_->context, result);
+    throw std::runtime_error("QuickJS execution interrupted");
+  }
   return result;
 }
 
@@ -146,6 +158,10 @@ bool MuonQuickJsEngine::RunJobs(size_t maximum_jobs) {
     JSContext* context = nullptr;
     if (JS_ExecutePendingJob(impl_->runtime, &context) < 0)
       throw std::runtime_error(Exception(context ? context : impl_->context));
+    // An async function may reject a private promise on interruption while
+    // its enclosing application promise remains pending. JS's return status
+    // alone therefore cannot report whether the execution budget was hit.
+    if (impl_->turn_interrupted) throw std::runtime_error("QuickJS execution interrupted");
   }
   return JS_IsJobPending(impl_->runtime);
 }

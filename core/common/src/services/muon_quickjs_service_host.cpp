@@ -732,8 +732,10 @@ MuonServiceExecution MuonQuickJsServiceHost::Execution() {
                 entry->calls.erase(call->id);
               });
         } catch (const std::exception& error) {
-          Complete(entry, call, {{}, "invalid-result", error.what()});
-          entry->calls.erase(call->id);
+          // Runtime-level failures can strand private SDK promises. Dispose
+          // this generation and settle every outstanding call exactly once.
+          // Ordinary author errors arrive through the encoded result above.
+          Fault(entry, error.what());
         }
       });
       return call->id;

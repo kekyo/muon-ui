@@ -9,14 +9,25 @@ import type { MuonDesktopTarget } from "./targets.ts";
 import type { MuonResolvedService } from "../common/service-config.ts";
 
 /** Normalized runtime settings stored beside a desktop application. */
-export interface MuonDesktopServiceEntry {
-  /** Registry-relative native factory path. */
-  readonly library: string;
+export interface MuonDesktopServiceSettings {
   /** Application default when no user override has been persisted. */
   readonly autostart: boolean;
   /** Immutable strings passed to this logical native instance. */
   readonly config: Readonly<Record<string, string>>;
 }
+
+/** Registry inputs selected for one runtime adapter. */
+export type MuonDesktopServiceEntry = MuonDesktopServiceSettings &
+  (
+    | {
+        /** Native factory adapter. */ readonly runtime: "native";
+        /** Registry-relative shared library. */ readonly library: string;
+      }
+    | {
+        /** JavaScript engine adapter. */ readonly runtime: "quickjs";
+        /** Registry-relative bundled source. */ readonly script: string;
+      }
+  );
 
 /**
  * Packages verified service libraries independently of page plugins.
@@ -44,7 +55,19 @@ export const stageMuonDesktopServices = async (
     "libmuon-ui.so",
     "libmuon-ui.dll",
   ]);
+  const scripts = new Map<string, string>();
   for (const definition of definitions) {
+    if (definition.runtime === "quickjs") {
+      const script = "./services/quickjs/" + definition.id + ".mjs";
+      scripts.set(script, definition.bundle);
+      services[definition.id] = {
+        runtime: "quickjs",
+        script,
+        autostart: definition.autostart,
+        config: definition.config,
+      };
+      continue;
+    }
     const artifact = definition.artifact.targets[target];
     if (!artifact)
       throw new Error(
@@ -62,6 +85,7 @@ export const stageMuonDesktopServices = async (
       if (!previous) files.set(key, { name, bytes });
     }
     services[definition.id] = {
+      runtime: "native",
       library: "./services/native/" + basename(artifact.library),
       autostart: definition.autostart,
       config: definition.config,
@@ -71,6 +95,11 @@ export const stageMuonDesktopServices = async (
   await mkdir(directory, { recursive: true });
   for (const { name, bytes } of files.values())
     await writeFile(join(directory, name), bytes, { mode: 0o755 });
+  if (scripts.size) {
+    await mkdir(join(output, "services", "quickjs"), { recursive: true });
+    for (const [path, source] of scripts)
+      await writeFile(join(output, path), source);
+  }
   const registry = "muon-services.json";
   await writeFile(
     join(output, registry),

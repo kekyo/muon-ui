@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon-ui
 
 import { resolve } from "node:path";
+import { buildMuonQuickJsService } from "./service-build.ts";
 import type { MuonPluginTarget } from "muon-plugin-sdk";
 import {
   readServiceArtifact,
@@ -28,20 +29,32 @@ export interface MuonAndroidServiceConfig {
 }
 
 /** Verified build inputs for a logical service, independent of page plugins. */
-export interface MuonResolvedService {
+export interface MuonServiceSettings {
   /** Unique application-local identity, also safe as a private directory name. */
   readonly id: string;
-  /** Runtime adapter selected by the declaration. */
-  readonly runtime: "native";
   /** Manifest default; a saved user preference takes precedence at runtime. */
   readonly autostart: boolean;
   /** Immutable string values passed to this instance's factory. */
   readonly config: Readonly<Record<string, string>>;
   /** Android execution purpose; required when building Android. */
   readonly android: MuonAndroidServiceConfig | undefined;
-  /** Factory manifest and verified binaries for the requested targets. */
-  readonly artifact: ResolvedServiceArtifact;
 }
+
+/** Verified native factory and its logical service settings. */
+export interface MuonResolvedNativeService extends MuonServiceSettings {
+  /** Executes the portable native service ABI. */ readonly runtime: "native";
+  /** Factory manifest and verified binaries for the requested targets. */ readonly artifact: ResolvedServiceArtifact;
+}
+
+/** Bundled JavaScript and its logical service settings. */
+export interface MuonResolvedQuickJsService extends MuonServiceSettings {
+  /** Executes an independent QuickJS heap. */ readonly runtime: "quickjs";
+  /** Self-contained JavaScript source, evaluated by the runtime host. */ readonly bundle: string;
+}
+
+/** One independently configured native or JavaScript service. */
+export type MuonResolvedService =
+  MuonResolvedNativeService | MuonResolvedQuickJsService;
 
 const foregroundTypes = new Set([
   "camera",
@@ -134,7 +147,7 @@ const androidConfig = (
 };
 
 /**
- * Validates configured services and resolves their native factory artifacts.
+ * Validates configured services and resolves native factories or builds JavaScript.
  * @param input - Parsed muon.json services map, or undefined when absent.
  * @param directory - Directory of the configuration declaring artifact paths.
  * @param targets - Actual application targets whose binaries must be present.
@@ -157,12 +170,12 @@ export const resolveMuonServices = async (
     const value = record(definition, label);
     knownKeys(
       value,
-      ["runtime", "artifact", "autostart", "config", "android"],
+      ["runtime", "artifact", "entry", "autostart", "config", "android"],
       label,
     );
-    if (value.runtime !== "native")
+    if (value.runtime !== "native" && value.runtime !== "quickjs")
       throw new Error(
-        `${label}.runtime must be native; this build does not support ${String(value.runtime)} services.`,
+        `${label}.runtime must be native or quickjs; this build does not support ${String(value.runtime)} services.`,
       );
     if (value.autostart !== undefined && typeof value.autostart !== "boolean")
       throw new Error(`${label}.autostart must be boolean.`);
@@ -196,18 +209,30 @@ export const resolveMuonServices = async (
       throw new Error(
         `${label}.android must declare the foreground execution purpose and notification.`,
       );
-    const artifact = await readServiceArtifact(
-      resolve(directory, text(value.artifact, `${label}.artifact`)),
-      targets,
-    );
-    result.push({
+    const settings = {
       id,
-      runtime: "native",
       autostart: value.autostart ?? false,
       config,
       android,
-      artifact,
-    });
+    };
+    if (value.runtime === "native") {
+      if (value.entry !== undefined)
+        throw new Error(`${label}.entry requires the quickjs runtime.`);
+      const artifact = await readServiceArtifact(
+        resolve(directory, text(value.artifact, `${label}.artifact`)),
+        targets,
+      );
+      result.push({ ...settings, runtime: "native", artifact });
+    } else {
+      if (value.artifact !== undefined)
+        throw new Error(`${label}.artifact requires the native runtime.`);
+      const entry = resolve(directory, text(value.entry, `${label}.entry`));
+      result.push({
+        ...settings,
+        runtime: "quickjs",
+        bundle: await buildMuonQuickJsService(entry),
+      });
+    }
   }
   return result;
 };

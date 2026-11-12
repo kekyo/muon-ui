@@ -60,14 +60,18 @@ it("resolves one factory into independent logical service definitions", async ()
     { id: "alpha", autostart: true, config: { role: "writer" } },
     { id: "beta", autostart: false, config: { role: "reader" } },
   ]);
-  expect(services[0]!.artifact.path).toBe(join(root, artifact));
-  expect(services[0]!.artifact.targets["linux-amd64"]!.library).toBe(
-    services[1]!.artifact.targets["linux-amd64"]!.library,
+  const alpha = services[0]!;
+  const beta = services[1]!;
+  if (alpha.runtime !== "native" || beta.runtime !== "native")
+    throw new Error("Expected native factories");
+  expect(alpha.artifact.path).toBe(join(root, artifact));
+  expect(alpha.artifact.targets["linux-amd64"]!.library).toBe(
+    beta.artifact.targets["linux-amd64"]!.library,
   );
-  expect(services[0]!.artifact.manifest.kind).toBe("service");
+  expect(alpha.artifact.manifest.kind).toBe("service");
 });
 
-it.each(["quickjs", "node", "unknown"])(
+it.each(["node", "unknown"])(
   "rejects the unavailable %s runtime",
   async (runtime) => {
     await expect(

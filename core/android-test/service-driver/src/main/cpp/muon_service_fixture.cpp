@@ -23,41 +23,21 @@ static bool RetrySocket() {
   return error == WSAEWOULDBLOCK || error == WSAEINTR;
 }
 static unsigned long ProcessId() { return GetCurrentProcessId(); }
-
-static cardio::promise<void> WaitSocket(FixtureSocket socket, bool writing,
-    bool listener, cardio::cancellation cancellation) {
-  struct Event {
-    FixtureSocket socket;
-    WSAEVENT handle;
-    ~Event() { WSAEventSelect(socket, nullptr, 0); WSACloseEvent(handle); }
-  } event{socket, WSACreateEvent()};
-  if (event.handle == WSA_INVALID_EVENT || WSAEventSelect(socket, event.handle,
-      (listener ? FD_ACCEPT : writing ? FD_WRITE : FD_READ) | FD_CLOSE) != 0)
-    throw std::runtime_error("Fixture socket readiness registration failed");
-  // No native OVERLAPPED operation is pending here: cancellation only releases
-  // an event wait, then the scope detaches notification before closing it.
-  co_await cardio::from_win32_handle(event.handle, cancellation);
-  WSANETWORKEVENTS events{};
-  if (WSAEnumNetworkEvents(socket, event.handle, &events) != 0)
-    throw std::runtime_error("Fixture socket readiness collection failed");
-}
 #else
 using FixtureSocket = int;
 static constexpr auto invalid_socket = -1;
 static void CloseSocket(FixtureSocket socket) { close(socket); }
 static bool RetrySocket() { return errno == EAGAIN || errno == EINTR; }
 static pid_t ProcessId() { return getpid(); }
-static cardio::promise<void> WaitSocket(FixtureSocket socket, bool writing,
-    bool, cardio::cancellation cancellation) {
-  co_await cardio::from_fd(socket,
-      writing ? cardio::fd_event::write : cardio::fd_event::read, cancellation);
-}
 #endif
 
 struct Fixture {
   const muon_service_context* context;
   FixtureSocket listener = invalid_socket;
   FixtureSocket client = invalid_socket;
+#if defined(_WIN32)
+  WSAEVENT waiting = WSA_INVALID_EVENT;
+#endif
   uint64_t count = 0;
   cardio::cancellation_source cancellation{};
   std::optional<cardio::promise<void>> work{};
@@ -65,6 +45,41 @@ struct Fixture {
   muon_service_stop_completion stop_completion = nullptr;
   void* stop_data = nullptr;
 };
+
+#if defined(_WIN32)
+static cardio::promise<void> WaitSocket(Fixture& state, FixtureSocket socket,
+    bool writing, bool listener) {
+  struct Event {
+    Fixture& state;
+    FixtureSocket socket;
+    WSAEVENT handle;
+    ~Event() {
+      state.waiting = WSA_INVALID_EVENT;
+      WSAEventSelect(socket, nullptr, 0);
+      WSACloseEvent(handle);
+    }
+  } event{state, socket, WSACreateEvent()};
+  state.waiting = event.handle;
+  if (event.handle == WSA_INVALID_EVENT || WSAEventSelect(socket, event.handle,
+      (listener ? FD_ACCEPT : writing ? FD_WRITE : FD_READ) | FD_CLOSE) != 0)
+    throw std::runtime_error("Fixture socket readiness registration failed");
+  // Stop signals this event on the owner dispatcher. Await the actual native
+  // wait completion before closing the HANDLE: cancelling only the promise
+  // could leave the dispatcher's wait thread still observing that handle.
+  co_await cardio::from_win32_handle(event.handle);
+  state.cancellation.get_cancellation().throw_if_cancellation_requested();
+  WSANETWORKEVENTS events{};
+  if (WSAEnumNetworkEvents(socket, event.handle, &events) != 0)
+    throw std::runtime_error("Fixture socket readiness collection failed");
+}
+#else
+static cardio::promise<void> WaitSocket(Fixture& state, FixtureSocket socket,
+    bool writing, bool) {
+  co_await cardio::from_fd(socket,
+      writing ? cardio::fd_event::write : cardio::fd_event::read,
+      state.cancellation.get_cancellation());
+}
+#endif
 
 static std::string LabelHex(const muon_service_context* context) {
   static constexpr char digits[] = "0123456789abcdef";
@@ -92,7 +107,7 @@ static cardio::promise<void> Serve(Fixture* state) {
 #endif
       if (state->client == invalid_socket) {
         if (!RetrySocket()) throw std::runtime_error("Fixture accept failed");
-        co_await WaitSocket(state->listener, false, true, cancellation);
+        co_await WaitSocket(*state, state->listener, false, true);
         continue;
       }
       std::string input;
@@ -103,7 +118,7 @@ static cardio::promise<void> Serve(Fixture* state) {
         if (size == 0) break;
         if (size < 0) {
           if (!RetrySocket()) break;
-          co_await WaitSocket(state->client, false, false, cancellation);
+          co_await WaitSocket(*state, state->client, false, false);
           continue;
         }
         input.append(buffer, static_cast<size_t>(size));
@@ -133,7 +148,7 @@ static cardio::promise<void> Serve(Fixture* state) {
           const auto written = send(state->client, reply.data() + sent, reply.size() - sent, MSG_NOSIGNAL);
 #endif
           if (written < 0 && RetrySocket()) {
-            co_await WaitSocket(state->client, true, false, cancellation);
+            co_await WaitSocket(*state, state->client, true, false);
             continue;
           }
           if (written <= 0) throw std::runtime_error("Fixture response failed");
@@ -162,6 +177,9 @@ static void FinishStop(void* data) {
 
 static cardio::promise<void> StopAsync(Fixture* state) {
   state->cancellation.cancel();
+#if defined(_WIN32)
+  if (state->waiting != WSA_INVALID_EVENT) WSASetEvent(state->waiting);
+#endif
   co_await *state->work;
   if (state->client != invalid_socket) CloseSocket(state->client);
   CloseSocket(state->listener);

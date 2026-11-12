@@ -262,11 +262,26 @@ try {
       );
       const pageReference = JSON.parse(line).result;
       assert.equal(pageReference.serviceId, "borrowed");
+      let borrowedClosed: Promise<unknown> | undefined;
+      if (mode === "probe") {
+        const borrowed = createConnection({ host: "127.0.0.1", port: ports[1]! });
+        sockets.push(borrowed);
+        await once(borrowed, "connect");
+        borrowedClosed = once(borrowed, "close");
+        const response = once(createInterface({ input: borrowed }), "line");
+        const nonce = randomUUID();
+        borrowed.write(nonce + "\n");
+        assert.equal(JSON.parse((await response)[0]).nonce, nonce);
+        // The reply proves the service accepted this connection. Keep it idle
+        // during owner loss so stop must drain a pending client receive while
+        // the other instance continues accepting independent requests.
+      }
       page.kill("SIGKILL");
       await pageExit;
       await observed(
         (value) => value.id === "borrowed" && value.state === "stopped",
       );
+      if (borrowedClosed) await borrowedClosed;
 
       const probe = async (): Promise<Record<string, unknown>> => {
         const business = createConnection({

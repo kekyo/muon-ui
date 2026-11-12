@@ -3,10 +3,6 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-// muon - Multi-platform GUI application framework that uses CEF as its backend
-// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
-// Under MIT.
-// https://github.com/kekyo/muon-ui
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -21,6 +17,35 @@ const execute = promisify(execFile);
 beforeAll(async () => {
   await execute("make", ["-C", "../service-host", "all"]);
 });
+
+it("launches a host once, reopens the UI, and awaits explicit shutdown through native sessions", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "muon-service-session-"));
+  try {
+    const library = join(directory, "fixture.so");
+    await execute("cc", [
+      "-std=c99",
+      "-shared",
+      "-fPIC",
+      "-I../../sdk/include",
+      "../common-test/muon_service_fixture.c",
+      "-o",
+      library,
+    ]);
+    const registry = join(directory, "services.json");
+    await writeFile(
+      registry,
+      JSON.stringify({ services: { worker: { library, autostart: true } } }),
+    );
+    await execute(resolve("../service-host/.build/linux-process-driver"), [
+      resolve("../service-host/.build/muon-service-host"),
+      registry,
+      join(directory, "control.sock"),
+      join(directory, "data"),
+    ]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}, 20_000);
 
 it.each([false, true])(
   "releases bootstrap I/O without killing resident=%s services",

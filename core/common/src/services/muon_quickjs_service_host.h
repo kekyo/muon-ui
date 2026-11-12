@@ -20,6 +20,16 @@ struct MuonQuickJsServiceSpec {
   std::optional<std::chrono::steady_clock::time_point> startup_deadline = std::nullopt;
 };
 
+/** Generation-scoped host modules and their asynchronous native resources. */
+struct MuonQuickJsServiceExtension {
+  /** Resolves only explicitly granted host modules; throws for unknown names. */
+  std::function<JSModuleDef*(JSContext*, const std::string&)> load_module = {};
+  /** Releases every JSValue and disables JavaScript delivery before heap disposal. */
+  std::function<void()> detach = {};
+  /** After detach, drains native work; completion must run on the owner dispatcher. */
+  std::function<void(std::function<void()>)> close = {};
+};
+
 /** OS operations; all completions are serialized on the owner dispatcher. */
 struct MuonQuickJsServicePlatform {
   /** Queues one turn, never invoking it inline. */
@@ -29,10 +39,16 @@ struct MuonQuickJsServicePlatform {
       std::function<void()>)> delay;
   /** Copies service-scoped diagnostics. */
   std::function<void(const std::string&, muon_log_level, const std::string&)> log;
-  /** Reports a failed generation after its heap and external handles are gone. */
+  /** Reports a failed generation after heap disposal; native work may still drain. */
   std::function<void(const std::string&, uint64_t, const std::string&)> exited;
   MuonQuickJsLimits limits; /**< Independent heap, stack, and turn limits. */
   std::chrono::milliseconds shutdown_timeout; /**< Startup and stop deadline. */
+  /** Optional extension factory called before bundle evaluation. Wake queues jobs;
+   * fault closes this exact generation. A throwing factory releases its resources.
+   * Returned detach and close hooks must not throw. */
+  std::function<MuonQuickJsServiceExtension(const MuonQuickJsServiceSpec&, uint64_t,
+      MuonQuickJsEngine&, std::function<void()>,
+      std::function<void(const std::string&)>)> attach = {};
 };
 
 struct MuonQuickJsServiceHostImpl; /**< Private generation and queue ownership. */
@@ -59,11 +75,11 @@ class MuonQuickJsServiceHost final {
              std::function<void(const std::string&)> complete);
   /** @param id Service identity.
    *  @param generation Exact generation to dispose.
-   *  @param complete Deferred completion after heap disposal. */
+   *  @param complete Deferred completion after heap disposal and native drainage. */
   void Stop(const std::string& id, uint64_t generation, std::function<void()> complete);
   /** @returns Borrowed runtime operations; this host must outlive them. */
   MuonServiceExecution Execution();
-  /** @returns True when no generation or posted turn remains. */
+  /** @returns True when no generation, native cleanup, or posted turn remains. */
   bool IsIdle() const;
  private:
   std::shared_ptr<MuonQuickJsServiceHostImpl> impl_;

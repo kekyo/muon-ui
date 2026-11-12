@@ -14,6 +14,8 @@ int main() {
   std::map<uint64_t, std::function<void()>> timers;
   uint64_t next_timer = 0;
   auto failures = std::vector<std::string>{};
+  auto native_drains = std::map<uint64_t, std::function<void()>>{};
+  auto detached = std::vector<uint64_t>{};
   const auto post = [&](std::function<void()> task) { tasks.push_back(std::move(task)); };
   const auto pump = [&] {
     size_t turns = 0;
@@ -33,7 +35,31 @@ int main() {
     [](const std::string&, muon_log_level, const std::string&) {},
     [&](const std::string& id, uint64_t, const std::string&) { failures.push_back(id); },
     {64 * 1024 * 1024, 1024 * 1024, std::chrono::milliseconds(100)},
-    std::chrono::seconds(5)});
+    std::chrono::seconds(5),
+    [&](const MuonQuickJsServiceSpec& spec, uint64_t generation,
+        MuonQuickJsEngine& engine, std::function<void()>,
+        std::function<void(const std::string&)>) {
+      if (spec.id != "extended") return MuonQuickJsServiceExtension{};
+      auto* context = engine.Context();
+      const auto retained = JS_NewObject(context);
+      return MuonQuickJsServiceExtension{
+        [](JSContext* context, const std::string& name) {
+          assert(name == "muon:fixture");
+          auto* module = JS_NewCModule(context, name.c_str(), [](JSContext* context, JSModuleDef* module) {
+            return JS_SetModuleExport(context, module, "value", JS_NewInt32(context, 47));
+          });
+          assert(module && JS_AddModuleExport(context, module, "value") == 0);
+          return module;
+        },
+        [&, context, retained, generation] {
+          JS_FreeValue(context, retained);
+          detached.push_back(generation);
+        },
+        [&, generation](std::function<void()> complete) {
+          assert(detached.back() == generation);
+          native_drains.emplace(generation, std::move(complete));
+        }};
+    }});
   const auto source = R"(
     globalThis.__muonServiceInterface = {schemaVersion:1, methods:{
       echo:{parameters:['string'],returns:'string',errors:[]},
@@ -218,5 +244,57 @@ int main() {
       [&](const std::string& error) { startup_error = error; });
   pump();
   assert(!startup_error.empty() && host.IsIdle() && timers.empty());
+  const auto extended_source = std::string("import { value } from 'muon:fixture';\n") + source +
+      "\nif (value !== 47) throw new Error('wrong native module');";
+  host.Start({"extended", "native.mjs", extended_source, "/private", {}}, 20,
+      [&](const std::string& error) { assert(error.empty()); });
+  pump();
+  int extension_stopped = 0;
+  host.Stop("extended", 20, [&] { ++extension_stopped; });
+  pump();
+  assert(detached == std::vector<uint64_t>{20});
+  assert(!host.IsIdle() && extension_stopped == 0);
+  // Repeated stop must join the same native drain, even after heap disposal.
+  host.Stop("extended", 20, [&] { ++extension_stopped; });
+  pump();
+  assert(extension_stopped == 0);
+  native_drains.at(20)();
+  native_drains.erase(20);
+  pump();
+  assert(extension_stopped == 2 && host.IsIdle());
+
+  host.Start({"extended", "native.mjs", extended_source, "/private", {}}, 21,
+      [&](const std::string& error) { assert(error.empty()); });
+  pump();
+  host.Execution().invoke("extended", 21, "spin", {}, {}, collect);
+  pump();
+  assert(failures.back() == "extended" && detached.back() == 21 && !host.IsIdle());
+  // Faults report promptly while native completion is quarantined by generation.
+  host.Start({"extended", "native.mjs", extended_source, "/private", {}}, 22,
+      [&](const std::string& error) { assert(error.empty()); });
+  pump();
+  host.Stop("extended", 21, [&] { ++extension_stopped; });
+  native_drains.at(21)();
+  native_drains.erase(21);
+  pump();
+  host.Execution().invoke("extended", 22, "echo", {{std::string("new")}}, {}, collect);
+  pump();
+  assert(std::get<std::string>(results.back().value->data) == "extended:new");
+  host.Stop("extended", 22, [&] { ++extension_stopped; });
+  pump();
+  native_drains.at(22)();
+  native_drains.erase(22);
+  pump();
+  assert(extension_stopped == 4 && host.IsIdle());
+
+  startup_error.clear();
+  host.Start({"extended", "broken.mjs", "throw new Error('failed startup')", "/private", {}}, 23,
+      [&](const std::string& error) { startup_error = error; });
+  pump();
+  assert(!startup_error.empty() && detached.back() == 23 && !host.IsIdle());
+  native_drains.at(23)();
+  native_drains.erase(23);
+  pump();
+  assert(host.IsIdle());
   std::cout << "QuickJS service isolation, typed calls, interruption, and async stop passed\n";
 }

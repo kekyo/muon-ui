@@ -63,6 +63,7 @@ struct QuickJsEntry {
   MuonQuickJsServiceSpec spec;
   uint64_t generation;
   std::unique_ptr<MuonQuickJsEngine> engine;
+  MuonQuickJsServiceExtension extension;
   JSValue runtime = JS_UNDEFINED;
   JSValue getter = JS_UNDEFINED;
   JSValue stringify = JS_UNDEFINED;
@@ -88,6 +89,7 @@ struct QuickJsEntry {
 struct MuonQuickJsServiceHostImpl {
   MuonQuickJsServicePlatform platform;
   std::map<std::string, std::shared_ptr<QuickJsEntry>> entries;
+  std::map<std::pair<std::string, uint64_t>, std::shared_ptr<QuickJsEntry>> closing;
   MuonServiceEventSink events;
   uint64_t next_call = 0;
   size_t queued = 0;
@@ -496,6 +498,9 @@ static void Dispose(const std::shared_ptr<QuickJsEntry>& entry, const std::strin
     Complete(entry, call, {{}, "unavailable", error.empty() ? "Service stopped" : error});
   }
   entry->calls.clear();
+  if (entry->extension.detach) entry->extension.detach();
+  entry->extension.detach = nullptr;
+  entry->extension.load_module = nullptr;
   if (entry->engine) {
     auto* context = entry->engine->Context();
     for (auto& [id, timer] : entry->timers) {
@@ -519,6 +524,10 @@ static void Dispose(const std::shared_ptr<QuickJsEntry>& entry, const std::strin
     entry->engine.reset();
   }
   owner->entries.erase(entry->spec.id);
+  // Keep old generations separately so a fault can admit a replacement without
+  // losing the old native drain or completing a repeated stop prematurely.
+  const auto identity = std::make_pair(entry->spec.id, entry->generation);
+  owner->closing.emplace(identity, entry);
   if (was_starting) {
     auto complete = std::move(entry->started);
     entry->started = nullptr;
@@ -526,9 +535,17 @@ static void Dispose(const std::shared_ptr<QuickJsEntry>& entry, const std::strin
   } else if (!error.empty()) {
     owner->platform.exited(entry->spec.id, entry->generation, error);
   }
-  auto stopped = std::move(entry->stopped);
-  entry->stopped.clear();
-  for (const auto& complete : stopped) complete();
+  auto drained = [owner, entry, identity] {
+    Queue(owner, [owner, entry, identity] {
+      if (!owner->closing.erase(identity)) return;
+      entry->extension.close = nullptr;
+      auto stopped = std::move(entry->stopped);
+      entry->stopped.clear();
+      for (const auto& complete : stopped) complete();
+    });
+  };
+  if (entry->extension.close) entry->extension.close(std::move(drained));
+  else drained();
 }
 
 static void Pump(const std::shared_ptr<QuickJsEntry>& entry) {
@@ -594,11 +611,26 @@ MuonQuickJsServiceHost::MuonQuickJsServiceHost(MuonQuickJsServicePlatform platfo
 }
 
 MuonQuickJsServiceHost::~MuonQuickJsServiceHost() { assert(IsIdle()); }
-bool MuonQuickJsServiceHost::IsIdle() const { return impl_->entries.empty() && !impl_->queued; }
+bool MuonQuickJsServiceHost::IsIdle() const {
+  return impl_->entries.empty() && impl_->closing.empty() && !impl_->queued;
+}
+
+static JSModuleDef* LoadModule(JSContext* context, const char* name, void* opaque) {
+  const auto entry = static_cast<QuickJsEntry*>(opaque);
+  try {
+    if (entry->state == QuickJsState::Closed || !entry->fault.empty() || !entry->extension.load_module)
+      throw std::invalid_argument("Service host module is unavailable");
+    return entry->extension.load_module(context, name);
+  } catch (const std::exception& error) {
+    JS_ThrowReferenceError(context, "%s", error.what());
+    return nullptr;
+  }
+}
 
 void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t generation,
                                  std::function<void(const std::string&)> complete) {
-  if (spec.id.empty() || !generation || impl_->entries.contains(spec.id))
+  if (spec.id.empty() || !generation || impl_->entries.contains(spec.id) ||
+      impl_->closing.contains({spec.id, generation}))
     throw std::invalid_argument("Invalid or duplicate QuickJS service generation");
   auto entry = std::make_shared<QuickJsEntry>();
   entry->self = entry;
@@ -618,6 +650,13 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
       entry->getter = entry->engine->Evaluate("(object, key) => object[key]", "<service-host>", JS_EVAL_TYPE_GLOBAL);
       entry->stringify = entry->engine->Evaluate("JSON.stringify", "<service-host>", JS_EVAL_TYPE_GLOBAL);
       InstallBridge(entry);
+      if (const auto owner = entry->owner.lock(); owner->platform.attach) {
+        const auto weak = std::weak_ptr<QuickJsEntry>(entry);
+        entry->extension = owner->platform.attach(entry->spec, entry->generation, *entry->engine,
+            [weak] { if (const auto entry = weak.lock()) Wake(entry); },
+            [weak](const std::string& error) { if (const auto entry = weak.lock()) Fault(entry, error); });
+      }
+      JS_SetModuleLoaderFunc(entry->engine->Runtime(), nullptr, LoadModule, entry.get());
       Deadline(entry);
       Await(entry, entry->engine->Evaluate(entry->spec.source, entry->spec.filename, JS_EVAL_TYPE_MODULE),
           [entry](const std::string&, const std::string& error) {
@@ -653,6 +692,10 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
 }
 
 void MuonQuickJsServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete) {
+  if (const auto closing = impl_->closing.find({id, generation}); closing != impl_->closing.end()) {
+    closing->second->stopped.push_back(std::move(complete));
+    return;
+  }
   const auto found = impl_->entries.find(id);
   if (found == impl_->entries.end() || found->second->generation != generation) {
     Queue(impl_, std::move(complete)); return;

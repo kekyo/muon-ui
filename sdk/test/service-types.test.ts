@@ -1,0 +1,72 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { expect, it } from 'vitest';
+
+const execute = promisify(execFile);
+const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc');
+
+it.each(['ES2022', 'DOM', 'Node'] as const)(
+  'types the shipped services client with %s globals',
+  async (environment) => {
+    const directory = await mkdtemp(join(tmpdir(), 'muon-service-types-'));
+    try {
+      await writeFile(
+        join(directory, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: {
+            target: 'ES2022',
+            module: 'ESNext',
+            moduleResolution: 'Bundler',
+            strict: true,
+            noEmit: true,
+            skipLibCheck: false,
+            lib: environment === 'DOM' ? ['ES2022', 'DOM'] : ['ES2022'],
+            types: environment === 'Node' ? ['node'] : [],
+            typeRoots: [
+              fileURLToPath(
+                new URL('../../node_modules/@types', import.meta.url)
+              ),
+            ],
+          },
+          files: ['consumer.ts'],
+        })
+      );
+      await writeFile(
+        join(directory, 'consumer.ts'),
+        `
+      import { createServiceClient, defineServiceInterface, type ServiceCancellationSignal } from ${JSON.stringify(fileURLToPath(new URL('../dist/types/services.js', import.meta.url)))};
+      const definition = defineServiceInterface({ schemaVersion: 1, methods: {
+        ping: { parameters: [], returns: 'uint64', errors: [] }
+      }, events: {} });
+      const client = createServiceClient(definition, async () => null);
+      const signal: ServiceCancellationSignal = ${environment !== 'ES2022' ? 'new AbortController().signal' : '{ aborted: false, addEventListener: () => {}, removeEventListener: () => {} }'};
+      const result: Promise<bigint> = client.call('ping', [], { signal });
+      void result;
+    `
+      );
+      const result = await (async () => {
+        try {
+          return await execute(process.execPath, [
+            compiler,
+            '-p',
+            join(directory, 'tsconfig.json'),
+          ]);
+        } catch (error) {
+          const detail = error as Error & { stdout?: string; stderr?: string };
+          throw new Error(
+            `${detail.message}\n${detail.stdout ?? ''}${detail.stderr ?? ''}`
+          );
+        }
+      })();
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+);

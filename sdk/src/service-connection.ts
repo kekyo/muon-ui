@@ -42,10 +42,36 @@ export interface ServiceFailure {
   /** Human-readable diagnostic. */
   readonly message: string;
 }
+/**
+ * Minimal cancellation source supported without DOM or Node type definitions.
+ * Browser and Node AbortSignal instances are structurally compatible.
+ */
+export interface ServiceCancellationSignal {
+  /** Whether cancellation was already requested. */
+  readonly aborted: boolean;
+  /**
+   * Registers an abort listener on this source.
+   * @param type - The abort notification name.
+   * @param listener - Receives cancellation once it is requested.
+   * @param options - Requests removal after the first notification.
+   */
+  readonly addEventListener: (
+    type: 'abort',
+    listener: () => void,
+    options: { readonly once: boolean }
+  ) => void;
+  /**
+   * Removes an abort listener after its invocation has ended.
+   * @param type - The abort notification name.
+   * @param listener - Previously registered callback.
+   */
+  readonly removeEventListener: (type: 'abort', listener: () => void) => void;
+}
+
 /** Optional cancellation of a single invocation. */
 export interface ServiceCallOptions {
   /** Aborting rejects the public call while its native completion is drained. */
-  readonly signal?: AbortSignal;
+  readonly signal?: ServiceCancellationSignal;
 }
 /** One non-owning FIFO event subscription. */
 export interface ServiceSubscription {
@@ -358,7 +384,7 @@ export const createServiceConnection = (
     method: string,
     signature: ServiceMethod,
     args: readonly unknown[],
-    signal: AbortSignal | undefined
+    signal: ServiceCancellationSignal | undefined
   ): Promise<void> => {
     const abort = (): void => {
       cancel(call);

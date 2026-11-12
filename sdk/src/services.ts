@@ -29,6 +29,7 @@ export {
 } from './service-connection.ts';
 export type {
   ServiceCallOptions,
+  ServiceCancellationSignal,
   ServiceClient,
   ServiceConnection,
   ServiceFailure,

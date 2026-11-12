@@ -3,8 +3,8 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve, win32 } from "node:path";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RemoteAgent, ScreenRect } from "agent-rover";
 import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
@@ -83,6 +83,35 @@ export const captureWindowsNotification = async (
   throw new Error(
     "Notification position and pixels did not settle for capture",
   );
+};
+
+/** Creates a directory for one notification test run without replacing evidence.
+ * @param parent Parent directory grouping captures for this test mode.
+ * @returns A new local artifact directory.
+ */
+export const createWindowsNotificationArtifacts = async (
+  parent: string,
+): Promise<string> => {
+  await mkdir(parent, { recursive: true });
+  return await mkdtemp(join(parent, "run-"));
+};
+
+/** Records opening motion and the stable notification before allowing cleanup.
+ * @typeParam T Recorded video metadata.
+ * @param video In-progress opening video capture.
+ * @param notification In-progress notification observation and screenshot.
+ * @returns Video metadata after both operations have finished.
+ */
+export const captureWindowsNotificationOpening = async <T>(
+  video: Promise<T>,
+  notification: Promise<void>,
+): Promise<T> => {
+  // Neither capture may outlive the observer whose executable and DLLs are
+  // removed in the caller's finally block, including after a recording error.
+  const [recorded, observed] = await Promise.allSettled([video, notification]);
+  if (recorded.status === "rejected") throw recorded.reason;
+  if (observed.status === "rejected") throw observed.reason;
+  return recorded.value;
 };
 
 /** Creates an observer for the English Windows test machine.

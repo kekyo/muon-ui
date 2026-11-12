@@ -3,8 +3,15 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, it } from "vitest";
-import { captureWindowsNotification } from "./notifications-windows-accessibility.ts";
+import {
+  captureWindowsNotification,
+  captureWindowsNotificationOpening,
+  createWindowsNotificationArtifacts,
+} from "./notifications-windows-accessibility.ts";
 
 it("captures the complete notification after its slide and content animations settle", async () => {
   const rectangles = [
@@ -24,3 +31,59 @@ it("captures the complete notification after its slide and content animations se
   );
   expect(result.toString()).toBe("complete");
 });
+
+it("preserves earlier videos while allocating a fresh destination for the next run", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "muon-notification-capture-"));
+  try {
+    const first = await createWindowsNotificationArtifacts(parent);
+    await writeFile(join(first, "opening.mp4"), "previous recording", {
+      flag: "wx",
+    });
+    const second = await createWindowsNotificationArtifacts(parent);
+    await writeFile(join(second, "opening.mp4"), "next recording", {
+      flag: "wx",
+    });
+    expect(await readFile(join(first, "opening.mp4"), "utf8")).toBe(
+      "previous recording",
+    );
+    expect(await readFile(join(second, "opening.mp4"), "utf8")).toBe(
+      "next recording",
+    );
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+it.each(["video", "notification"] as const)(
+  "drains the other capture before reporting a %s failure to cleanup",
+  async (failed) => {
+    const failure = new Error(`${failed} failed`);
+    let complete = (): void => {};
+    const pending = new Promise<void>((resolve) => {
+      complete = resolve;
+    });
+    const video = failed === "video" ? Promise.reject(failure) : pending;
+    const notification =
+      failed === "notification" ? Promise.reject(failure) : pending;
+    let cleanup = false;
+    const execution = (async () => {
+      try {
+        await captureWindowsNotificationOpening(video, notification);
+      } catch (error) {
+        return error;
+      } finally {
+        cleanup = true;
+      }
+    })();
+    try {
+      // Advance one event-loop turn, without a time delay, while the other
+      // operation remains behind an explicit completion barrier.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(cleanup).toBe(false);
+    } finally {
+      complete();
+      expect(await execution).toBe(failure);
+    }
+    expect(cleanup).toBe(true);
+  },
+);

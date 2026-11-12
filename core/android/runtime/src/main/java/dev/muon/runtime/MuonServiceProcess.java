@@ -30,6 +30,7 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -126,6 +127,7 @@ final class MuonServiceProcess {
             String[] directories = new String[count];
             boolean[] autostarts = new boolean[count];
             String[][] configurations = new String[count][];
+            String[][] pluginGrants = new String[count][];
             int index = 0;
             for (Map.Entry<String, JSONObject> entry : definitions.entrySet()) {
                 String id = entry.getKey();
@@ -162,12 +164,38 @@ final class MuonServiceProcess {
                         pairs.add(values.getString(key));
                     }
                 }
-                configurations[index++] = pairs.toArray(new String[0]);
+                configurations[index] = pairs.toArray(new String[0]);
+                JSONArray grants = definition.optJSONArray("plugins");
+                pluginGrants[index] = new String[grants == null ? 0 : grants.length()];
+                for (int grant = 0; grant < pluginGrants[index].length; ++grant)
+                    pluginGrants[index][grant] = grants.getString(grant);
+                if (!"quickjs".equals(runtime) && pluginGrants[index].length != 0)
+                    throw new JSONException("Native module grants require QuickJS services");
+                ++index;
             }
+            JSONArray plugins = config.optJSONArray("servicePlugins");
+            if (plugins == null) plugins = new JSONArray();
+            for (int plugin = 0; plugin < plugins.length(); ++plugin) {
+                JSONObject entry = plugins.getJSONObject(plugin);
+                String soname = entry.getString("soname");
+                if (!soname.matches("lib[A-Za-z0-9_][A-Za-z0-9_.+-]*\\.so"))
+                    throw new JSONException("Invalid service plugin library name");
+                String path = ((BaseDexClassLoader)context.getClassLoader()).findLibrary(
+                        soname.substring(3, soname.length() - 3));
+                if (path == null) throw new IllegalStateException("Service plugin is not installed: " + soname);
+                entry.put("library", path);
+            }
+            String pluginRegistry = plugins.toString();
             preferences.load(ids, (overrides, error) -> {
                 initializationError = error;
-                if (error == null) nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
-                        autostarts, overrides, configurations);
+                if (error == null) {
+                    try {
+                        nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
+                                autostarts, overrides, configurations, pluginGrants, pluginRegistry);
+                    } catch (RuntimeException failure) {
+                        initializationError = failure.getMessage();
+                    }
+                }
                 initialized = true;
                 ArrayList<Runnable> pending = new ArrayList<>(initializing);
                 initializing.clear();
@@ -479,7 +507,8 @@ final class MuonServiceProcess {
     }
 
     private static native long nativeCreate(MuonServiceProcess owner, String[] ids, String[] runtimes,
-            String[] libraries, String[] directories, boolean[] autostarts, int[] overrides, String[][] configurations);
+            String[] libraries, String[] directories, boolean[] autostarts, int[] overrides,
+            String[][] configurations, String[][] pluginGrants, String pluginRegistry);
     private static native void nativeRunTask(long handle, long task);
     private static native void nativeActivate(long handle);
     private static native String nativeSetAutostart(long handle, String id, boolean enabled);

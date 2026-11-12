@@ -14,12 +14,15 @@
 #include "services/muon_service_controller.h"
 #include "services/muon_service_broker.h"
 #include "services/muon_quickjs_service_host.h"
+#include "services/muon_quickjs_service_plugins.h"
 #include "services/muon_service_execution_router.h"
 #include "muon_android_service_peer.h"
+#include "muon_android_service_plugins.h"
 
 #include <map>
 #include <charconv>
 #include <memory>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -65,8 +68,8 @@ static std::string ReferenceJson(const MuonServiceReference& reference) {
 // This object belongs to the private Service process, independently of WebViews.
 // Java constructs it once on the main Looper and retains it for that process.
 struct MuonAndroidServices {
-  JNIEnv* env;
-  jobject owner;
+  JNIEnv* env = nullptr;
+  jobject owner = nullptr;
   jmethodID post_method;
   jmethodID delay_method;
   jmethodID cancel_method;
@@ -76,6 +79,9 @@ struct MuonAndroidServices {
   jmethodID save_method;
   jmethodID disconnected_method;
   std::unique_ptr<cardio::dispatcher_host_android_auto> dispatcher;
+  std::unique_ptr<MuonServicePluginPool> plugins;
+  std::unique_ptr<MuonQuickJsServicePlugins> plugin_startup;
+  std::set<std::string> plugin_services;
   std::unique_ptr<MuonNativeServiceHost> host;
   std::unique_ptr<MuonQuickJsServiceHost> javascript;
   std::unique_ptr<MuonServiceController> controller;
@@ -90,6 +96,10 @@ struct MuonAndroidServices {
   std::map<uint64_t, std::function<void(const std::string&)>> saves;
   uint64_t next_task = 1;
   uint64_t next_save = 1;
+
+  ~MuonAndroidServices() {
+    if (owner) env->DeleteGlobalRef(owner);
+  }
 
   void Post(std::function<void()> task) {
     const auto id = next_task++;
@@ -158,7 +168,8 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
     JNIEnv* env, jclass, jobject owner, jobjectArray ids, jobjectArray runtimes, jobjectArray libraries,
     jobjectArray directories, jbooleanArray autostarts, jintArray overrides,
-    jobjectArray configurations) {
+    jobjectArray configurations, jobjectArray plugin_grants, jstring plugin_registry) {
+  try {
   auto runtime = std::make_unique<MuonAndroidServices>();
   runtime->env = env;
   runtime->owner = env->NewGlobalRef(owner);
@@ -193,8 +204,16 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
         state->controller->RuntimeExited(id, generation, error);
         state->ServiceCallback(state->stopped_method, id, generation);
       }, {64 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(2)},
-      std::chrono::seconds(10)});
+      std::chrono::seconds(10),
+      [state](const MuonQuickJsServiceSpec& spec, uint64_t generation,
+          MuonQuickJsEngine& engine, std::function<void()> wake,
+          std::function<void(const std::string&)> fault) {
+        return state->plugin_startup
+            ? state->plugin_startup->Attach(spec.id, generation, engine, std::move(wake), std::move(fault))
+            : MuonQuickJsServiceExtension{};
+      }});
   std::vector<MuonServiceDefinition> definitions;
+  std::vector<MuonServicePluginDefinition> plugin_definitions;
   const auto count = env->GetArrayLength(ids);
   for (jsize index = 0; index < count; ++index) {
     const auto read = [env, index](jobjectArray values) {
@@ -214,6 +233,18 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
       env->DeleteLocalRef(value);
     }
     env->DeleteLocalRef(pairs);
+    const auto grants = static_cast<jobjectArray>(env->GetObjectArrayElement(plugin_grants, index));
+    MuonServicePluginDefinition plugin_definition{spec.id, {}};
+    for (jsize grant = 0; grant < env->GetArrayLength(grants); ++grant) {
+      const auto value = static_cast<jstring>(env->GetObjectArrayElement(grants, grant));
+      plugin_definition.allow.push_back(ReadString(env, value));
+      env->DeleteLocalRef(value);
+    }
+    env->DeleteLocalRef(grants);
+    if (!plugin_definition.allow.empty()) {
+      runtime->plugin_services.insert(spec.id);
+      plugin_definitions.push_back(std::move(plugin_definition));
+    }
     jboolean autostart = false;
     env->GetBooleanArrayRegion(autostarts, index, 1, &autostart);
     jint user = -1;
@@ -222,6 +253,13 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
         user < 0 ? std::nullopt : std::optional<bool>{user != 0}});
     runtime->specs.emplace(spec.id, std::move(spec));
   }
+  runtime->plugins = CreateMuonAndroidServicePlugins(ReadString(env, plugin_registry),
+      std::move(plugin_definitions), *runtime->dispatcher);
+  if (runtime->plugins)
+    runtime->plugin_startup = std::make_unique<MuonQuickJsServicePlugins>(*runtime->plugins,
+        [state](std::chrono::milliseconds delay, std::function<void()> task) {
+          return state->Delay(delay, std::move(task));
+        });
   runtime->controller = std::make_unique<MuonServiceController>(definitions, MuonServiceBackend{
       [state](const MuonServiceSnapshot& snapshot, std::function<void(const std::string&)> complete) {
         state->starts.emplace(std::make_pair(snapshot.id, snapshot.generation), std::move(complete));
@@ -250,6 +288,17 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
       RouteMuonServiceExecutions({runtime->host->Execution(), runtime->javascript->Execution()},
           [state](const std::string& id) { return state->runtimes.at(id); }));
   return reinterpret_cast<jlong>(runtime.release());
+  } catch (const std::exception& error) {
+    const auto type = env->FindClass("java/lang/IllegalStateException");
+    const auto constructor = env->GetMethodID(type, "<init>", "(Ljava/lang/String;)V");
+    const auto message = MuonAndroidNewJavaString(env, error.what());
+    const auto failure = static_cast<jthrowable>(env->NewObject(type, constructor, message));
+    env->Throw(failure);
+    env->DeleteLocalRef(failure);
+    env->DeleteLocalRef(message);
+    env->DeleteLocalRef(type);
+    return 0;
+  }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -374,9 +423,13 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeForegroundReady(
       return JNI_FALSE;
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(remaining);
-    state->javascript->Start({id, spec.library_path, ReadString(env, source), spec.data_directory,
-        spec.config, deadline},
-        version, std::move(complete));
+    MuonQuickJsServiceSpec script{id, spec.library_path, ReadString(env, source), spec.data_directory,
+        spec.config, deadline};
+    // The lifecycle waits for startup to settle before dispatching Stop. This
+    // includes native pool drainage and cannot create an orphaned late heap.
+    if (state->plugin_services.contains(id))
+      state->plugin_startup->Start(*state->javascript, script, version, std::move(complete));
+    else state->javascript->Start(script, version, std::move(complete));
   } else state->host->Start(spec, version, std::move(complete));
   return JNI_TRUE;
 }

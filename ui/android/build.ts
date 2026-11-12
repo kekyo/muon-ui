@@ -31,7 +31,10 @@ import type {
   MuonAndroidNotificationIcon,
 } from "./notifications.js";
 import type { MuonNotificationConfig } from "../common/notification-config.js";
-import type { MuonAndroidPackagedService } from "./services.ts";
+import {
+  getAndroidServicePlugins,
+  type MuonAndroidPackagedService,
+} from "./services.ts";
 
 /** ABI shipped by the Muon Android runtime. */
 export type MuonAndroidAbi = "arm64-v8a" | "x86_64";
@@ -206,6 +209,7 @@ export const buildAndroidApplication = async (
     join(tools.componentsDirectory, "renderer/renderer.js"),
     join(frameworkAssets, "renderer.js"),
   );
+  const servicePlugins = getAndroidServicePlugins(input.services);
   await writeFile(
     join(frameworkAssets, "config.json"),
     JSON.stringify({
@@ -220,6 +224,15 @@ export const buildAndroidApplication = async (
           : {}),
       },
       plugin: input.pluginAccess,
+      servicePlugins: servicePlugins.map(
+        ({ name, soname, allow, config, expectedFunctions }) => ({
+          name,
+          soname,
+          allow,
+          config,
+          expectedFunctions,
+        }),
+      ),
       services: Object.fromEntries(
         input.services.map((service) => [
           service.id,
@@ -227,7 +240,10 @@ export const buildAndroidApplication = async (
             runtime: service.runtime,
             ...(service.runtime === "native"
               ? { library: service.soname }
-              : { asset: service.asset }),
+              : {
+                  asset: service.asset,
+                  plugins: service.plugins.flatMap((plugin) => plugin.allow),
+                }),
             autostart: service.autostart,
             config: service.config,
             android: service.android,
@@ -253,6 +269,7 @@ export const buildAndroidApplication = async (
   );
   for (const plugin of [
     ...input.plugins,
+    ...servicePlugins,
     ...input.services.filter((service) => service.runtime === "native"),
   ]) {
     for (const abi of input.abis) {

@@ -11,6 +11,7 @@ import type {
   MuonResolvedService,
 } from "../common/service-config.ts";
 import type { MuonAndroidAbi, MuonAndroidPackagedPlugin } from "./build.ts";
+import { resolveAndroidPlugins } from "./plugins.ts";
 
 /** Common Android settings for one independently declared service component. */
 interface MuonAndroidPackagedServiceBase {
@@ -41,6 +42,7 @@ export interface MuonAndroidPackagedQuickJsService extends MuonAndroidPackagedSe
   /** QuickJS service execution. */ readonly runtime: "quickjs";
   /** Validated bundled JavaScript source. */ readonly bundle: string;
   /** APK asset path, relative to the assets root. */ readonly asset: string;
+  /** Explicit native modules and this service's independent grants. */ readonly plugins: readonly MuonAndroidPackagedPlugin[];
 }
 
 /** Verified runtime inputs and Android settings for one logical service. */
@@ -82,11 +84,40 @@ export const resolveAndroidServices = async (
       },
     };
     if (definition.runtime === "quickjs") {
+      const native = await resolveAndroidPlugins(
+        definition.plugins.map((plugin) => {
+          const libraries: Partial<Record<MuonAndroidAbi, string>> = {};
+          const dependencies: Partial<
+            Record<MuonAndroidAbi, readonly string[]>
+          > = {};
+          for (const abi of abis) {
+            const target = plugin.artifact.targets[`android-${abi}`];
+            if (!target)
+              throw new Error(
+                `Service plugin ${plugin.name} is missing its ${abi} library.`,
+              );
+            libraries[abi] = target.library;
+            dependencies[abi] = target.dependencies;
+          }
+          return {
+            name: plugin.name,
+            soname: basename(libraries[abis[0]!]!),
+            libraries,
+            dependencies,
+            allow: plugin.allow,
+            expectedFunctions: plugin.allow,
+            config: plugin.config,
+          };
+        }),
+        abis,
+        ".",
+      );
       services.push({
         ...common,
         runtime: "quickjs",
         bundle: definition.bundle,
         asset: `muon/services/${definition.id}.js`,
+        plugins: native,
       });
       continue;
     }
@@ -126,6 +157,7 @@ export const resolveAndroidServices = async (
     const files = new Map<string, Buffer>();
     for (const entry of [
       ...plugins,
+      ...getAndroidServicePlugins(services),
       ...services.filter((service) => service.runtime === "native"),
     ]) {
       for (const [index, path] of [
@@ -144,6 +176,28 @@ export const resolveAndroidServices = async (
     }
   }
   return services;
+};
+
+/**
+ * Coalesces verified native modules for the private Android service process.
+ * @param services - Packaged service inputs with owner-specific capabilities.
+ * @returns One loader entry per plugin, with the union of its function grants.
+ * @remarks Artifact and configuration equality were checked by the common
+ * service resolver; page plugins retain their separate registry and lifetime.
+ */
+export const getAndroidServicePlugins = (
+  services: readonly MuonAndroidPackagedService[],
+): readonly MuonAndroidPackagedPlugin[] => {
+  const entries = new Map<string, MuonAndroidPackagedPlugin>();
+  for (const service of services) {
+    if (service.runtime !== "quickjs") continue;
+    for (const plugin of service.plugins) {
+      const previous = entries.get(plugin.name);
+      const allow = [...new Set([...(previous?.allow ?? []), ...plugin.allow])];
+      entries.set(plugin.name, { ...plugin, allow, expectedFunctions: allow });
+    }
+  }
+  return [...entries.values()];
 };
 
 /**

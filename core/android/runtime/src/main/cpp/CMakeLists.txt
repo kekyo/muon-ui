@@ -135,6 +135,7 @@ target_link_options(muon_android_rpc PRIVATE
 
 # The background process owns this host independently of the page plugin runtime.
 add_library(muon_android_services SHARED
+  muon_android_service_plugins.cpp
   muon_android_service_peer.cpp
   muon_android_service_transport.cpp
   muon_android_utf.cpp
@@ -145,7 +146,11 @@ add_library(muon_android_services SHARED
   "${MUON_COMMON_ROOT}/src/services/muon_service_broker.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_execution_router.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_quickjs_service_host.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_quickjs_service_plugins.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_plugin_pool.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_quickjs_plugin_bindings.cpp"
   "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_engine.cpp"
+  "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_module.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_value.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp"
@@ -156,5 +161,5 @@ target_compile_options(muon_android_services PRIVATE -Wall -Wextra -Wpedantic -W
 target_include_directories(muon_android_services PRIVATE
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
   "${MUON_REPOSITORY_ROOT}/sdk/include")
-target_link_libraries(muon_android_services PRIVATE muon_cardio muon_service_json muon_service_quickjs android dl log)
+target_link_libraries(muon_android_services PRIVATE muon_plugin_runtime_core muon_cardio muon_service_json muon_service_quickjs android dl log)
 target_link_options(muon_android_services PRIVATE -Wl,-z,max-page-size=16384)

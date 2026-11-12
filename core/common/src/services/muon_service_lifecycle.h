@@ -194,6 +194,20 @@ class MuonServiceLifecycle final {
   void CompleteStop(const std::string& service_id, uint64_t generation);
 
   /**
+   * Begins cleanup required by the OS, independently of resident/client demand.
+   * @param service_id Affected service identity.
+   * @param generation Generation reported by the platform.
+   * @param reason OS rejection, deadline, or forced shutdown diagnostic.
+   * @remarks Internal platform operation, not a page-facing stop API. Invalidates
+   *     all acquisitions immediately and rejects new ones until cleanup finishes.
+   *     Pending startup must settle before Stop is issued. CompleteStop records
+   *     failure without retrying the retained resident policy. A later explicit
+   *     acquisition can retry, subject to the platform's eligibility checks.
+   */
+  void RequestRuntimeStop(const std::string& service_id, uint64_t generation,
+                          const std::string& reason);
+
+  /**
    * Reports an unexpected exit after that generation's resources are gone.
    * @param service_id Failed service identity.
    * @param generation Failed runtime generation.

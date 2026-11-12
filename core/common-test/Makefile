@@ -13,7 +13,7 @@ RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \
   $(COMMON)/src/plugins/muon_type_metadata.cpp \
   $(COMMON)/src/rpc/muon_rpc.cpp \
   $(COMMON)/src/rpc/muon_rpc_host.cpp
-TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle
+TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-library
 
 .PHONY: all test clean service-driver
 all: $(TESTS)
@@ -37,6 +37,15 @@ $(OUT)/service-lifecycle: muon_service_lifecycle_test.cpp $(COMMON)/src/services
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
 service-driver: $(OUT)/service-driver
+
+$(OUT)/native-service-host: muon_native_service_host_test.cpp $(COMMON)/src/services/muon_native_service_host.cpp | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
+$(OUT)/service-fixture.so: muon_service_fixture.c ../../sdk/include/muon_service_api.h | $(OUT)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared $< -o $@
+
+$(OUT)/native-service-library: muon_native_service_library_test.cpp $(COMMON)/src/services/muon_native_service_host.cpp $(COMMON)/src/services/muon_native_service_library.cpp $(COMMON)/src/muon_filesystem.cpp $(OUT)/service-fixture.so | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -DMUON_SERVICE_FIXTURE_PATH='"$(abspath $(OUT)/service-fixture.so)"' $(filter %.cpp,$^) -ldl -o $@
 
 $(OUT)/service-driver: muon_service_driver.cpp $(COMMON)/src/services/muon_service_lifecycle.cpp | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@

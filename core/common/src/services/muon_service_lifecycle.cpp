@@ -29,6 +29,7 @@ struct MuonServiceEntry {
   uint64_t revision = 0;
   bool resident = false;
   std::string error;
+  std::string forced_stop_reason;
   std::map<uint64_t, MuonServiceClientReference> references;
   std::deque<MuonServiceSettingRequest> settings;
   bool saving = false;
@@ -76,7 +77,7 @@ static bool HasDemand(const MuonServiceEntry& entry) {
 
 static void StartIfNeeded(MuonServiceLifecycleImpl& impl,
                           MuonServiceEntry& entry) {
-  if (impl.closing || !HasDemand(entry) ||
+  if (impl.closing || !HasDemand(entry) || !entry.forced_stop_reason.empty() ||
       (entry.state != MuonServiceState::Stopped &&
        entry.state != MuonServiceState::Failed)) return;
   if (entry.generation == std::numeric_limits<uint64_t>::max()) {
@@ -88,6 +89,7 @@ static void StartIfNeeded(MuonServiceLifecycleImpl& impl,
   ++entry.generation;
   entry.state = MuonServiceState::Starting;
   entry.error.clear();
+  entry.forced_stop_reason.clear();
   Changed(impl, entry);
   impl.events.push_back(Event(MuonServiceEventKind::Start, entry));
 }
@@ -196,6 +198,9 @@ std::optional<MuonServiceReference> MuonServiceLifecycle::Acquire(
     return std::nullopt;
   }
   auto& entry = found->second;
+  if (!entry.forced_stop_reason.empty() &&
+      (entry.state == MuonServiceState::Starting ||
+       entry.state == MuonServiceState::Stopping)) return std::nullopt;
   const auto current = entry.state == MuonServiceState::Starting ||
                        entry.state == MuonServiceState::Running;
   if (!current && entry.generation == std::numeric_limits<uint64_t>::max()) {
@@ -206,6 +211,7 @@ std::optional<MuonServiceReference> MuonServiceLifecycle::Acquire(
   const auto reference = MuonServiceReference{
       id, service_id, owner_id, current ? entry.generation : entry.generation + 1};
   const auto ready = entry.state == MuonServiceState::Running;
+  if (entry.state == MuonServiceState::Failed) entry.forced_stop_reason.clear();
   entry.references.emplace(id, MuonServiceClientReference{reference, ready});
   Changed(*impl_, entry);
   if (ready) {
@@ -260,6 +266,12 @@ void MuonServiceLifecycle::CompleteStart(const std::string& service_id,
     RuntimeExited(service_id, generation, error);
     return;
   }
+  if (!entry.forced_stop_reason.empty()) {
+    entry.state = MuonServiceState::Stopping;
+    Changed(*impl_, entry);
+    impl_->events.push_back(Event(MuonServiceEventKind::Stop, entry));
+    return;
+  }
   entry.state = MuonServiceState::Running;
   for (auto& [id, reference] : entry.references) {
     if (reference.identity.generation == generation) reference.ready = true;
@@ -282,11 +294,38 @@ void MuonServiceLifecycle::CompleteStop(const std::string& service_id,
   if (entry.generation != generation || entry.state != MuonServiceState::Stopping) {
     return;
   }
+  if (!entry.forced_stop_reason.empty()) {
+    entry.state = MuonServiceState::Failed;
+    entry.error = entry.forced_stop_reason;
+    Changed(*impl_, entry);
+    return;
+  }
   entry.state = MuonServiceState::Stopped;
   entry.error.clear();
   RemoveReferences(*impl_, entry, false, "service generation stopped");
   Changed(*impl_, entry);
   StartIfNeeded(*impl_, entry);
+}
+
+void MuonServiceLifecycle::RequestRuntimeStop(const std::string& service_id,
+                                              uint64_t generation,
+                                              const std::string& reason) {
+  const auto found = impl_->services.find(service_id);
+  if (found == impl_->services.end()) return;
+  auto& entry = found->second;
+  if (entry.generation != generation || entry.state == MuonServiceState::Stopped ||
+      entry.state == MuonServiceState::Failed ||
+      !entry.forced_stop_reason.empty()) return;
+  entry.forced_stop_reason = reason.empty() ? "OS stopped service" : reason;
+  entry.error = entry.forced_stop_reason;
+  RemoveReferences(*impl_, entry, true, entry.error);
+  if (entry.state == MuonServiceState::Running) {
+    entry.state = MuonServiceState::Stopping;
+    Changed(*impl_, entry);
+    impl_->events.push_back(Event(MuonServiceEventKind::Stop, entry));
+  } else {
+    Changed(*impl_, entry);
+  }
 }
 
 void MuonServiceLifecycle::RuntimeExited(const std::string& service_id,
@@ -305,7 +344,7 @@ void MuonServiceLifecycle::RuntimeExited(const std::string& service_id,
   // New demand received during a normal stop is an explicit acquisition or
   // policy change. It may proceed once the old process has actually exited.
   // A running/starting failure never retries a retained resident reference.
-  if (was_stopping) StartIfNeeded(*impl_, entry);
+  if (was_stopping && entry.forced_stop_reason.empty()) StartIfNeeded(*impl_, entry);
 }
 
 uint64_t MuonServiceLifecycle::SetAutostart(const std::string& service_id,

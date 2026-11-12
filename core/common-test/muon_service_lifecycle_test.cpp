@@ -413,6 +413,89 @@ static bool ShutdownDuringStartAndSave() {
   return Expect(manager.IsQuiescent(), "shutdown must finish after late startup cleanup");
 }
 
+static bool OsStopInvalidatesBeforeCleanup() {
+  auto manager = MuonServiceLifecycle({{"sync", true, std::nullopt},
+                                       {"other", true, std::nullopt}});
+  const auto reference = manager.Acquire("sync", "page").value();
+  manager.CompleteStart("sync", reference.generation, "");
+  manager.CompleteStart("other", 1, "");
+  manager.TakeEvents();
+  manager.RequestRuntimeStop("sync", reference.generation, "OS time limit");
+  const auto events = manager.TakeEvents();
+  if (!Expect(!manager.IsReady(reference) &&
+                  !manager.Acquire("sync", "late-page").has_value() &&
+                  Count(events, MuonServiceEventKind::Invalidated) == 1 &&
+                  Count(events, MuonServiceEventKind::Stop) == 1 &&
+                  manager.GetSnapshot("sync")->state == MuonServiceState::Stopping &&
+                  manager.GetSnapshot("other")->state == MuonServiceState::Running,
+              "OS stop must invalidate clients before cleanup without affecting other services"))
+    return false;
+  manager.CompleteStop("sync", reference.generation);
+  const auto stopped = manager.TakeEvents();
+  const auto snapshot = manager.GetSnapshot("sync").value();
+  if (!Expect(snapshot.state == MuonServiceState::Failed && snapshot.resident &&
+                  snapshot.autostart && snapshot.error == "OS time limit" &&
+                  Count(stopped, MuonServiceEventKind::Start) == 0,
+              "OS stop must preserve policy without restarting the resident service"))
+    return false;
+  const auto retry = manager.Acquire("sync", "retry").value();
+  manager.CompleteStart("sync", retry.generation, "");
+  manager.RequestRuntimeStop("sync", reference.generation, "late timeout");
+  return Expect(manager.IsReady(retry), "explicit retry must be immune to old OS stop messages");
+}
+
+static bool OsStopDuringStart() {
+  auto manager = MuonServiceLifecycle({{"sync", true, std::nullopt}});
+  const auto reference = manager.Acquire("sync", "page").value();
+  manager.TakeEvents();
+  manager.RequestRuntimeStop("sync", reference.generation, "OS start cancelled");
+  if (!Expect(Count(manager.TakeEvents(), MuonServiceEventKind::AcquireFailed) == 1,
+              "OS cancellation must fail pending acquisition immediately")) return false;
+  manager.CompleteStart("sync", reference.generation, "");
+  const auto started = manager.TakeEvents();
+  if (!Expect(Count(started, MuonServiceEventKind::Acquired) == 0 &&
+                  Count(started, MuonServiceEventKind::Stop) == 1,
+              "late startup must be cleaned up without delivering a usable handle"))
+    return false;
+  manager.RuntimeExited("sync", reference.generation, "OS process termination");
+  return Expect(Count(manager.TakeEvents(), MuonServiceEventKind::Start) == 0 &&
+                    manager.IsQuiescent(),
+                "forced process exit during OS stop must not retry resident demand");
+}
+
+static bool OsStopCancelsNextGeneration() {
+  auto manager = MuonServiceLifecycle({{"sync", false, std::nullopt}});
+  const auto old = manager.Acquire("sync", "page-a").value();
+  manager.CompleteStart("sync", old.generation, "");
+  manager.Release(old);
+  const auto pending = manager.Acquire("sync", "page-b").value();
+  manager.TakeEvents();
+  manager.RequestRuntimeStop("sync", old.generation, "OS revoked eligibility");
+  manager.RequestRuntimeStop("sync", old.generation, "duplicate");
+  const auto events = manager.TakeEvents();
+  manager.CompleteStop("sync", old.generation);
+  return Expect(Count(events, MuonServiceEventKind::AcquireFailed) == 1 &&
+                    Count(events, MuonServiceEventKind::Stop) == 0 &&
+                    !manager.IsReady(pending) &&
+                    Count(manager.TakeEvents(), MuonServiceEventKind::Start) == 0,
+                "OS stop must cancel next generation without issuing duplicate cleanup");
+}
+
+static bool OsStopDuringPolicySave() {
+  auto manager = MuonServiceLifecycle({{"sync", false, std::nullopt}});
+  const auto reference = manager.Acquire("sync", "page").value();
+  manager.CompleteStart("sync", reference.generation, "");
+  const auto setting = manager.SetAutostart("sync", true);
+  manager.RequestRuntimeStop("sync", reference.generation, "OS time limit");
+  manager.CompleteStop("sync", reference.generation);
+  manager.TakeEvents();
+  manager.CompleteAutostart("sync", setting, "");
+  return Expect(manager.GetSnapshot("sync")->autostart &&
+                    manager.GetSnapshot("sync")->state == MuonServiceState::Failed &&
+                    Count(manager.TakeEvents(), MuonServiceEventKind::Start) == 0,
+                "a late policy save must not resurrect a service stopped by the OS");
+}
+
 int main() {
   const auto tests = std::vector<std::pair<const char*, bool (*)()>>{
       {"defaults and overrides", DefaultsAndOverrides},
@@ -432,7 +515,11 @@ int main() {
       {"invalid identities", InvalidIdentities},
       {"synchronous backend and release", SynchronousBackendAndReentrantRelease},
       {"shutdown during acquisition delivery", ShutdownDuringAcquisitionDelivery},
-      {"shutdown during start and save", ShutdownDuringStartAndSave}};
+      {"shutdown during start and save", ShutdownDuringStartAndSave},
+      {"OS stop invalidates before cleanup", OsStopInvalidatesBeforeCleanup},
+      {"OS stop during start", OsStopDuringStart},
+      {"OS stop cancels next generation", OsStopCancelsNextGeneration},
+      {"OS stop during policy save", OsStopDuringPolicySave}};
   auto failures = size_t{0};
   for (const auto& [name, run] : tests) {
     if (!run()) {

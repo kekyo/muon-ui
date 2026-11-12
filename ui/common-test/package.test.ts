@@ -740,6 +740,10 @@ exit 99
         `${target} executor supervisor\n`,
       );
       await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "muon-ui\n");
+      await writeExecutableScript(
+        join(runtimeDirectory, "muon-service-host"),
+        `${target} service host\n`,
+      );
       await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
       await writeFile(join(runtimeDirectory, "CREDITS.md"), "credits\n");
       await writeFile(
@@ -830,6 +834,7 @@ exit 99
       "libcardio.so",
       "muon-executor-supervisor",
       "plugins/node.so",
+      "muon-service-host",
       "plugins/node-bridge.mjs",
       "CREDITS.md",
     ])
@@ -935,6 +940,10 @@ fi
 if [[ "$*" == "run build:server-renderer --workspace muon-core" ]]; then
   mkdir -p core/cef/.build/server-renderer
   printf '%s\\n' 'static constexpr char kMuonServerSetupScript[] = "host-built server renderer";' > core/cef/.build/server-renderer/muon_server_renderer_generated.h
+fi
+if [[ "$*" == "run build:service-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/service-renderer
+  printf '%s\\n' 'static constexpr char kMuonServiceSetupScript[] = "host-built service renderer";' > core/cef/.build/service-renderer/muon_service_renderer_generated.h
 fi
 if [[ "\${1:-}" == "run" && "\${2:-}" == "generate:runtime-version-header" ]]; then
   output_path=""
@@ -1096,6 +1105,11 @@ fi
 if [[ "$*" == "run build:server-renderer --workspace muon-core" ]]; then
   mkdir -p core/cef/.build/server-renderer
   printf '%s\\n' 'static constexpr char kMuonServerSetupScript[] = "host-built server renderer";' > core/cef/.build/server-renderer/muon_server_renderer_generated.h
+  exit 0
+fi
+if [[ "$*" == "run build:service-renderer --workspace muon-core" ]]; then
+  mkdir -p core/cef/.build/service-renderer
+  printf '%s\\n' 'static constexpr char kMuonServiceSetupScript[] = "host-built service renderer";' > core/cef/.build/service-renderer/muon_service_renderer_generated.h
   exit 0
 fi
 printf 'Unexpected fake npm invocation: %s\\n' "$*" >&2

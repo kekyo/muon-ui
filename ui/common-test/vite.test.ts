@@ -563,6 +563,10 @@ const createFakePackageDirectory = async (root: string): Promise<string> => {
   );
   await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "ui\n");
   await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
+  await writeFile(
+    join(runtimeDirectory, "muon-service-host"),
+    "service host\n",
+  );
   const supervisorPath = join(runtimeDirectory, "muon-executor-supervisor");
   await writeFile(supervisorPath, "executor supervisor\n");
   await chmod(supervisorPath, 0o755);

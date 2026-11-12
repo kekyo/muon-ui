@@ -26,6 +26,7 @@ const targetDescriptors = {
     runtimePayload: [
       "muon-core",
       "muon-executor-supervisor",
+      "muon-service-host",
       "libmuon-ui.so",
       "libcardio.so",
       "plugins/node.so",
@@ -44,6 +45,7 @@ const targetDescriptors = {
     runtimePayload: [
       "muon-core",
       "muon-executor-supervisor",
+      "muon-service-host",
       "libmuon-ui.so",
       "libcardio.so",
       "plugins/node.so",
@@ -62,6 +64,7 @@ const targetDescriptors = {
     runtimePayload: [
       "muon-core",
       "muon-executor-supervisor",
+      "muon-service-host",
       "libmuon-ui.so",
       "libcardio.so",
       "plugins/node.so",
@@ -79,6 +82,7 @@ const targetDescriptors = {
     runtimeSourceDirectory: "dist-windows-i686",
     runtimePayload: [
       "muon-core.exe",
+      "muon-service-host.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
       "plugins/node.dll",
@@ -101,6 +105,7 @@ const targetDescriptors = {
     runtimeSourceDirectory: "dist-windows-amd64",
     runtimePayload: [
       "muon-core.exe",
+      "muon-service-host.exe",
       "libmuon-ui.dll",
       "libcardio.dll",
       "plugins/node.dll",

@@ -424,7 +424,8 @@ void MuonQuickJsPluginBindingsImpl::Receive(const MuonRpcMessage& message) {
       if (JS_IsException(arguments) || JS_IsException(ok) || JS_IsException(fail)) throw std::runtime_error("Cannot allocate plugin callback");
       for (size_t index = 0; index < call->arguments.size(); ++index) {
         auto value = Decode(call->arguments[index]);
-        if (JS_IsException(value) || JS_SetPropertyUint32(context, arguments, static_cast<uint32_t>(index), value) < 0) throw std::runtime_error("Cannot allocate plugin callback argument");
+        if (JS_IsException(value) || JS_DefinePropertyValueUint32(context, arguments,
+            static_cast<uint32_t>(index), value, JS_PROP_C_W_E) < 0) throw std::runtime_error("Cannot allocate plugin callback argument");
       }
       const auto result = engine->Call(callback_runner, JS_UNDEFINED, {source->second.function, arguments, ok, fail});
       JS_FreeValue(context, result);
@@ -490,7 +491,9 @@ std::shared_ptr<MuonQuickJsPluginBindings> MuonServicePluginLease::Attach(MuonQu
       if (public_names.empty()) continue;
       uint32_t index = 0;
       for (const auto& name : public_names) {
-        if (JS_SetPropertyUint32(binding->context, allowed.value, index++, JS_NewString(binding->context, name.c_str())) < 0) throw std::runtime_error("Cannot allocate plugin policy");
+        auto path = JS_NewString(binding->context, name.c_str());
+        if (JS_IsException(path) || JS_DefinePropertyValueUint32(binding->context,
+            allowed.value, index++, path, JS_PROP_C_W_E) < 0) throw std::runtime_error("Cannot allocate plugin policy");
       }
       MuonPluginJsValue setup(binding->context, engine.Evaluate("((namespace,globalThis,allowed)=>{const isAllowed=(name)=>allowed.includes(name);\n" + ns.setup_script + "\n})", "<muon plugin setup>", JS_EVAL_TYPE_GLOBAL));
       MuonPluginJsValue global(binding->context, JS_GetGlobalObject(binding->context));

@@ -106,7 +106,9 @@ int main() {
   auto second = std::make_unique<MuonQuickJsEngine>(limits);
   const auto fault = [](const std::string& failure) { std::cerr << failure << '\n'; assert(false); };
   const auto wake = [&] { tasks.push_back([&] { if (engine) while (engine->RunJobs(64)) {} }); };
+  Evaluate(*engine, "Object.defineProperty(Array.prototype,'0',{configurable:true,set(){throw Error('policy prototype setter must not run')}})", "before-attach.mjs");
   auto bindings = a->Attach(*engine, wake, fault);
+  Evaluate(*engine, "delete Array.prototype[0]", "after-attach.mjs");
   auto other = b->Attach(*second, [&] { tasks.push_back([&] { if (second) while (second->RunJobs(64)) {} }); }, fault);
   InstallLoader(*engine, bindings.get()); InstallLoader(*second, other.get());
   Evaluate(*engine, R"js(
@@ -121,6 +123,9 @@ int main() {
       check(bytes instanceof Uint8Array && bytes.length===2 && bytes[0]===0 && bytes[1]===255);
       check((await api.echoBytes(new Uint8Array(0))).length===0);
       check((await api.echoBytes(new ArrayBuffer(0))).length===0);
+      Object.defineProperty(Array.prototype,'0',{configurable:true,set(){throw Error('array prototype setter must not run')}});
+      check(await api.callback('own argument',value=>value)==='own argument');
+      delete Array.prototype[0];
       check(await api.callback('outer',async(value)=>await api.callback(value,async(inner)=>await api.echo(inner+'!')))==='outer!');
       check(await api.callback('nullable',null)==='nullable');
       Object.defineProperty(Function.prototype,'release',{configurable:true,set(){throw Error('prototype setter must not run')}});

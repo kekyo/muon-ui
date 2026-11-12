@@ -5,7 +5,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -15,7 +15,14 @@ import { beforeAll, expect, it } from "vitest";
 
 const execute = promisify(execFile);
 beforeAll(async () => {
-  await execute("make", ["-C", "../service-host", "all"]);
+  await mkdir("../service-host/.build", { recursive: true });
+  await execute("flock", [
+    "../service-host/.build/driver-build.lock",
+    "make",
+    "-C",
+    "../service-host",
+    "all",
+  ]);
 });
 
 it("launches a host once, reopens the UI, and awaits explicit shutdown through native sessions", async () => {

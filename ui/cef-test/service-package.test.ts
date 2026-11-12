@@ -5,7 +5,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rename, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -43,7 +43,14 @@ it("loads an SDK service from a relocated desktop distribution", async () => {
     const relocated = join(root, "relocated");
     await rename(original, relocated);
     await rm(producer, { recursive: true, force: true });
-    await promisify(execFile)("make", ["-C", "../core/service-host", "all"]);
+    await mkdir("../core/service-host/.build", { recursive: true });
+    await promisify(execFile)("flock", [
+      "../core/service-host/.build/driver-build.lock",
+      "make",
+      "-C",
+      "../core/service-host",
+      "all",
+    ]);
     const endpoint = join(root, "control.sock");
     host = spawn(
       resolve("../core/service-host/.build/muon-service-host"),

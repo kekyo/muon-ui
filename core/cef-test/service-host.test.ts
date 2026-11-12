@@ -6,7 +6,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -19,7 +19,15 @@ const children: ChildProcess[] = [];
 const directories: string[] = [];
 
 beforeAll(async () => {
-  await execute("make", ["-C", "../service-host", "all", "test"]);
+  await mkdir("../service-host/.build", { recursive: true });
+  await execute("flock", [
+    "../service-host/.build/driver-build.lock",
+    "make",
+    "-C",
+    "../service-host",
+    "all",
+    "test",
+  ]);
 });
 
 afterEach(async () => {

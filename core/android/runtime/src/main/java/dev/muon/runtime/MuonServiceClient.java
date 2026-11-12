@@ -15,7 +15,10 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
+import androidx.core.os.BundleCompat;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -27,6 +30,10 @@ final class MuonServiceClient implements AutoCloseable {
     interface Completion {
         void complete(JSONObject value);
         void fail(String error);
+        default void completeJson(String value) {
+            try { complete(new JSONObject(value)); }
+            catch (JSONException error) { fail(error.toString()); }
+        }
     }
 
     private final Context context;
@@ -38,6 +45,10 @@ final class MuonServiceClient implements AutoCloseable {
     private boolean closed;
     private String terminalError = "Service page session was released";
     private int nextRequest = 1;
+    private long rpcHandle;
+    private boolean rpcCreated;
+    private final java.util.concurrent.CountDownLatch rpcClosed = new java.util.concurrent.CountDownLatch(1);
+    private final Handler handler = new Handler(Looper.getMainLooper());
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
             if (closed) return;
@@ -70,6 +81,23 @@ final class MuonServiceClient implements AutoCloseable {
         int id = nextRequest++;
         pending.put(id, completion);
         try {
+            if (operation.equals("rpc")) {
+                boolean opening = rpcHandle == 0;
+                if (opening) {
+                    System.loadLibrary("muon_android_rpc");
+                    rpcHandle = nativeCreateRpc(this);
+                    rpcCreated = rpcHandle != 0;
+                    if (rpcHandle == 0) throw new IllegalStateException("Unable to create service RPC client");
+                }
+                // The common native client bounds its queue while Binder is
+                // establishing the stream. Java never copies RPC into Binder.
+                nativeRpc(rpcHandle, id, arguments.toString());
+                if (opening) invoke("rpcOpen", new JSONObject(), new Completion() {
+                    @Override public void complete(JSONObject value) { /* Descriptor reply is handled below. */ }
+                    @Override public void fail(String error) { disconnected(error); }
+                });
+                return;
+            }
             JSONObject command = new JSONObject().put("operation", operation)
                     .put("arguments", new JSONObject(arguments.toString()));
             Message message = message(id, command);
@@ -92,6 +120,17 @@ final class MuonServiceClient implements AutoCloseable {
     }
 
     private boolean receive(Message message) {
+        if (message.what == 2) { disconnected("Service RPC stream ended"); return true; }
+        if (message.what == 1) {
+            try (ParcelFileDescriptor descriptor = BundleCompat.getParcelable(
+                    message.getData(), "descriptor", ParcelFileDescriptor.class)) {
+                pending.remove(message.arg1);
+                if (closed) return true;
+                if (descriptor == null || rpcHandle == 0) throw new IllegalStateException("Missing service RPC descriptor");
+                nativeAttachRpc(rpcHandle, descriptor.detachFd());
+            } catch (IOException | RuntimeException error) { disconnected(error.toString()); }
+            return true;
+        }
         Completion completion = pending.remove(message.arg1);
         if (completion == null) return true;
         String error = message.getData().getString("error");
@@ -108,6 +147,10 @@ final class MuonServiceClient implements AutoCloseable {
         // reconnect this owner or forward its old handles into that process.
         closed = true;
         terminalError = error;
+        long nativeClient = rpcHandle;
+        rpcHandle = 0;
+        if (nativeClient != 0) nativeCloseRpc(nativeClient);
+        else if (!rpcCreated) rpcClosed.countDown();
         if (remote != null) {
             try { remote.send(message(0, new JSONObject().put("operation", "close"))); }
             catch (JSONException | RemoteException ignored) { /* Binder death also releases this owner. */ }
@@ -119,6 +162,27 @@ final class MuonServiceClient implements AutoCloseable {
         pending.clear();
         for (Completion completion : callbacks) completion.fail(error);
     }
+
+    // Native disposal can finish after close. Each posted task carries its
+    // retained native holder rather than reading the cleared page field.
+    private void postRpcTask(long handle, long task) { handler.post(() -> nativeRunRpcTask(handle, task)); }
+    private void onRpcResult(int request, String json, String error) {
+        Completion completion = pending.remove(request);
+        if (completion == null) return;
+        if (error != null) completion.fail(error);
+        else completion.completeJson(json);
+    }
+    private void onRpcClosed() { rpcClosed.countDown(); }
+    boolean awaitRpcClosedForTest(long timeout, java.util.concurrent.TimeUnit unit) throws InterruptedException {
+        return rpcClosed.await(timeout, unit);
+    }
+    private void onRpcDisconnected() { disconnected("Service RPC stream ended"); }
+
+    private static native long nativeCreateRpc(MuonServiceClient owner);
+    private static native void nativeAttachRpc(long handle, int descriptor);
+    private static native void nativeRpc(long handle, int request, String json);
+    private static native void nativeRunRpcTask(long handle, long task);
+    private static native void nativeCloseRpc(long handle);
 
     @Override public void close() {
         if (closed) return;

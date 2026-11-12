@@ -11,6 +11,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name="dev.muon.runtime.MuonServiceRpcActivity" android:exported="true" />
         <activity android:name="dev.muon.runtime.MuonAppActivity" android:exported="true" />
         <service android:name="dev.muon.runtime.MuonServiceControlService"
             android:exported="false" android:process=":muon_services" />

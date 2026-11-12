@@ -1,1 +1,11 @@
-{ "schemaVersion": 1, "plugins": [] }
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "name": "muon_test_plugin_cardio",
+      "soname": "libmuon_test_plugin_cardio.so",
+      "allow": ["muon.test.cardio.*"],
+      "config": []
+    }
+  ]
+}

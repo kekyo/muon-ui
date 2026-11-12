@@ -30,6 +30,7 @@ export const serviceFunctionNames = [
   'getState',
   'setAutostart',
   'watchState',
+  'rpc',
 ] as const;
 
 /** Filesystem functions implemented by Android. */

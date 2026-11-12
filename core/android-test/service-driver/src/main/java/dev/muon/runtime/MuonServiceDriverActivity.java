@@ -11,6 +11,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 /** Observable UI owner; the separate observer may kill this entire process. */
 public final class MuonServiceDriverActivity extends Activity {
@@ -35,6 +36,7 @@ public final class MuonServiceDriverActivity extends Activity {
         setContentView(layout);
         client = new MuonServiceClient(this);
         String mode = getIntent().getStringExtra("mode");
+        if ("rpc".equals(mode)) { serviceRpc(); return; }
         if ("connection".equals(mode)) { connectionLifetime(layout); return; }
         if ("preferences".equals(mode) || "inspect-preferences".equals(mode)) {
             preferences(layout, "inspect-preferences".equals(mode));
@@ -64,6 +66,34 @@ public final class MuonServiceDriverActivity extends Activity {
     }
 
     private interface Result { void complete(JSONObject value); }
+
+    private void serviceRpc() {
+        request("acquire", "alpha.v1-test", reference -> rpc(reference, "describe", new JSONObject(), definition -> {
+            try {
+                if (!definition.getJSONObject("methods").has("echo")) throw new JSONException("Missing native echo method");
+                String text = "Android\u0000日本語😀";
+                rpc(reference, "begin", new JSONObject().put("method", "echo")
+                        .put("arguments", new JSONArray().put(text)), begin -> {
+                    try {
+                        rpc(reference, "result", new JSONObject().put("callId", begin.getString("callId")), result -> {
+                            try {
+                                if (!result.getString("status").equals("ok") || !result.getString("value").equals(text))
+                                    throw new JSONException("Native service Unicode result changed");
+                                status.setText(new JSONObject().put("echo", result.getString("value")).toString());
+                                status.setContentDescription("service-driver-ready");
+                            } catch (JSONException error) { fail(error.toString()); }
+                        });
+                    } catch (JSONException error) { fail(error.toString()); }
+                });
+            } catch (JSONException error) { fail(error.toString()); }
+        }));
+    }
+
+    private void rpc(JSONObject reference, String action, JSONObject payload, Result result) {
+        try {
+            request("rpc", new JSONObject(reference.toString()).put("action", action).put("payload", payload), result);
+        } catch (JSONException error) { fail(error.toString()); }
+    }
 
     private void connectionLifetime(LinearLayout layout) {
         request("acquire", "alpha.v1-test", original -> {

@@ -11,6 +11,7 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.0.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk { abiFilters.addAll(listOf("arm64-v8a", "x86_64")) }
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }
@@ -27,6 +28,10 @@ android {
 }
 
 dependencies {
+    androidTestImplementation("androidx.test:core:1.7.0")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("junit:junit:4.13.2")
     implementation("androidx.core:core:1.19.0")
     implementation("androidx.webkit:webkit:1.17.0")
 }

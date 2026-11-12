@@ -277,6 +277,8 @@ if (argumentsSet.has('--clean')) {
   rmSync(dependencyRoot, { force: true, recursive: true });
 }
 mkdirSync(dependencyRoot, { recursive: true });
+// Share the pinned, hash-checked JSON source preparation with desktop builds.
+execute('bash', [join(repositoryRoot, 'builder/build_yyjson.sh')]);
 const sourceArchivePath = join(dependencyRoot, libffiSourceArchiveName);
 const sourceArchive = await loadOfficialSourceArchive(sourceArchivePath);
 

@@ -33,6 +33,7 @@ execFileSync(
   './gradlew',
   [
     ':serviceDriver:assembleDebug',
+    ':serviceDriver:assembleDebugAndroidTest',
     ':observer:assembleDebug',
     ':observer:assembleDebugAndroidTest',
   ],
@@ -40,6 +41,7 @@ execFileSync(
 );
 for (const apk of [
   'service-driver/build/outputs/apk/debug/serviceDriver-debug.apk',
+  'service-driver/build/outputs/apk/androidTest/debug/serviceDriver-debug-androidTest.apk',
   'observer/build/outputs/apk/debug/observer-debug.apk',
   'observer/build/outputs/apk/androidTest/debug/observer-debug-androidTest.apk',
 ]) {
@@ -64,3 +66,27 @@ if (
 ) {
   throw new Error('Native service observer assertions failed.');
 }
+
+const dispatcherResult = adb([
+  'shell',
+  'am',
+  'instrument',
+  '-w',
+  '-r',
+  '-e',
+  'class',
+  'dev.muon.runtime.MuonServiceDispatcherTest',
+  'dev.muon.servicefixture.test/androidx.test.runner.AndroidJUnitRunner',
+]);
+process.stdout.write(dispatcherResult);
+if (
+  !/OK \(\d+ tests?\)/u.test(dispatcherResult) ||
+  /FAILURES|INSTRUMENTATION_FAILED/u.test(dispatcherResult)
+) {
+  throw new Error('Shared service dispatcher assertions failed.');
+}
+execFileSync('npm', ['exec', '--', 'vitest', 'run', 'service-rpc.test.ts'], {
+  cwd: root,
+  stdio: 'inherit',
+  env: { ...process.env, MUON_ANDROID_SERVICE_RPC_TEST: '1' },
+});

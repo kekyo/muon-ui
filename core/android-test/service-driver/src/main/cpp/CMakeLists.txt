@@ -10,3 +10,11 @@ target_compile_options(muon_service_fixture PRIVATE -Wall -Wextra -Wpedantic -We
 target_include_directories(muon_service_fixture PRIVATE "${MUON_REPOSITORY_ROOT}/sdk/include")
 target_link_libraries(muon_service_fixture PRIVATE muon_cardio)
 target_link_options(muon_service_fixture PRIVATE -Wl,-z,max-page-size=16384)
+
+# Reuse the existing asynchronous page-plugin fixture in the service UI process.
+add_library(muon_test_plugin_cardio SHARED "${MUON_REPOSITORY_ROOT}/core/common-test/plugins/muon_test_plugin_cardio.cpp")
+target_compile_features(muon_test_plugin_cardio PRIVATE cxx_std_20)
+target_compile_options(muon_test_plugin_cardio PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_include_directories(muon_test_plugin_cardio PRIVATE "${MUON_REPOSITORY_ROOT}/sdk/include")
+target_link_libraries(muon_test_plugin_cardio PRIVATE muon_cardio)
+target_link_options(muon_test_plugin_cardio PRIVATE -Wl,-z,max-page-size=16384)

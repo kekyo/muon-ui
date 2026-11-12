@@ -56,6 +56,12 @@ public final class NativeServiceProcessTest {
     }
 
     @Test
+    public void callsNativeServiceWithUnicodeThroughItsPageOwner() throws Exception {
+        JSONObject result = startDriver("rpc", "ready");
+        assertEquals("Android\u0000日本語😀", result.getString("echo"));
+    }
+
+    @Test
     public void releasesExplicitReferenceWithoutStoppingResidentWork() throws Exception {
         device.executeShellCommand("am force-stop " + APPLICATION);
         startDriver();

@@ -202,7 +202,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             JSONObject command = (JSONObject)value;
             String operation = path.substring("muon.services.".length());
             if (!operation.equals("acquire") && !operation.equals("release") && !operation.equals("getState")
-                    && !operation.equals("setAutostart") && !operation.equals("watchState"))
+                    && !operation.equals("setAutostart") && !operation.equals("watchState") && !operation.equals("rpc"))
                 throw new IllegalArgumentException("Unknown service operation");
             java.util.Iterator<String> keys = command.keys();
             while (keys.hasNext()) {
@@ -210,11 +210,14 @@ final class MuonAndroidPlatformService implements AutoCloseable {
                 if (!key.equals("serviceId") && !(operation.equals("release")
                         && (key.equals("refId") || key.equals("generation")))
                         && !(operation.equals("setAutostart") && key.equals("enabled"))
+                        && !(operation.equals("rpc") && (key.equals("refId") || key.equals("generation")
+                                || key.equals("action") || key.equals("payload")))
                         && !(operation.equals("watchState") && (key.equals("operation") || key.equals("token"))))
                     throw new IllegalArgumentException("Unknown service argument: " + key);
             }
             serviceClient.invoke(operation, command, new MuonServiceClient.Completion() {
                 @Override public void complete(JSONObject result) { completion.completeString(result.toString()); }
+                @Override public void completeJson(String result) { completion.completeString(result); }
                 @Override public void fail(String error) { completion.fail(error); }
             });
         } catch (JSONException | RuntimeException error) { completion.fail(error.toString()); }

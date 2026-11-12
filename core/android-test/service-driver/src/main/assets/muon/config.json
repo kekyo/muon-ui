@@ -10,7 +10,8 @@
       "muon.services.release",
       "muon.services.getState",
       "muon.services.setAutostart",
-      "muon.services.watchState"
+      "muon.services.watchState",
+      "muon.services.rpc"
     ]
   },
   "services": {

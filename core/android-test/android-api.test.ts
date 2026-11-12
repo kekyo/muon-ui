@@ -70,6 +70,7 @@ const expectedFunctionPaths = [
   'muon.services.getState',
   'muon.services.setAutostart',
   'muon.services.watchState',
+  'muon.services.rpc',
 ] as const;
 
 describe('muon Android API metadata', () => {

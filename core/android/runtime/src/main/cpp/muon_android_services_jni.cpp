@@ -5,12 +5,15 @@
  */
 
 #include <jni.h>
+#include "muon_android_jni_utf.h"
 #include <android/log.h>
 #include <cardio.h>
 
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
 #include "services/muon_service_controller.h"
+#include "services/muon_service_broker.h"
+#include "muon_android_service_peer.h"
 
 #include <map>
 #include <charconv>
@@ -19,11 +22,7 @@
 #include <utility>
 
 static std::string ReadString(JNIEnv* env, jstring value) {
-  if (value == nullptr) return {};
-  const char* text = env->GetStringUTFChars(value, nullptr);
-  const std::string result = text == nullptr ? "" : text;
-  if (text != nullptr) env->ReleaseStringUTFChars(value, text);
-  return result;
+  return MuonAndroidReadJavaString(env, value);
 }
 
 static std::string Quote(const std::string& value) {
@@ -71,9 +70,14 @@ struct MuonAndroidServices {
   jmethodID stopped_method;
   jmethodID event_method;
   jmethodID save_method;
+  jmethodID disconnected_method;
   std::unique_ptr<cardio::dispatcher_host_android_auto> dispatcher;
   std::unique_ptr<MuonNativeServiceHost> host;
   std::unique_ptr<MuonServiceController> controller;
+  std::unique_ptr<MuonServiceBroker> broker;
+  // Java retains this host until the process exits. Every peer closes on its
+  // Binder owner's release and drains against this still-live broker/dispatcher.
+  std::map<std::string, std::shared_ptr<MuonAndroidServicePeer>> peers;
   std::map<std::string, MuonNativeServiceSpec> specs;
   std::map<std::pair<std::string, uint64_t>, std::function<void(const std::string&)>> starts;
   std::map<uint64_t, std::function<void()>> tasks;
@@ -89,12 +93,14 @@ struct MuonAndroidServices {
   }
 
   void ServiceCallback(jmethodID method, const std::string& id, uint64_t generation) {
-    const auto name = env->NewStringUTF(id.c_str());
+    const auto name = MuonAndroidNewJavaString(env, id.c_str());
     env->CallVoidMethod(owner, method, name, static_cast<jlong>(generation));
     env->DeleteLocalRef(name);
   }
 
   void Notify(const MuonServiceEvent& event) {
+    if (event.kind == MuonServiceEventKind::Invalidated && event.reference && broker)
+      broker->Release(*event.reference);
     std::string kind;
     switch (event.kind) {
       case MuonServiceEventKind::Acquired: kind = "acquired"; break;
@@ -113,7 +119,7 @@ struct MuonAndroidServices {
       json += ",\"owner\":" + Quote(event.reference->owner_id) +
           ",\"reference\":" + ReferenceJson(*event.reference);
     }
-    const auto value = env->NewStringUTF((json + "}").c_str());
+    const auto value = MuonAndroidNewJavaString(env, (json + "}").c_str());
     env->CallVoidMethod(owner, event_method, value);
     env->DeleteLocalRef(value);
   }
@@ -146,6 +152,7 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
   runtime->stopped_method = env->GetMethodID(type, "stopComponent", "(Ljava/lang/String;J)V");
   runtime->event_method = env->GetMethodID(type, "onEvent", "(Ljava/lang/String;)V");
   runtime->save_method = env->GetMethodID(type, "saveAutostart", "(Ljava/lang/String;ZJ)V");
+  runtime->disconnected_method = env->GetMethodID(type, "onRpcDisconnected", "(Ljava/lang/String;)V");
   env->DeleteLocalRef(type);
   runtime->dispatcher = std::make_unique<cardio::dispatcher_host_android_auto>();
   auto* state = runtime.get();
@@ -200,14 +207,36 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
       [state](const std::string& id, bool enabled, std::function<void(const std::string&)> complete) {
         const auto task = state->next_save++;
         state->saves.emplace(task, std::move(complete));
-        const auto name = state->env->NewStringUTF(id.c_str());
+        const auto name = MuonAndroidNewJavaString(state->env, id.c_str());
         state->env->CallVoidMethod(state->owner, state->save_method, name,
             enabled ? JNI_TRUE : JNI_FALSE, static_cast<jlong>(task));
         state->env->DeleteLocalRef(name);
       },
       [state](const MuonServiceEvent& event) { state->Notify(event); },
       [state](std::function<void()> task) { state->Post(std::move(task)); }});
+  runtime->broker = std::make_unique<MuonServiceBroker>(*runtime->controller, *runtime->host);
   return reinterpret_cast<jlong>(runtime.release());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_muon_runtime_MuonServiceProcess_nativeOpenRpc(
+    JNIEnv* env, jclass, jlong handle, jstring owner, jint descriptor) {
+  auto* state = Runtime(handle);
+  const auto identity = ReadString(env, owner);
+  try {
+    auto peer = OpenMuonAndroidServicePeer(descriptor, identity, *state->broker,
+        [state](std::function<void()> task) { state->Post(std::move(task)); },
+        [state, identity] {
+      const auto name = MuonAndroidNewJavaString(state->env, identity);
+      state->env->CallVoidMethod(state->owner, state->disconnected_method, name);
+      state->env->DeleteLocalRef(name);
+    });
+    // Java accepts only one stream for the lifetime of each authenticated owner.
+    state->peers.emplace(identity, std::move(peer));
+  } catch (const std::exception& error) {
+    const auto type = env->FindClass("java/lang/IllegalStateException");
+    if (type) { env->ThrowNew(type, error.what()); env->DeleteLocalRef(type); }
+  }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -229,7 +258,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeSetAutostart(
     JNIEnv* env, jclass, jlong handle, jstring id, jboolean enabled) {
   const auto operation = Runtime(handle)->controller->SetAutostart(ReadString(env, id), enabled == JNI_TRUE);
-  return operation == 0 ? nullptr : env->NewStringUTF(std::to_string(operation).c_str());
+  return operation == 0 ? nullptr : MuonAndroidNewJavaString(env, std::to_string(operation).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -247,7 +276,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeAcquire(
     JNIEnv* env, jclass, jlong handle, jstring id, jstring owner) {
   const auto reference = Runtime(handle)->controller->Acquire(ReadString(env, id), ReadString(env, owner));
-  return reference ? env->NewStringUTF(ReferenceJson(*reference).c_str()) : nullptr;
+  return reference ? MuonAndroidNewJavaString(env, ReferenceJson(*reference).c_str()) : nullptr;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -262,20 +291,31 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeRelease(
     return parsed.ec == std::errc{} && parsed.ptr == end;
   };
   if (!parse(reference, reference_id) || !parse(generation, version)) return JNI_FALSE;
-  return Runtime(handle)->controller->Release({reference_id, ReadString(env, id),
-      ReadString(env, owner), version}) ? JNI_TRUE : JNI_FALSE;
+  auto* state = Runtime(handle);
+  const auto value = MuonServiceReference{reference_id, ReadString(env, id), ReadString(env, owner), version};
+  const auto released = state->controller->Release(value);
+  state->broker->Release(value);
+  return released ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeReleaseOwner(
     JNIEnv* env, jclass, jlong handle, jstring owner) {
-  Runtime(handle)->controller->ReleaseOwner(ReadString(env, owner));
+  auto* state = Runtime(handle);
+  const auto identity = ReadString(env, owner);
+  const auto found = state->peers.find(identity);
+  if (found != state->peers.end()) {
+    const auto peer = found->second;
+    state->peers.erase(found);
+    peer->close();
+  }
+  state->broker->CloseOwner(identity);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeSnapshot(JNIEnv* env, jclass, jlong handle, jstring id) {
   const auto snapshot = Runtime(handle)->controller->GetSnapshot(ReadString(env, id));
-  return snapshot ? env->NewStringUTF(SnapshotJson(*snapshot).c_str()) : nullptr;
+  return snapshot ? MuonAndroidNewJavaString(env, SnapshotJson(*snapshot).c_str()) : nullptr;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

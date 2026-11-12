@@ -16,11 +16,13 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.os.Messenger;
+import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.RemoteException;
 import android.util.Log;
 import dalvik.system.BaseDexClassLoader;
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -42,6 +44,7 @@ final class MuonServiceProcess {
         final Messenger reply;
         final Map<String, Integer> acquisitions = new HashMap<>();
         IBinder.DeathRecipient death;
+        boolean rpcOpened;
         Client(Messenger reply) { this.reply = reply; }
     }
 
@@ -223,6 +226,7 @@ final class MuonServiceProcess {
         try {
             if (initializationError != null) throw new IllegalStateException(initializationError);
             if ("open".equals(operation)) { nativeActivate(nativeHandle); return; }
+            if ("rpcOpen".equals(operation)) { openRpc(client, request); return; }
             JSONObject command = envelope.getJSONObject("arguments");
             String id = command.getString("serviceId");
             definition(id);
@@ -250,9 +254,35 @@ final class MuonServiceProcess {
             } else {
                 throw new IllegalArgumentException("Unsupported service operation: " + operation);
             }
-        } catch (JSONException | RuntimeException error) {
+        } catch (JSONException | IOException | RemoteException | RuntimeException error) {
             reply(client, request, null, error.toString());
         }
+    }
+
+    private void openRpc(Client client, int request) throws IOException, RemoteException {
+        if (client.rpcOpened) throw new IllegalStateException("A page RPC stream cannot reconnect");
+        client.rpcOpened = true;
+        ParcelFileDescriptor[] sockets = ParcelFileDescriptor.createSocketPair();
+        try (ParcelFileDescriptor server = sockets[0]; ParcelFileDescriptor page = sockets[1]) {
+            nativeOpenRpc(nativeHandle, client.owner, server.detachFd());
+            Message response = Message.obtain();
+            response.what = 1;
+            response.arg1 = request;
+            Bundle data = new Bundle();
+            data.putParcelable("descriptor", page);
+            response.setData(data);
+            client.reply.send(response);
+        }
+    }
+
+    private void onRpcDisconnected(String owner) {
+        Client client = owners.get(owner);
+        if (client == null) return;
+        Message ended = Message.obtain();
+        ended.what = 2;
+        try { client.reply.send(ended); }
+        catch (RemoteException ignored) { /* Binder death reclaims the same owner. */ }
+        releaseClient(client.reply.getBinder());
     }
 
     private void watch(Client client, int request, String id, JSONObject command) throws JSONException {
@@ -391,6 +421,7 @@ final class MuonServiceProcess {
     private static native String nativeAcquire(long handle, String id, String owner);
     private static native boolean nativeRelease(long handle, String id, String owner, String reference, String generation);
     private static native void nativeReleaseOwner(long handle, String owner);
+    private static native void nativeOpenRpc(long handle, String owner, int descriptor);
     private static native String nativeSnapshot(long handle, String id);
     private static native boolean nativeForegroundReady(long handle, String id, long generation);
     private static native void nativeStartFailed(long handle, String id, long generation, String error);

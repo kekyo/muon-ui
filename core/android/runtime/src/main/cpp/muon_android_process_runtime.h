@@ -45,13 +45,13 @@ struct MuonAndroidProcessRuntimeDiagnostics {
   /** Monotonic identity of the current or most recently created runtime. */
   uint64_t generation = 0;
 
-  /** Number of dispatcher hosts created during this process lifetime. */
+  /** Number of plugin-runtime leases acquired for the shared Android dispatcher. */
   uint64_t created_dispatcher_hosts = 0;
 
-  /** Number of dispatcher hosts destroyed after asynchronous plugin stop. */
+  /** Number of runtime leases whose cleanup ran after shared dispatcher destruction. */
   uint64_t destroyed_dispatcher_hosts = 0;
 
-  /** Number of currently live Android dispatcher hosts. */
+  /** Whether this plugin runtime currently holds a shared dispatcher lease (0 or 1). */
   size_t live_dispatcher_hosts = 0;
 
   /** Number of Activity/WebView sessions registered with the process. */
@@ -75,13 +75,13 @@ struct MuonAndroidProcessRuntimeDiagnostics {
   /** Packaged plugin handles closed after dispatcher destruction. */
   uint64_t closed_library_handles = 0;
 
-  /** Plugin handles that remain mapped in the current runtime. */
+  /** Library references still mapped, including stopped generations awaiting dispatcher cleanup. */
   size_t live_library_handles = 0;
 
   /** Plugin handles waiting for dispatcher destruction before dlclose. */
   size_t deferred_library_handles = 0;
 
-  /** Sonames closed by the most recently stopped runtime, in close order. */
+  /** Sonames closed since the most recent runtime start, in close order. */
   std::vector<std::string> last_closed_libraries;
 
   /** Live renderer function sources belonging to the requesting session. */

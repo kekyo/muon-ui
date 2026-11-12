@@ -16,7 +16,7 @@ CARDIO_LIBS := $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --libs muon-plugi
 NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/muon_filesystem.cpp
 
 .PHONY: all test clean windows-amd64 windows-i686
-all: $(OUT)/muon-service-host $(OUT)/probe-service.so
+all: $(OUT)/muon-service-host $(OUT)/probe-service.so $(OUT)/linux-client-driver
 
 $(OUT):
 	mkdir -p $@
@@ -37,6 +37,9 @@ $(OUT)/probe-service.so: ../android-test/service-driver/src/main/cpp/muon_servic
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) -shared $< $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
 
 $(OUT)/client-test: ../common-test/muon_service_client_test.cpp $(COMMON)/services/muon_service_client.cpp $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
+
+$(OUT)/linux-client-driver: linux_client_driver.cpp muon_service_transport_linux.cpp $(COMMON)/services/muon_service_client.cpp $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
 
 test: $(OUT)/protocol-test $(OUT)/client-test

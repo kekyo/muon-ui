@@ -34,7 +34,7 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
-it.each(["command", "signal"])(
+it.each(["command", "signal", "backpressure"])(
   "owns services after UI death and drains them on %s shutdown",
   async (shutdown) => {
     const directory = await mkdtemp(join(tmpdir(), "muon-native-host-"));
@@ -141,7 +141,7 @@ it.each(["command", "signal"])(
     import {createInterface} from 'node:readline';
     const socket=createConnection(process.argv[1]);
     socket.on('connect',()=>socket.write(JSON.stringify({requestId:'page',op:'acquire',serviceId:'borrowed'})+String.fromCharCode(10)));
-    createInterface({input:socket}).on('line',line=>process.stdout.write(line+String.fromCharCode(10)));
+    createInterface({input:socket}).on('line',line=>{if(JSON.parse(line).requestId)process.stdout.write(line+String.fromCharCode(10));});
   `,
         endpoint,
       ],
@@ -178,9 +178,25 @@ it.each(["command", "signal"])(
     };
     const workAfterDeath = await probe();
 
+    const nativeClients = await execute(
+      resolve("../service-host/.build/linux-client-driver"),
+      [endpoint],
+    );
+    expect(nativeClients.stderr).toBe("");
+
     const socket = createConnection(endpoint);
     await once(socket, "connect");
     const replies = createInterface({ input: socket })[Symbol.asyncIterator]();
+    socket.write(
+      '{"requestId":"handshake","op":"getState","serviceId":"resident"}\n',
+    );
+    expect(JSON.parse((await replies.next()).value!)).toEqual({
+      event: "ready",
+    });
+    expect(JSON.parse((await replies.next()).value!)).toHaveProperty(
+      "requestId",
+      "handshake",
+    );
     let nextRequest = 0;
     const request = async (
       input: Record<string, unknown>,
@@ -210,9 +226,36 @@ it.each(["command", "signal"])(
         resident: true,
         clientReferences: 0,
       });
-      if (shutdown === "command") await request({ op: "shutdown" });
+      let stalled: ReturnType<typeof createConnection> | undefined;
+      if (shutdown === "backpressure") {
+        stalled = createConnection(endpoint);
+        await once(stalled, "connect");
+        stalled.pause();
+        // The final acquire is an observable barrier after all state replies
+        // have been queued for a client that refuses to read them.
+        stalled.write(
+          Array.from({ length: 4096 }, (_, index) =>
+            JSON.stringify({
+              requestId: String(index),
+              op: "getState",
+              serviceId: "resident",
+            }),
+          ).join("\n") +
+            '\n{"requestId":"barrier","op":"acquire","serviceId":"borrowed"}\n',
+        );
+        await observed(
+          (value) =>
+            value.id === "borrowed" &&
+            value.state === "running" &&
+            value.generation !==
+              (JSON.parse(reply).result as { generation: string }).generation,
+        );
+      }
+      if (shutdown !== "signal")
+        socket.write('{"requestId":"shutdown","op":"shutdown"}\n');
       else host.kill("SIGTERM");
       const [code] = await hostExit;
+      stalled?.destroy();
       expect(code, diagnostic).toBe(0);
       expect(
         observations.some(
@@ -223,6 +266,7 @@ it.each(["command", "signal"])(
       socket.destroy();
     }
   },
+  20_000,
 );
 
 it("reclaims a failed native startup and exits after its final client disconnects", async () => {
@@ -267,6 +311,9 @@ it("reclaims a failed native startup and exits after its final client disconnect
       JSON.stringify({ requestId: "1", op: "acquire", serviceId: "worker" }) +
         "\n",
     );
+    expect(JSON.parse((await replies.next()).value!)).toEqual({
+      event: "ready",
+    });
     const failed = await replies.next();
     expect(JSON.parse(failed.value!)).toMatchObject({
       requestId: "1",

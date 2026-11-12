@@ -75,9 +75,9 @@ class ServiceProcess final {
  public:
   ServiceProcess(cardio::dispatcher_group_glib& group,
                  cardio::dispatcher_host_glib& dispatcher,
-                 std::string endpoint, std::string data_root)
+                 std::string endpoint, std::string data_root, bool bootstrap)
       : group_(group), dispatcher_(dispatcher), endpoint_(std::move(endpoint)),
-        data_root_(std::move(data_root)) {}
+        data_root_(std::move(data_root)), bootstrap_open_(bootstrap) {}
 
   ~ServiceProcess() {
     protocol_.reset();
@@ -163,6 +163,10 @@ class ServiceProcess final {
       controller_->Activate();
       initialized_ = true;
       std::cout << "{\"ready\":true}" << std::endl;
+      if (bootstrap_open_) {
+        ++io_count_;
+        cardio::fire_and_forget(WatchBootstrap());
+      }
     } catch (const std::exception& error) {
       std::cerr << error.what() << '\n';
       exit_code_ = 1;
@@ -332,6 +336,7 @@ class ServiceProcess final {
         protocol_->OpenOwner(peer->owner);
         peers_.emplace(peer->owner, peer);
         ever_connected_ = true;
+        Send(peer->owner, "{\"event\":\"ready\"}");
         ++io_count_;
         cardio::fire_and_forget(Read(peer));
       }
@@ -360,10 +365,35 @@ class ServiceProcess final {
     MaybeFinish();
   }
 
+  cardio::promise<void> WatchBootstrap() {
+    try {
+      // The parent never writes payload. EOF also covers parent death before
+      // its first authenticated page connection, without a startup timeout.
+      Check(fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) == 0, "set bootstrap flags");
+      for (;;) {
+        co_await cardio::from_fd(STDIN_FILENO, cardio::fd_event::read,
+                                transport_cancellation_.get_cancellation());
+        char byte;
+        const auto count = read(STDIN_FILENO, &byte, 1);
+        if (count == 0) break;
+        if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        Check(count > 0, "read bootstrap");
+      }
+    } catch (const cardio::canceled_exception&) {
+    } catch (const std::exception& error) {
+      std::cerr << error.what() << '\n';
+    }
+    bootstrap_open_ = false;
+    ever_connected_ = true;
+    --io_count_;
+    MaybeFinish();
+  }
+
   void MaybeFinish() {
     if (!initialized_ || finishing_) return;
     if (!controller_->IsShuttingDown()) {
-      if (ever_connected_ && peers_.empty() && controller_->IsQuiescent() && native_->IsIdle())
+      if (ever_connected_ && !bootstrap_open_ && peers_.empty() &&
+          controller_->IsQuiescent() && native_->IsIdle())
         controller_->Shutdown("No service references remain");
       else return;
     }
@@ -378,7 +408,7 @@ class ServiceProcess final {
       std::vector<std::shared_ptr<Peer>> peers;
       for (const auto& [owner, peer] : peers_) {
         (void)owner;
-        if (!peer->writing) peers.push_back(peer);
+        peers.push_back(peer);
       }
       for (const auto& peer : peers) ClosePeer(peer);
       if (io_count_ == 0 && posted_ == 0) group_.shutdown();
@@ -408,6 +438,7 @@ class ServiceProcess final {
   bool ever_connected_ = false;
   bool transport_stopping_ = false;
   bool finishing_ = false;
+  bool bootstrap_open_ = false;
 };
 
 int main(int argc, char** argv) {
@@ -415,11 +446,13 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> arguments;
     for (int index = 1; index + 1 < argc; index += 2)
       arguments.emplace(argv[index], argv[index + 1]);
-    if (argc != 7 || arguments.size() != 3 || !arguments.contains("--config") ||
+    const auto bootstrap = arguments.contains("--bootstrap") && arguments.at("--bootstrap") == "stdin";
+    if ((argc != 7 && !(argc == 9 && bootstrap)) ||
+        arguments.size() != static_cast<size_t>(bootstrap ? 4 : 3) || !arguments.contains("--config") ||
         !arguments.contains("--endpoint") || !arguments.contains("--data-root"))
       throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint SOCKET --data-root DIR");
     for (const auto& [key, path] : arguments) {
-      if (!std::filesystem::path(path).is_absolute())
+      if (key != "--bootstrap" && !std::filesystem::path(path).is_absolute())
         throw std::invalid_argument(key + " must be an absolute path");
     }
     // Block before GIO or a native service can create supporting threads.
@@ -429,10 +462,16 @@ int main(int argc, char** argv) {
     sigaddset(&signals, SIGINT);
     sigaddset(&signals, SIGHUP);
     Check(sigprocmask(SIG_BLOCK, &signals, nullptr) == 0, "block shutdown signals");
+    // Readiness stdout may close with the UI while resident services keep
+    // running. A later diagnostic/state write must never terminate the host.
+    struct sigaction broken_pipe{};
+    broken_pipe.sa_handler = SIG_IGN;
+    sigemptyset(&broken_pipe.sa_mask);
+    Check(sigaction(SIGPIPE, &broken_pipe, nullptr) == 0, "ignore broken output pipe");
     umask(0077);
     cardio::dispatcher_group_glib group;
     cardio::dispatcher_host_glib dispatcher(group);
-    ServiceProcess process(group, dispatcher, arguments.at("--endpoint"), arguments.at("--data-root"));
+    ServiceProcess process(group, dispatcher, arguments.at("--endpoint"), arguments.at("--data-root"), bootstrap);
     cardio::fire_and_forget(process.Run(arguments.at("--config"), signals));
     dispatcher.park();
     return process.ExitCode();

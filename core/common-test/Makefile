@@ -13,7 +13,8 @@ RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \
   $(COMMON)/src/plugins/muon_type_metadata.cpp \
   $(COMMON)/src/rpc/muon_rpc.cpp \
   $(COMMON)/src/rpc/muon_rpc_host.cpp
-TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value
+YYJSON_SOURCE_DIR := ../cef/.deps/src/yyjson-0.12.0/src
+TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value $(OUT)/service-interface
 
 .PHONY: all test clean service-driver
 all: $(TESTS)
@@ -41,6 +42,15 @@ $(OUT)/service-controller: muon_service_controller_test.cpp $(COMMON)/src/servic
 
 $(OUT)/service-value: muon_service_value_test.cpp $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_value.h | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) -o $@
+
+$(YYJSON_SOURCE_DIR)/yyjson.c $(YYJSON_SOURCE_DIR)/yyjson.h:
+	bash ../cef/build_yyjson.sh
+
+$(OUT)/yyjson.o: $(YYJSON_SOURCE_DIR)/yyjson.c $(YYJSON_SOURCE_DIR)/yyjson.h | $(OUT)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OUT)/service-interface: muon_service_interface_test.cpp $(COMMON)/src/services/muon_service_interface.cpp $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_value.h $(OUT)/yyjson.o | $(OUT)
+	$(CXX) $(CPPFLAGS) -I$(YYJSON_SOURCE_DIR) $(CXXFLAGS) $(filter %.cpp %.o,$^) -o $@
 
 service-driver: $(OUT)/service-driver
 

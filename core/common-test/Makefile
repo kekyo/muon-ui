@@ -13,7 +13,7 @@ RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \
   $(COMMON)/src/plugins/muon_type_metadata.cpp \
   $(COMMON)/src/rpc/muon_rpc.cpp \
   $(COMMON)/src/rpc/muon_rpc_host.cpp
-TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-library $(OUT)/service-controller
+TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value
 
 .PHONY: all test clean service-driver
 all: $(TESTS)
@@ -38,6 +38,9 @@ $(OUT)/service-lifecycle: muon_service_lifecycle_test.cpp $(COMMON)/src/services
 
 $(OUT)/service-controller: muon_service_controller_test.cpp $(COMMON)/src/services/muon_service_controller.cpp $(COMMON)/src/services/muon_service_lifecycle.cpp | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
+$(OUT)/service-value: muon_service_value_test.cpp $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_value.h | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) -o $@
 
 service-driver: $(OUT)/service-driver
 

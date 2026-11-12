@@ -45,6 +45,26 @@ declare global {
     readonly node?: MuonNodeApi;
   }
 
+  /** An OS-retained exit of the shared host, not a failure of the current service. */
+  interface MuonServiceHostExit {
+    /** Platform that supplied the historical observation. */
+    readonly platform: "android";
+    /** Exact process name of the previous shared service host. */
+    readonly processName: string;
+    /** PID of the process that ended; unrelated to the current generation. */
+    readonly pid: number;
+    /** OS wall-clock time in milliseconds since Unix epoch, as a decimal string. */
+    readonly timestampMs: string;
+    /** Android reason name in lower-case hyphenated form; unknown codes use "unknown". */
+    readonly reason: string;
+    /** Original ApplicationExitInfo reason code, including future unknown values. */
+    readonly reasonCode: number;
+    /** Original exit status or signal number reported by Android. */
+    readonly status: number;
+    /** Optional OS diagnostic text, without a stable or localized format. */
+    readonly description: string | null;
+  }
+
   /** A copied service observation that does not keep its runtime alive. */
   interface MuonServiceState {
     /** Logical identity declared in muon.json. */
@@ -63,6 +83,13 @@ declare global {
     readonly clientReferences: number;
     /** Last runtime failure, or an empty string when there is no failure. */
     readonly error: string;
+    /**
+     * Most recent retained OS record for this shared host, read at host startup.
+     * @remarks Null on unsupported platforms, before Android API 30, or when no
+     * record can be read. A record does not imply that this logical service was
+     * running then, and never changes the current state, generation, or error.
+     */
+    readonly lastHostExit: MuonServiceHostExit | null;
   }
 
   /** One page-owned reference to an acquired service generation. */

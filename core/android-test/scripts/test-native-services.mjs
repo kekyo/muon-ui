@@ -64,7 +64,7 @@ try {
     '-r',
     '-e',
     'class',
-    'dev.muon.e2e.observer.NativeServiceProcessTest,dev.muon.e2e.observer.ServiceConstraintsTest',
+    'dev.muon.e2e.observer.NativeServiceProcessTest,dev.muon.e2e.observer.ServiceConstraintsTest,dev.muon.e2e.observer.ServiceExitReasonTest',
     'dev.muon.e2e.observer.test/androidx.test.runner.AndroidJUnitRunner',
   ]);
   process.stdout.write(result);
@@ -102,7 +102,7 @@ const dispatcherResult = adb([
   '-r',
   '-e',
   'class',
-  'dev.muon.runtime.MuonServiceDispatcherTest,dev.muon.runtime.MuonServiceSourceTest',
+  'dev.muon.runtime.MuonServiceDispatcherTest,dev.muon.runtime.MuonServiceSourceTest,dev.muon.runtime.MuonServiceExitHistoryTest',
   'dev.muon.servicefixture.test/androidx.test.runner.AndroidJUnitRunner',
 ]);
 process.stdout.write(dispatcherResult);

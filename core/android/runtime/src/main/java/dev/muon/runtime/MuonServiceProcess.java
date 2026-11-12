@@ -87,6 +87,7 @@ final class MuonServiceProcess {
     private long nativeHandle;
     private boolean initialized;
     private String initializationError;
+    private JSONObject lastHostExit;
 
     private static final class SourceStart {
         final long generation;
@@ -186,20 +187,24 @@ final class MuonServiceProcess {
                 entry.put("library", path);
             }
             String pluginRegistry = plugins.toString();
-            preferences.load(ids, (overrides, error) -> {
-                initializationError = error;
-                if (error == null) {
-                    try {
-                        nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
-                                autostarts, overrides, configurations, pluginGrants, pluginRegistry);
-                    } catch (RuntimeException failure) {
-                        initializationError = failure.getMessage();
+            MuonServiceExitHistory.load(context, handler, (history, historyError) -> {
+                lastHostExit = history;
+                if (historyError != null) Log.w("MuonNativeService", "Cannot read previous host exit: " + historyError);
+                preferences.load(ids, (overrides, error) -> {
+                    initializationError = error;
+                    if (error == null) {
+                        try {
+                            nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
+                                    autostarts, overrides, configurations, pluginGrants, pluginRegistry);
+                        } catch (RuntimeException failure) {
+                            initializationError = failure.getMessage();
+                        }
                     }
-                }
-                initialized = true;
-                ArrayList<Runnable> pending = new ArrayList<>(initializing);
-                initializing.clear();
-                for (Runnable action : pending) action.run();
+                    initialized = true;
+                    ArrayList<Runnable> pending = new ArrayList<>(initializing);
+                    initializing.clear();
+                    for (Runnable action : pending) action.run();
+                });
             });
         } catch (JSONException error) {
             throw new IllegalStateException("Invalid packaged services", error);
@@ -288,9 +293,7 @@ final class MuonServiceProcess {
                         command.getString("refId"), command.getString("generation"));
                 reply(client, request, new JSONObject().put("released", released), null);
             } else if ("getState".equals(operation)) {
-                String state = nativeSnapshot(nativeHandle, id);
-                if (state == null) throw new IllegalStateException("Unknown service");
-                reply(client, request, new JSONObject(state), null);
+                reply(client, request, snapshot(id), null);
             } else if ("setAutostart".equals(operation)) {
                 Object enabled = command.get("enabled");
                 if (!(enabled instanceof Boolean)) throw new IllegalArgumentException("Autostart must be boolean");
@@ -343,7 +346,7 @@ final class MuonServiceProcess {
             if (nextWatch == 0) throw new IllegalStateException("Service watch identities exhausted");
             // Long.toUnsignedString is unavailable on the API 24 baseline.
             String token = new java.math.BigInteger(Long.toHexString(nextWatch++), 16).toString();
-            JSONObject state = new JSONObject(nativeSnapshot(nativeHandle, id));
+            JSONObject state = snapshot(id);
             watches.put(token, new Watch(client, id, state));
             reply(client, request, new JSONObject().put("token", token).put("state", state), null);
             return;
@@ -362,7 +365,7 @@ final class MuonServiceProcess {
             if (watch.pending != null) throw new IllegalStateException("A service watch read is already pending");
             watch.pending = request;
             // A Changed event may still be queued; read the authoritative state.
-            watch.latest = new JSONObject(nativeSnapshot(nativeHandle, id));
+            watch.latest = snapshot(id);
             deliverWatch(watch);
         } else throw new IllegalArgumentException("Unknown service watch operation");
     }
@@ -375,6 +378,12 @@ final class MuonServiceProcess {
         watch.pending = null;
         watch.deliveredState = state;
         reply(watch.client, request, new JSONObject().put("state", watch.latest), null);
+    }
+
+    private JSONObject snapshot(String id) throws JSONException {
+        String state = nativeSnapshot(nativeHandle, id);
+        if (state == null) throw new IllegalStateException("Unknown service");
+        return new JSONObject(state).put("lastHostExit", lastHostExit == null ? JSONObject.NULL : lastHostExit);
     }
 
     private void reply(Client client, int request, JSONObject value, String error) {
@@ -482,7 +491,7 @@ final class MuonServiceProcess {
             if ("changed".equals(kind)) {
                 String id = event.getJSONObject("snapshot").getString("id");
                 // Coalesce on the current snapshot, never a stale queued event.
-                JSONObject state = new JSONObject(nativeSnapshot(nativeHandle, id));
+                JSONObject state = snapshot(id);
                 for (Watch watch : new ArrayList<>(watches.values())) {
                     if (!watch.serviceId.equals(id)) continue;
                     watch.latest = state;

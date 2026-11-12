@@ -8,6 +8,26 @@ import type { ServiceConnection } from '../../../sdk/src/service-connection.ts';
 import { parseServiceInterface } from '../../../sdk/src/service-interface.ts';
 import type { ServiceInterface } from '../../../sdk/src/service-interface.ts';
 
+/** An OS-retained exit of the shared host, not a failure of the current service. */
+export interface MuonServiceHostExit {
+  /** Platform that supplied the historical observation. */
+  readonly platform: 'android';
+  /** Exact process name of the previous shared service host. */
+  readonly processName: string;
+  /** PID of the process that ended; unrelated to the current generation. */
+  readonly pid: number;
+  /** OS wall-clock time in milliseconds since Unix epoch, as a decimal string. */
+  readonly timestampMs: string;
+  /** Android reason name in lower-case hyphenated form; unknown codes use "unknown". */
+  readonly reason: string;
+  /** Original ApplicationExitInfo reason code, including future unknown values. */
+  readonly reasonCode: number;
+  /** Original exit status or signal number reported by Android. */
+  readonly status: number;
+  /** Optional OS diagnostic text, without a stable or localized format. */
+  readonly description: string | null;
+}
+
 /** A copied service observation that does not keep its runtime alive. */
 export interface MuonServiceState {
   /** Logical identity declared in muon.json. */
@@ -26,6 +46,13 @@ export interface MuonServiceState {
   readonly clientReferences: number;
   /** Last runtime failure, or an empty string when there is no failure. */
   readonly error: string;
+  /**
+   * Most recent retained OS record for this shared host, read at host startup.
+   * @remarks Null on unsupported platforms, before Android API 30, or when no
+   * record can be read. A record does not imply that this logical service was
+   * running then, and never changes the current state, generation, or error.
+   */
+  readonly lastHostExit: MuonServiceHostExit | null;
 }
 
 /** One page-owned reference to an acquired service generation. */
@@ -125,6 +152,24 @@ const decimal = (value: unknown, allowZero: boolean): value is string =>
   (allowZero || value !== '0') &&
   BigInt(value) <= 18446744073709551615n;
 
+const checkedHostExit = (value: unknown): MuonServiceHostExit | null => {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid service host exit');
+  const exit = value as Record<string, unknown>;
+  if (exit.platform !== 'android' || typeof exit.processName !== 'string' || !exit.processName ||
+    !Number.isInteger(exit.pid) || Number(exit.pid) <= 0 || Number(exit.pid) > 2147483647 ||
+    !decimal(exit.timestampMs, true) || typeof exit.reason !== 'string' || !exit.reason ||
+    !Number.isInteger(exit.reasonCode) || Number(exit.reasonCode) < 0 || Number(exit.reasonCode) > 2147483647 ||
+    !Number.isInteger(exit.status) || Number(exit.status) < -2147483648 || Number(exit.status) > 2147483647 ||
+    (exit.description !== null && typeof exit.description !== 'string'))
+    throw new Error('Invalid service host exit');
+  return Object.freeze({
+    platform: 'android', processName: exit.processName, pid: Number(exit.pid),
+    timestampMs: exit.timestampMs, reason: exit.reason, reasonCode: Number(exit.reasonCode),
+    status: Number(exit.status), description: exit.description,
+  });
+};
+
 const checkedState = (value: unknown, serviceId: string): MuonServiceState => {
   if (value === null || typeof value !== 'object' || Array.isArray(value))
     throw new Error('Invalid native service state');
@@ -137,7 +182,7 @@ const checkedState = (value: unknown, serviceId: string): MuonServiceState => {
     !Number.isSafeInteger(state.clientReferences) || Number(state.clientReferences) < 0 ||
     typeof state.error !== 'string'
   ) throw new Error('Invalid native service state');
-  return Object.freeze(state) as unknown as MuonServiceState;
+  return Object.freeze({ ...state, lastHostExit: checkedHostExit(state.lastHostExit) }) as unknown as MuonServiceState;
 };
 
 /**

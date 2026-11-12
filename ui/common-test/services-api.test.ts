@@ -59,7 +59,10 @@ it("observes stopped service state without acquiring a reference", async () => {
     error: "",
   };
   const call = vi.fn(async () => JSON.stringify(state));
-  expect(await createMuonServicesApi(call).getState("worker")).toEqual(state);
+  expect(await createMuonServicesApi(call).getState("worker")).toEqual({
+    ...state,
+    lastHostExit: null,
+  });
   expect(call).toHaveBeenCalledExactlyOnceWith(
     "getState",
     '{"serviceId":"worker"}',
@@ -100,6 +103,7 @@ it("observes initial and changed states without acquiring, then closes a pending
       resident: false,
       clientReferences: 0,
       error: "",
+      lastHostExit: null,
     };
     let next: ((json: string) => void) | undefined;
     const call = vi.fn(async (name: string, json: string) => {

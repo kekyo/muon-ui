@@ -25,6 +25,7 @@ for (const path of [
   'dist/types/services.d.ts',
   'dist/types/service-connection.d.ts',
   'dist/types/service-runtime.d.ts',
+  'dist/types/service-globals.d.ts',
   'dist/types/service-binding.d.ts',
   'dist/types/service-interface.d.ts',
   'dist/types/service-values.d.ts',

@@ -24,6 +24,9 @@
       "import": "./dist/services.mjs",
       "require": "./dist/services.cjs"
     },
+    "./service-globals": {
+      "types": "./dist/types/service-globals.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "files": [

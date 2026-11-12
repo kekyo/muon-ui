@@ -13,9 +13,9 @@ RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \
   $(COMMON)/src/plugins/muon_type_metadata.cpp \
   $(COMMON)/src/rpc/muon_rpc.cpp \
   $(COMMON)/src/rpc/muon_rpc_host.cpp
-TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api
+TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle
 
-.PHONY: all test clean
+.PHONY: all test clean service-driver
 all: $(TESTS)
 
 $(OUT):
@@ -32,6 +32,14 @@ $(OUT)/function-lifetime: muon_function_wrapper_lifecycle_test.cpp $(COMMON)/src
 
 $(OUT)/plugin-api: muon_plugin_api_header_test.c | $(OUT)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@
+
+$(OUT)/service-lifecycle: muon_service_lifecycle_test.cpp $(COMMON)/src/services/muon_service_lifecycle.cpp | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
+
+service-driver: $(OUT)/service-driver
+
+$(OUT)/service-driver: muon_service_driver.cpp $(COMMON)/src/services/muon_service_lifecycle.cpp | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@
 
 test: all
 	@set -e; for executable in $(TESTS); do "$$executable"; done

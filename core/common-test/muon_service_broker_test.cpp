@@ -137,6 +137,7 @@ int main() {
   assert(controller.IsReady(a) && controller.IsReady(a2) && controller.IsReady(b));
   const auto describe = Request(broker, a, "describe", "{}");
   assert(describe->value().find("\"echo\"") != std::string::npos);
+  assert(describe->value().find('\n') == std::string::npos);
   auto forged = a;
   forged.owner_id = "page-b";
   Reject([&] { Request(broker, forged, "describe", "{}"); });

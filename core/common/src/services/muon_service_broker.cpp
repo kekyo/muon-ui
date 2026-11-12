@@ -402,7 +402,12 @@ void MuonServiceBroker::Request(const MuonServiceReference& identity, const std:
   auto* root = yyjson_doc_get_root(doc.get());
   Require(yyjson_is_obj(root), "Service RPC payload must be an object");
   if (action == "describe") {
-    reply(impl->host.InterfaceJson(identity.service_id, identity.generation));
+    const auto schema = impl->host.InterfaceJson(identity.service_id, identity.generation);
+    const auto definition = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
+        yyjson_read(schema.data(), schema.size(), 0), &yyjson_doc_free);
+    // Author-formatted metadata can contain line breaks. Keep every response a
+    // compact JSON value for the shared newline-framed transport.
+    reply(Json(yyjson_doc_get_root(definition.get())));
     return;
   }
   if (action == "begin") { Begin(impl, reference, root, reply); return; }

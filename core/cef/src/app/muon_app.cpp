@@ -26,6 +26,7 @@
 #include "plugins/builtin/muon_builtin_launcher.h"
 #include "plugins/builtin/muon_builtin_environments.h"
 #include "plugins/builtin/muon_builtin_notifications.h"
+#include "plugins/builtin/muon_builtin_services.h"
 #include "plugins/muon_plugin_policy.h"
 #include "plugins/muon_plugin_runtime.h"
 #include "plugins/muon_cef_plugin_metadata.h"
@@ -796,6 +797,7 @@ bool MuonApp::RequestShutdown(int32_t exit_code) {
   if (!shutdown_requested_) {
     exit_code_ = static_cast<int>(exit_code);
     shutdown_requested_ = true;
+    RequestMuonBuiltinServicesShutdown();
   }
   return true;
 }
@@ -888,6 +890,7 @@ void MuonApp::OnContextInitialized() {
   InitializeMuonBuiltinLauncher(config_.default_version_policy);
   InitializeMuonBuiltinEnvironments(config_.config);
   InitializeMuonBuiltinNotifications(config_);
+  InitializeMuonBuiltinServices(config_);
   const auto rpc_bridge = CreateMuonCefRpcBridge();
   const auto plugin_runtime =
       CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins),

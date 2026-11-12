@@ -3,7 +3,10 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { createMuonServicesApi, type MuonServiceOperation } from '../../common/renderer/services.ts';
+import {
+  createMuonServicesApi,
+  type MuonServiceOperation,
+} from '../../common/renderer/services.ts';
 export { createMuonServicesApi };
 
 /**
@@ -16,13 +19,19 @@ export { createMuonServicesApi };
  */
 export const installMuonCefServicesApi = (
   namespace: Record<string, unknown>,
-  isAllowed: (name: string) => boolean,
+  isAllowed: (name: string) => boolean
 ): void => {
-  const native = new Map<MuonServiceOperation, (json: string, owner: string) => Promise<unknown>>();
+  const native = new Map<
+    MuonServiceOperation,
+    (json: string, owner: string) => Promise<unknown>
+  >();
   for (const name of ['acquire', 'release', 'getState'] as const) {
     const value = namespace['__' + name];
     if (typeof value === 'function')
-      native.set(name, value as (json: string, owner: string) => Promise<unknown>);
+      native.set(
+        name,
+        value as (json: string, owner: string) => Promise<unknown>
+      );
   }
   const api = createMuonServicesApi(async (name, json) => {
     const call = native.get(name);

@@ -806,6 +806,45 @@ MUON_APPLY_SANITIZERS(muon_rpc_core)
 include("${MUON_COMMON_ROOT}/cmake/MuonPluginRuntimeCore.cmake")
 muon_add_plugin_runtime_core(muon_plugin_runtime_core)
 
+if(WIN32)
+  set(MUON_SERVICE_PLATFORM windows)
+else()
+  set(MUON_SERVICE_PLATFORM linux)
+endif()
+add_library(muon_service_desktop STATIC
+  ${MUON_COMMON_ROOT}/src/services/muon_service_client.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_session.cpp
+  ../service-host/muon_service_transport_${MUON_SERVICE_PLATFORM}.cpp
+  ../service-host/muon_service_process_${MUON_SERVICE_PLATFORM}.cpp)
+target_compile_features(muon_service_desktop PRIVATE cxx_std_20)
+target_include_directories(muon_service_desktop PUBLIC
+  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include")
+target_link_libraries(muon_service_desktop PUBLIC muon_cardio PRIVATE yyjson)
+MUON_APPLY_SANITIZERS(muon_service_desktop)
+add_executable(muon_service_host
+  ../service-host/muon_service_host_${MUON_SERVICE_PLATFORM}.cpp
+  ../service-host/muon_service_protocol.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_native_service_library.cpp
+  ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp)
+target_compile_features(muon_service_host PRIVATE cxx_std_20)
+target_include_directories(muon_service_host PRIVATE
+  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
+  "${MUON_COMMON_ROOT}/../../sdk/include")
+target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson ${CMAKE_DL_LIBS})
+set_target_properties(muon_service_host PROPERTIES
+  OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
+if(WIN32)
+  target_link_libraries(muon_service_desktop PRIVATE muon_windows_path advapi32)
+  target_link_libraries(muon_service_host PRIVATE muon_windows_path advapi32 user32)
+  target_compile_definitions(muon_service_desktop PRIVATE _WIN32_WINNT=0x0601)
+  target_compile_definitions(muon_service_host PRIVATE _WIN32_WINNT=0x0601)
+  target_link_options(muon_service_host PRIVATE -municode)
+endif()
+MUON_APPLY_SANITIZERS(muon_service_host)
+
 set(APP_SOURCES
   src/main.cpp
   src/muon_json_helpers.cpp
@@ -846,6 +885,8 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_environments.cpp
   src/plugins/builtin/muon_builtin_notifications.cpp
   src/plugins/builtin/muon_builtin_server.cpp
+  src/plugins/builtin/muon_builtin_services.cpp
+  src/services/muon_service_rpc.cpp
   src/server/muon_server_rpc.cpp
   src/server/muon_server_service.cpp
   src/server/muon_server_http.cpp
@@ -1092,6 +1133,7 @@ set(MUON_CORE_PAYLOAD_ITEMS
   "${APP_EXECUTABLE_NAME}"
   "libmuon-ui${CMAKE_SHARED_LIBRARY_SUFFIX}"
   "${MUON_CARDIO_RUNTIME_LIBRARY_NAME}"
+  "muon-service-host${CMAKE_EXECUTABLE_SUFFIX}"
   "plugins"
   )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -1300,7 +1342,26 @@ else()
 endif()
 add_custom_target(muon_server_renderer
   DEPENDS "${MUON_SERVER_RENDERER_DIR}/muon_server_renderer_generated.h")
+if(MUON_SERVICE_RENDERER_HEADER)
+  set(MUON_SERVICE_RENDERER_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/service-renderer")
+  configure_file("${MUON_SERVICE_RENDERER_HEADER}"
+    "${MUON_SERVICE_RENDERER_DIR}/muon_service_renderer_generated.h" COPYONLY)
+else()
+  set(MUON_SERVICE_RENDERER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.build/service-renderer")
+  add_custom_command(
+    OUTPUT "${MUON_SERVICE_RENDERER_DIR}/muon_service_renderer_generated.h"
+    COMMAND npm run build:service-renderer --workspace muon-core
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.."
+    DEPENDS renderer/services.ts service-renderer.vite.config.ts
+      ../common/renderer/services.ts ../common/build-service-renderer.mts
+    COMMENT "Building the shared service renderer"
+    VERBATIM)
+endif()
+add_custom_target(muon_service_renderer
+  DEPENDS "${MUON_SERVICE_RENDERER_DIR}/muon_service_renderer_generated.h")
 add_executable(${APP_NAME} ${APP_SOURCES} ${APP_HEADERS})
+add_dependencies(${APP_NAME} muon_service_renderer)
+target_include_directories(${APP_NAME} PRIVATE "${MUON_SERVICE_RENDERER_DIR}")
 add_dependencies(${APP_NAME} muon_server_renderer)
 target_include_directories(${APP_NAME} PRIVATE "${MUON_SERVER_RENDERER_DIR}")
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -1316,6 +1377,7 @@ target_link_libraries(${APP_NAME} PRIVATE
   muon_ui
   muon_cardio
   muon_plugin_runtime_core
+  muon_service_desktop
   muon_rpc_core
   muon_sha2
   muon_sha1
@@ -1352,7 +1414,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # The payload is copied into a per-user runtime and may be relocated again.
   # Private libraries share CEF's $ORIGIN search path beside libcef.so.
   foreach(MUON_RUNTIME_TARGET IN ITEMS
-      ${APP_NAME} muon_ui cardio_shared muon_executor_supervisor)
+      ${APP_NAME} muon_ui cardio_shared muon_executor_supervisor muon_service_host)
     set_target_properties(${MUON_RUNTIME_TARGET} PROPERTIES
       BUILD_WITH_INSTALL_RPATH ON
       INSTALL_RPATH "\$ORIGIN"
@@ -1602,6 +1664,7 @@ add_dependencies(muon_runtime_files ${APP_NAME})
 add_dependencies(muon_runtime_files muon_ui)
 add_dependencies(muon_runtime_files cardio_shared)
 add_dependencies(muon_runtime_files muon_node_plugin)
+add_dependencies(muon_runtime_files muon_service_host)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   add_dependencies(muon_runtime_files muon_executor_supervisor)
 endif()

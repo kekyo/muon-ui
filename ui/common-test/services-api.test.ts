@@ -10,6 +10,7 @@ it("owns distinct handles and releases each native reference exactly once", asyn
   let next = 0;
   let finish: (() => void) | undefined;
   const call = vi.fn(async (name: string, json: string) => {
+    if (name === "rpc") return '{"schemaVersion":1,"methods":{},"events":{}}';
     if (name === "acquire") {
       return JSON.stringify({
         serviceId: JSON.parse(json).serviceId,
@@ -160,6 +161,7 @@ it("preserves native startup failures and releases failures idempotently", async
   const api = createMuonServicesApi(async (name) => {
     if (name === "acquire")
       return '{"serviceId":"worker","refId":"1","generation":"1"}';
+    if (name === "rpc") return '{"schemaVersion":1,"methods":{},"events":{}}';
     ++releases;
     throw failure;
   });

@@ -20,6 +20,7 @@ it.each(["android", "cef"] as const)(
     const call = vi.fn(
       async (_capability: string, path: string, args: readonly unknown[]) => {
         expect(typeof args[0]).toBe("string");
+        if (path.endsWith("rpc")) return '{"schemaVersion":1,"methods":{},"events":{}}';
         return path.endsWith("acquire")
           ? '{"serviceId":"worker","refId":"1","generation":"1"}'
           : null;
@@ -48,6 +49,7 @@ it.each(["android", "cef"] as const)(
     expect(resolver.getRuntimePluginConfig().capabilities[0]!.allow).toEqual([
       "muon.services.acquire",
       "muon.services.release",
+      "muon.services.rpc",
     ]);
   },
 );
@@ -103,6 +105,7 @@ it("installs only allowed CEF methods while retaining handle release", async () 
       value: async () => '{"serviceId":"worker","refId":"2","generation":"3"}',
     },
     __release: { value: released },
+    __rpc: { value: async () => '{"schemaVersion":1,"methods":{},"events":{}}' },
   });
   installMuonCefServicesApi(namespace, (name) => name === "acquire");
   expect(Object.keys(namespace)).toEqual(["acquire"]);
@@ -143,6 +146,7 @@ it.each(["simple", "validate"] as const)(
       expect(resolved.runtimeOverlay.plugins![0]!.allow).toEqual([
         "muon.services.acquire",
         "muon.services.release",
+        "muon.services.rpc",
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

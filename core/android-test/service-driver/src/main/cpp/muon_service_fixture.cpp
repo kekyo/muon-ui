@@ -196,6 +196,49 @@ static void Stop(void* data, muon_service_stop_completion completion, void* comp
   state->stopping.emplace(StopAsync(state));
 }
 
+struct CallbackReply {
+  muon_service_result_completion complete;
+  void* data;
+};
+
+static void CompleteCallback(void* data, const muon_service_value* value,
+    const muon_service_error* error) {
+  const auto reply = *static_cast<CallbackReply*>(data);
+  delete static_cast<CallbackReply*>(data);
+  reply.complete(reply.data, value, error);
+}
+
+static void Invoke(void* data, const muon_service_call_context* call,
+    const char* method, const muon_service_value* arguments, size_t,
+    muon_service_result_completion complete, void* completion_data) {
+  auto* state = static_cast<Fixture*>(data);
+  if (std::strcmp(method, "callback") == 0) {
+    auto* reply = new CallbackReply{complete, completion_data};
+    if (!call->callback(call->user_data, arguments[1].data.callback_id,
+        arguments, 1, CompleteCallback, reply)) {
+      delete reply;
+      const muon_service_error error{"resource-exhausted", "Callback was not accepted"};
+      complete(completion_data, nullptr, &error);
+    }
+  } else if (std::strcmp(method, "emit") == 0) {
+    const auto* host = state->context->host;
+    if (host->emit(host->user_data, "progress", arguments)) {
+      const muon_service_value result{MUON_SERVICE_VALUE_VOID, {}};
+      complete(completion_data, &result, nullptr);
+    } else {
+      const muon_service_error error{"resource-exhausted", "Event was not accepted"};
+      complete(completion_data, nullptr, &error);
+    }
+  } else {
+    complete(completion_data, arguments, nullptr);
+  }
+}
+
+static void Cancel(void*, uint64_t) {
+  // The only asynchronous method awaits a page callback. Host cancellation
+  // settles that callback, and CompleteCallback then completes the method.
+}
+
 static void Start(const muon_service_context* context,
     muon_service_start_completion completion, void* data) {
   unsigned int port = 0;
@@ -254,11 +297,20 @@ static void Start(const muon_service_context* context,
     return;
   }
   state->work.emplace(Serve(state));
-  const muon_service_instance instance{state, Stop, nullptr, nullptr};
+  const muon_service_instance instance{state, Stop, Invoke, Cancel};
   completion(data, &instance, nullptr);
 }
 
-static const muon_service_factory factory{MUON_SERVICE_ABI_VERSION, Start, nullptr};
+static const char interface_json[] = R"({"schemaVersion":1,"methods":{
+  "echo":{"parameters":["string"],"returns":"string","errors":[]},
+  "echoBytes":{"parameters":["bytes"],"returns":"bytes","errors":[]},
+  "echoInt64":{"parameters":["int64"],"returns":"int64","errors":[]},
+  "echoUint64":{"parameters":["uint64"],"returns":"uint64","errors":[]},
+  "callback":{"parameters":["string",{"callback":{"parameters":["string"],"returns":"string"}}],"returns":"string","errors":[]},
+  "emit":{"parameters":["int32"],"returns":"void","errors":[]}
+},"events":{"progress":"int32"}})";
+
+static const muon_service_factory factory{MUON_SERVICE_ABI_VERSION, Start, interface_json};
 
 /** @return Factory for independent socket workers shared by Android and PC tests. */
 extern "C" MUON_PLUGIN_EXPORT const muon_service_factory* muon_get_service_factory() {

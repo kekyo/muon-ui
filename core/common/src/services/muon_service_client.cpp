@@ -4,6 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 #include "services/muon_service_client.h"
+#include "services/muon_service_limits.h"
 #include <yyjson.h>
 #include <cstdlib>
 #include <deque>
@@ -77,8 +78,8 @@ static void Receive(const std::shared_ptr<MuonServiceClientImpl>& impl, const st
       yyjson_read(frame.data(), frame.size(), 0), yyjson_doc_free);
   if (!doc) throw std::runtime_error("Invalid service protocol JSON");
   auto* root = yyjson_doc_get_root(doc.get());
-  // Invalidated references are already unusable at the host. No public callback
-  // is attached to a lifetime-only handle; the next call observes that failure.
+  // Invalidated references are already unusable at the host. The broker settles
+  // held call/event requests; later operations observe the invalid generation.
   if (yyjson_obj_get(root, "event")) return;
   const auto id = Text(root, "requestId");
   auto* error = yyjson_obj_get(root, "error");
@@ -103,11 +104,11 @@ static cardio::promise<void> Read(std::shared_ptr<MuonServiceClientImpl> impl) {
       input += chunk;
       size_t end;
       while (!impl->closed && (end = input.find('\n')) != std::string::npos) {
-        if (end > 1024 * 1024) throw std::runtime_error("Service response exceeds frame limit");
+        if (end > kMuonServiceMaxFrameBytes) throw std::runtime_error("Service response exceeds frame limit");
         Receive(impl, input.substr(0, end));
         input.erase(0, end + 1);
       }
-      if (input.size() > 1024 * 1024) throw std::runtime_error("Service response exceeds frame limit");
+      if (input.size() > kMuonServiceMaxFrameBytes) throw std::runtime_error("Service response exceeds frame limit");
     }
   } catch (const std::exception& error) {
     Fail(impl, error.what());
@@ -160,7 +161,7 @@ static void StartWriter(const std::shared_ptr<MuonServiceClientImpl>& impl) {
 static cardio::promise<std::string> Call(std::shared_ptr<MuonServiceClientImpl> impl,
                                         std::string operation, std::string json) {
   if (operation != "acquire" && operation != "release" && operation != "getState" &&
-      operation != "setAutostart" && operation != "watchState" &&
+      operation != "setAutostart" && operation != "watchState" && operation != "rpc" &&
       operation != "getUiAutostart" && operation != "setUiAutostart" && operation != "configureStartup")
     throw std::invalid_argument("Unsupported service client operation");
   auto doc = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
@@ -177,11 +178,17 @@ static cardio::promise<std::string> Call(std::shared_ptr<MuonServiceClientImpl> 
     Text(root, "serviceId");
     payload = ",\"serviceId\":" + Json(yyjson_obj_get(root, "serviceId"));
   }
-  if (operation == "release") {
+  if (operation == "release" || operation == "rpc") {
     Text(root, "refId");
     Text(root, "generation");
     payload += ",\"refId\":" + Json(yyjson_obj_get(root, "refId")) +
                ",\"generation\":" + Json(yyjson_obj_get(root, "generation"));
+    if (operation == "rpc") {
+      Text(root, "action");
+      auto* arguments = yyjson_obj_get(root, "payload");
+      if (!yyjson_is_obj(arguments)) throw std::invalid_argument("Service RPC payload must be an object");
+      payload += ",\"action\":" + Json(yyjson_obj_get(root, "action")) + ",\"payload\":" + Json(arguments);
+    }
   } else if (operation == "setAutostart" || operation == "setUiAutostart") {
     auto* enabled = yyjson_obj_get(root, "enabled");
     if (!yyjson_is_bool(enabled)) throw std::invalid_argument("enabled must be boolean");
@@ -201,7 +208,7 @@ static cardio::promise<std::string> Call(std::shared_ptr<MuonServiceClientImpl> 
     throw std::overflow_error("Service request identity exhausted");
   const auto id = std::to_string(++impl->sequence);
   auto frame = "{\"requestId\":\"" + id + "\",\"op\":\"" + operation + "\"" + payload + "}\n";
-  if (frame.size() > 1024 * 1024 || impl->output_bytes + frame.size() > 4 * 1024 * 1024)
+  if (frame.size() > kMuonServiceMaxFrameBytes || impl->output_bytes + frame.size() > kMuonServiceMaxQueuedBytes)
     throw std::runtime_error("Service request queue is full");
   auto response = impl->pending.emplace(id, cardio::promise_source<std::string>()).first->second.get_promise();
   impl->output_bytes += frame.size();

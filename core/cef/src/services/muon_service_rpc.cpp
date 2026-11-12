@@ -12,7 +12,7 @@ void BindMuonServiceOwner(MuonRpcCallRequest& request,
     if (function.id == request.function_id && function.plugin_namespace == "muon.services" &&
         (function.public_name == "acquire" || function.public_name == "release" ||
          function.public_name == "getState" || function.public_name == "setAutostart" ||
-         function.public_name == "watchState")) {
+         function.public_name == "watchState" || function.public_name == "rpc")) {
       auto owner = MuonRpcValue{};
       owner.type = CreateMuonPrimitiveType(MUON_TYPE_STRING);
       owner.string_value = CreateMuonRpcOwnerKey(request.owner);

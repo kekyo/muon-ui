@@ -5,6 +5,7 @@
  */
 
 #include "muon_service_protocol.h"
+#include "services/muon_service_limits.h"
 #include <yyjson.h>
 
 #include <charconv>
@@ -83,8 +84,10 @@ static std::string Failure(const std::string& request, const std::string& code,
 }
 
 MuonServiceProtocol::MuonServiceProtocol(MuonServiceController& controller,
-    std::function<void(const std::string&, const std::string&)> send, MuonServiceUiPolicy ui)
-    : controller_(controller), send_(std::move(send)), ui_(std::move(ui)) {}
+    std::function<void(const std::string&, const std::string&)> send, MuonServiceUiPolicy ui,
+    MuonServiceCommunication communication)
+    : controller_(controller), send_(std::move(send)), ui_(std::move(ui)),
+      communication_(std::move(communication)) {}
 
 bool MuonServiceProtocol::OpenOwner(const std::string& owner) {
   return !owner.empty() && owners_.insert(owner).second;
@@ -99,11 +102,13 @@ void MuonServiceProtocol::CloseOwner(const std::string& owner) {
   std::erase_if(policies_, [&](const auto& item) { return item.second.owner == owner; });
   std::erase_if(observations_, [&](const auto& item) { return item.second.owner == owner; });
   std::erase_if(ui_pending_, [&](const auto& item) { return item.first == owner; });
+  std::erase_if(rpc_pending_, [&](const auto& item) { return item.first == owner; });
   controller_.ReleaseOwner(owner);
+  if (communication_.close_owner) communication_.close_owner(owner);
 }
 
 bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& json) {
-  if (!owners_.contains(owner) || json.size() > 1024 * 1024) return false;
+  if (!owners_.contains(owner) || json.size() > kMuonServiceMaxFrameBytes) return false;
   const auto doc = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
       yyjson_read(json.data(), json.size(), 0), &yyjson_doc_free);
   auto* root = yyjson_doc_get_root(doc.get());
@@ -113,6 +118,7 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
     request = Text(root, "requestId");
     if (request.size() > 128) return false;
     if (ui_pending_.contains({owner, request})) return false;
+    if (rpc_pending_.contains({owner, request})) return false;
     for (const auto& [id, pending] : pending_) {
       if (pending.owner == owner && pending.request == request) return false;
     }
@@ -150,6 +156,7 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
       });
     } else if (op == "shutdown") {
       controller_.Shutdown("application exit");
+      if (communication_.shutdown) communication_.shutdown();
       send_(owner, Reply(request, "null"));
     } else if (op == "acquire") {
       const auto service = Text(root, "serviceId");
@@ -163,8 +170,23 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
     } else if (op == "release") {
       const auto reference = MuonServiceReference{
           Identity(root, "refId"), Text(root, "serviceId"), owner, Identity(root, "generation")};
-      controller_.Release(reference);
+      if (controller_.Release(reference) && communication_.release) communication_.release(reference);
       send_(owner, Reply(request, "null"));
+    } else if (op == "rpc") {
+      const auto reference = MuonServiceReference{
+          Identity(root, "refId"), Text(root, "serviceId"), owner, Identity(root, "generation")};
+      if (!communication_.request || !controller_.IsReady(reference))
+        throw std::invalid_argument("Service communication is unavailable for this reference");
+      const auto action = Text(root, "action");
+      auto* payload = yyjson_obj_get(root, "payload");
+      if (!yyjson_is_obj(payload)) throw std::invalid_argument("Service RPC payload must be an object");
+      const auto encoded = std::unique_ptr<char, decltype(&std::free)>(yyjson_val_write(payload, 0, nullptr), &std::free);
+      if (!encoded) throw std::bad_alloc();
+      rpc_pending_.emplace(owner, request);
+      communication_.request(reference, action, encoded.get(), [this, owner, request](const std::string& result) {
+        if (rpc_pending_.erase({owner, request}) == 0 || !owners_.contains(owner)) return;
+        send_(owner, Reply(request, result));
+      });
     } else if (op == "getState") {
       const auto value = controller_.GetSnapshot(Text(root, "serviceId"));
       send_(owner, value ? Reply(request, SerializeMuonServiceSnapshot(value.value()))
@@ -228,6 +250,7 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
     }
   } catch (const std::invalid_argument& error) {
     if (request.empty()) return false;
+    rpc_pending_.erase({owner, request});
     send_(owner, Failure(request, "invalid-request", error.what()));
   }
   return true;
@@ -268,6 +291,8 @@ void MuonServiceProtocol::Notify(const MuonServiceEvent& event) {
   }
   if (!event.reference) return;
   const auto& reference = event.reference.value();
+  if (event.kind == MuonServiceEventKind::Invalidated && communication_.release)
+    communication_.release(reference);
   if (!owners_.contains(reference.owner_id)) return;
   const auto found = pending_.find(reference.id);
   if (found != pending_.end() &&

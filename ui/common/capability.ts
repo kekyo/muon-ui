@@ -342,18 +342,21 @@ const isGlobMatch = (glob: string, value: string, separator: string): boolean =>
   globToRegExp(glob, separator).test(value);
 
 /**
- * Grants handle release whenever service acquisition is permitted.
+ * Grants handle communication and release when service acquisition is permitted.
  * @param allow - Application-owned native permission patterns.
- * @returns Patterns plus the internal release route, without other authority.
- * @remarks Release still requires an exact reference owned by the calling page.
+ * @returns Patterns plus the internal routes for acquired references.
+ * @remarks Both routes require an exact reference owned by the calling page.
  */
 export const expandMuonServicePermissions = (
   allow: readonly string[],
-): readonly string[] =>
-  allow.some((pattern) => isGlobMatch(pattern, "muon.services.acquire", ".")) &&
-  !allow.some((pattern) => isGlobMatch(pattern, "muon.services.release", "."))
-    ? [...allow, "muon.services.release"]
-    : [...allow];
+): readonly string[] => {
+  const result = [...allow];
+  if (allow.some((pattern) => isGlobMatch(pattern, "muon.services.acquire", "."))) {
+    for (const path of ["muon.services.release", "muon.services.rpc"])
+      if (!allow.some((pattern) => isGlobMatch(pattern, path, "."))) result.push(path);
+  }
+  return result;
+};
 
 /**
  * Selects producer catalog entries using the runtime's dot-separated glob policy.
@@ -1314,7 +1317,7 @@ const createModuleSource = (rule: ResolvedRule): string => {
     rule.namespace,
     rule.rule.allow,
     rule.functionPaths,
-  ).filter(([, path]) => path !== "muon.services.release");
+  ).filter(([, path]) => path !== "muon.services.release" && path !== "muon.services.rpc");
   if (exportedFunctions.length === 0) {
     const hasWildcardAllow = rule.rule.allow.some(containsGlob);
     throw new Error(

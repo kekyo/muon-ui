@@ -10,6 +10,8 @@
 #include "muon_filesystem.h"
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
+#include "services/muon_service_broker.h"
+#include "services/muon_service_limits.h"
 
 #include <cardio.h>
 #include <yyjson.h>
@@ -137,6 +139,7 @@ class ServiceProcess final {
 
   ~ServiceProcess() {
     protocol_.reset();
+    broker_.reset();
     controller_.reset();
     native_.reset();
     listener_.reset();
@@ -213,6 +216,7 @@ class ServiceProcess final {
             if (event.kind == MuonServiceEventKind::Changed)
               std::cout << SerializeMuonServiceSnapshot(event.snapshot) << std::endl;
           }, post});
+      broker_ = std::make_unique<MuonServiceBroker>(*controller_, *native_);
       protocol_ = std::make_unique<MuonServiceProtocol>(*controller_,
           [this](const std::string& owner, const std::string& json) { Send(owner, json); },
           MuonServiceUiPolicy{[this] { return login_->UiEnabled(); },
@@ -220,7 +224,12 @@ class ServiceProcess final {
               cardio::fire_and_forget(SavePolicy("", enabled, std::move(complete)));
             }, [this](std::string startup, auto complete) {
               cardio::fire_and_forget(ConfigureStartup(std::move(startup), std::move(complete)));
-            }});
+            }}, MuonServiceCommunication{
+            [this](const auto& reference, const auto& action, const auto& payload, auto reply) {
+              broker_->Request(reference, action, payload, std::move(reply));
+            }, [this](const auto& reference) { broker_->Release(reference); },
+            [this](const auto& owner) { broker_->CloseOwner(owner); },
+            [this] { broker_->Shutdown(); }});
       ++io_count_;
       cardio::fire_and_forget(Accept());
       if (bootstrap_live_) {
@@ -344,7 +353,8 @@ class ServiceProcess final {
     const auto found = peers_.find(owner);
     if (found == peers_.end()) return;
     auto peer = found->second;
-    if (peer->queued_bytes + json.size() + 1 > 4 * 1024 * 1024) {
+    if (json.size() > kMuonServiceMaxFrameBytes ||
+        peer->queued_bytes + json.size() + 1 > kMuonServiceMaxQueuedBytes) {
       ClosePeer(peer);
       return;
     }
@@ -393,7 +403,7 @@ class ServiceProcess final {
           input.erase(0, end + 1);
           if (!valid) ClosePeer(peer);
         }
-        if (input.size() > 1024 * 1024) ClosePeer(peer);
+        if (input.size() > kMuonServiceMaxFrameBytes) ClosePeer(peer);
         MaybeFinish();
       }
     } catch (const std::exception&) {
@@ -505,6 +515,7 @@ class ServiceProcess final {
   size_t policy_jobs_ = 0;
   std::unique_ptr<MuonNativeServiceHost> native_;
   std::unique_ptr<MuonServiceController> controller_;
+  std::unique_ptr<MuonServiceBroker> broker_;
   std::unique_ptr<MuonServiceProtocol> protocol_;
   std::map<std::string, std::shared_ptr<Peer>> peers_;
   std::deque<std::function<void()>> posted_;

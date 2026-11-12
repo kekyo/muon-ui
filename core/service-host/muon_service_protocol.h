@@ -41,11 +41,24 @@ struct MuonServiceUiPolicy {
   std::function<void(std::string, std::function<void(const std::string&)>)> configure{};
 };
 
+/** Typed communication backend sharing the controller's authenticated references. */
+struct MuonServiceCommunication {
+  /** Dispatches one operation with a JSON payload and exactly one result reply. */
+  std::function<void(const MuonServiceReference&, const std::string&,
+      const std::string&, std::function<void(const std::string&)>)> request;
+  /** Reclaims all calls and subscriptions belonging to one released reference. */
+  std::function<void(const MuonServiceReference&)> release;
+  /** Reclaims a disconnected page's communication state and native work. */
+  std::function<void(const std::string&)> close_owner;
+  /** Rejects new communication and settles pending receives at app shutdown. */
+  std::function<void()> shutdown;
+};
+
 /**
  * Minimal lifetime protocol used by independent desktop service hosts.
  *
  * Requests carry a string requestId and an op (acquire, release, getState,
- * setAutostart, watchState, shutdown). Watches use acquire/next/release operations
+ * setAutostart, watchState, rpc, shutdown). Watches use acquire/next/release operations
  * and coalesce state while their consumer is busy. Watches and setting changes
  * never acquire a client reference. Service and reference identities are strings. Response
  * result/error envelopes use the same requestId. All methods run on the owner
@@ -55,17 +68,19 @@ class MuonServiceProtocol final {
  public:
   /** @param controller Serialized lifetime controller, which must outlive this object.
    *  @param send Writes a JSON response or event to an authenticated live owner.
-   *  @param ui Native UI auto-display settings, absent in lifecycle-only drivers. */
+   *  @param ui Native UI auto-display settings, absent in lifecycle-only drivers.
+   *  @param communication Typed RPC operations, absent in lifecycle-only drivers. */
   MuonServiceProtocol(MuonServiceController& controller,
                        std::function<void(const std::string&, const std::string&)> send,
-                       MuonServiceUiPolicy ui = {});
+                       MuonServiceUiPolicy ui = {},
+                       MuonServiceCommunication communication = {});
   /** @param owner New host-assigned connection identity.
    *  @return True if the identity was newly registered. */
   bool OpenOwner(const std::string& owner);
   /** @param owner Ended connection whose reservations must be reclaimed. */
   void CloseOwner(const std::string& owner);
   /** @param owner Authenticated connection carrying the request.
-   *  @param json One complete JSON frame, at most 1 MiB.
+   *  @param json One complete JSON frame within the shared service frame budget.
    *  @return False for malformed framing/identity or duplicated pending requestId;
    *      the transport must close the connection and call CloseOwner. */
   bool Receive(const std::string& owner, const std::string& json);
@@ -82,4 +97,6 @@ class MuonServiceProtocol final {
   uint64_t observation_id_ = 0;
   MuonServiceUiPolicy ui_;
   std::set<std::pair<std::string, std::string>> ui_pending_;
+  MuonServiceCommunication communication_;
+  std::set<std::pair<std::string, std::string>> rpc_pending_;
 };

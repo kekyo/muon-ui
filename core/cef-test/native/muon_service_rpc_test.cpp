@@ -13,7 +13,7 @@ static void Expect(bool condition, const char* message) {
 
 int main() {
   try {
-    for (const auto* name : {"acquire", "release", "getState", "setAutostart", "watchState"}) {
+    for (const auto* name : {"acquire", "release", "getState", "setAutostart", "watchState", "rpc"}) {
       auto function = MuonFunctionMetadata{};
       function.id = 7;
       function.plugin_namespace = "muon.services";

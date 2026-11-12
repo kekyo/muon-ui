@@ -126,7 +126,90 @@ static void PolicyAndObservation() {
   Require(controller.IsQuiescent(), "policy test must drain its resident generation");
 }
 
+static void Communication() {
+  auto queue = std::deque<std::function<void()>>{};
+  const auto pump = [&] {
+    while (!queue.empty()) {
+      auto task = std::move(queue.front());
+      queue.pop_front();
+      task();
+    }
+  };
+  auto* protocol = static_cast<MuonServiceProtocol*>(nullptr);
+  auto controller = MuonServiceController({{"worker", true, std::nullopt}}, {
+    [](const MuonServiceSnapshot&, auto complete) { complete(""); },
+    [](const MuonServiceSnapshot&, auto complete) { complete(); },
+    [](const std::string&, bool, auto complete) { complete(""); },
+    [&](const MuonServiceEvent& event) { protocol->Notify(event); },
+    [&](std::function<void()> task) { queue.push_back(std::move(task)); }});
+  auto messages = std::map<std::string, std::string>{};
+  auto waiting = std::function<void(const std::string&)>{};
+  auto late = std::function<void(const std::string&)>{};
+  auto released = 0;
+  auto disconnected = 0;
+  auto stopped = 0;
+  auto dispatched = 0;
+  auto wire = MuonServiceProtocol(controller, [&](const std::string& owner, const std::string& json) {
+    const auto doc = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
+        yyjson_read(json.data(), json.size(), 0), &yyjson_doc_free);
+    auto* request = yyjson_obj_get(yyjson_doc_get_root(doc.get()), "requestId");
+    if (request) messages.emplace(owner + ":" + yyjson_get_str(request), json);
+  }, {}, MuonServiceCommunication{
+    [&](const MuonServiceReference& reference, const std::string& action,
+        const std::string& payload, std::function<void(const std::string&)> reply) {
+      Require(reference.owner_id == "page" && controller.IsReady(reference), "RPC must receive its native authenticated owner");
+      ++dispatched;
+      if (action == "describe") reply(payload);
+      else waiting = std::move(reply);
+    },
+    [&](const MuonServiceReference& reference) {
+      ++released;
+      controller.Release(reference);
+      if (waiting) {
+        late = std::move(waiting);
+        waiting = nullptr;
+        late("{\"status\":\"error\",\"code\":\"cancelled\",\"message\":\"released\"}");
+      }
+    },
+    [&](const std::string& owner) { ++disconnected; controller.ReleaseOwner(owner); },
+    [&] { ++stopped; }});
+  protocol = &wire;
+  wire.OpenOwner("page");
+  wire.OpenOwner("intruder");
+  controller.Activate();
+  pump();
+  const auto reference = controller.Acquire("worker", "page").value();
+  pump();
+  const auto fields = "\"serviceId\":\"worker\",\"refId\":\"" + std::to_string(reference.id) +
+      "\",\"generation\":\"" + std::to_string(reference.generation) + "\"";
+  const auto held = "{\"requestId\":\"held\",\"op\":\"rpc\",\"owner\":\"forged\"," + fields +
+      ",\"action\":\"result\",\"payload\":{\"callId\":\"1\"}}";
+  Require(wire.Receive("intruder", held) && dispatched == 0, "RPC must reject another owner's reference before dispatch");
+  Require(wire.Receive("page", held) && waiting && !messages.contains("page:held"), "RPC replies may remain pending");
+  Require(!wire.Receive("page", "{\"requestId\":\"held\",\"op\":\"getState\",\"serviceId\":\"worker\"}"),
+      "RPC correlation participates in all duplicate request checks");
+  auto large = std::string{};
+  for (size_t index = 0; index < 1024 * 1024; ++index) large += "\\u0000";
+  Require(wire.Receive("page", "{\"requestId\":\"large\",\"op\":\"rpc\"," + fields +
+      ",\"action\":\"describe\",\"payload\":{\"value\":\"" + large + "\"}}"), "Encoded 1 MiB values must fit the frame budget");
+  Require(messages.at("page:large").find(large) != std::string::npos, "Large RPC replies must be preserved");
+  wire.Receive("page", "{\"requestId\":\"release\",\"op\":\"release\"," + fields + "}");
+  Require(released == 1 && messages.at("page:held").find("cancelled") != std::string::npos,
+      "Release must settle calls owned by exactly that reference");
+  late("null");
+  const auto remaining = controller.Acquire("worker", "page").value();
+  pump();
+  Require(controller.IsReady(remaining), "Another reference remains usable");
+  wire.CloseOwner("page");
+  late("null");
+  Require(disconnected == 1 && !controller.IsReady(remaining), "Disconnect must reclaim RPC and lifetime owners together");
+  wire.Receive("intruder", "{\"requestId\":\"exit\",\"op\":\"shutdown\"}");
+  pump();
+  Require(stopped == 1 && controller.IsQuiescent(), "Shutdown must close communication admission");
+}
+
 int main() {
+  Communication();
   PolicyAndObservation();
   auto queue = std::deque<std::function<void()>>{};
   const auto pump = [&] {

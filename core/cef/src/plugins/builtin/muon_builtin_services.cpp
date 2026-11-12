@@ -57,6 +57,9 @@ static void SetAutostart(muon_completion_func completion, const char* json, cons
 static void WatchState(muon_completion_func completion, const char* json, const char* owner) {
   cardio::fire_and_forget(Invoke(session, completion, "watchState", json ? json : "", owner ? owner : ""));
 }
+static void Rpc(muon_completion_func completion, const char* json, const char* owner) {
+  cardio::fire_and_forget(Invoke(session, completion, "rpc", json ? json : "", owner ? owner : ""));
+}
 static void ReleaseOwner(const char* owner) { if (session && owner) session->ReleaseOwner(owner); }
 
 static cardio::promise<void> StopAsync(std::shared_ptr<MuonServiceSession> state,
@@ -81,8 +84,10 @@ static const muon_plugin_function_metadata autostart_function = {
     "__setAutostart", reinterpret_cast<muon_native_function>(&SetAutostart), {2, arguments, &string_type}, "setAutostart"};
 static const muon_plugin_function_metadata watch_function = {
     "__watchState", reinterpret_cast<muon_native_function>(&WatchState), {2, arguments, &string_type}, "watchState"};
+static const muon_plugin_function_metadata rpc_function = {
+    "__rpc", reinterpret_cast<muon_native_function>(&Rpc), {2, arguments, &string_type}, "rpc"};
 static const muon_plugin_function_metadata* const functions[] = {
-    &acquire_function, &release_function, &state_function, &autostart_function, &watch_function, nullptr};
+    &acquire_function, &release_function, &state_function, &autostart_function, &watch_function, &rpc_function, nullptr};
 static const muon_plugin_namespace service_namespace{"muon.services", kMuonServiceSetupScript, functions};
 static const muon_plugin_namespace* const namespaces[] = {&service_namespace, nullptr};
 static const muon_plugin_metadata metadata{namespaces, &Stop, &ReleaseOwner};

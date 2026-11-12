@@ -72,6 +72,7 @@ describe("public Android builds", () => {
     expect(buildAndroid.mock.calls[0]![0].pluginAccess.internalAllow).toEqual([
       "muon.services.acquire",
       "muon.services.release",
+      "muon.services.rpc",
     ]);
   });
   it("validates service declarations before invoking the APK builder", async () => {

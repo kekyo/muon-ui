@@ -16,6 +16,7 @@ struct Channel {
   bool closed = false;
   bool fail_write = false;
   int connects = 0;
+  std::function<void(const std::string&)> on_sent;
 
   MuonServiceTransport Transport() {
     return {
@@ -26,6 +27,7 @@ struct Channel {
         [this](std::string frame) -> cardio::promise<void> {
           if (fail_write) throw std::runtime_error("write failed");
           sent.push_back(std::move(frame));
+          if (on_sent) on_sent(sent.back());
           if (written) {
             auto current = std::move(*written);
             written.reset();
@@ -64,6 +66,33 @@ static cardio::promise<std::string> Failure(cardio::promise<std::string> pending
 }
 
 static cardio::promise<void> Tests(bool& passed) {
+  {
+    Channel channel;
+    MuonServiceClient client([&](cardio::cancellation) -> cardio::promise<MuonServiceTransport> {
+      co_return channel.Transport();
+    });
+    auto encoded = std::string{};
+    encoded.reserve(6 * 1024 * 1024);
+    for (size_t index = 0; index < 1024 * 1024; ++index) encoded += "\\u0000";
+    channel.on_sent = [&](const std::string& frame) {
+      assert(frame.find("forged") == std::string::npos);
+      assert(frame.find("\"op\":\"rpc\"") != std::string::npos);
+      assert(frame.find("\"refId\":\"9007199254740993\"") != std::string::npos);
+      if (channel.sent.size() == 1) {
+        assert(frame.find(encoded) != std::string::npos);
+        channel.Emit("{\"requestId\":\"1\",\"result\":{\"callId\":\"1\"}}\n");
+      } else {
+        channel.Emit("{\"requestId\":\"2\",\"result\":{\"status\":\"ok\",\"value\":\"" + encoded + "\"}}\n");
+      }
+    };
+    const auto reference = std::string("\"serviceId\":\"worker\",\"refId\":\"9007199254740993\",\"generation\":\"7\",\"owner\":\"forged\",");
+    assert(co_await client.Call("rpc", "{" + reference +
+        "\"action\":\"begin\",\"payload\":{\"method\":\"echo\",\"arguments\":[\"" + encoded + "\"]}}") == "{\"callId\":\"1\"}");
+    const auto result = co_await client.Call("rpc", "{" + reference +
+        "\"action\":\"result\",\"payload\":{\"callId\":\"1\"}}");
+    assert(result == "{\"status\":\"ok\",\"value\":\"" + encoded + "\"}");
+    co_await client.Close();
+  }
   {
     Channel channel;
     MuonServiceClient client([&](cardio::cancellation) -> cardio::promise<MuonServiceTransport> {

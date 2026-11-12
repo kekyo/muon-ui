@@ -13,7 +13,7 @@ LIFECYCLE := $(COMMON)/services/muon_service_lifecycle.cpp $(COMMON)/services/mu
 CARDIO_PC := $(abspath ../../sdk/native/linux-amd64/lib/pkgconfig)
 CARDIO_CFLAGS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --cflags muon-plugin-cardio)
 CARDIO_LIBS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --libs muon-plugin-cardio)
-NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/services/muon_service_value.cpp $(COMMON)/services/muon_service_interface.cpp $(COMMON)/muon_filesystem.cpp
+NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/services/muon_service_value.cpp $(COMMON)/services/muon_service_interface.cpp $(COMMON)/services/muon_service_broker.cpp $(COMMON)/muon_filesystem.cpp
 LOGIN := muon_service_login.cpp muon_service_startup.cpp ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp ../cef/src/muon_string_helpers.cpp
 
 .PHONY: all test clean windows-amd64 windows-i686

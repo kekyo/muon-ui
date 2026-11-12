@@ -3,6 +3,11 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { createServiceConnection } from '../../../sdk/src/service-connection.ts';
+import type { ServiceConnection } from '../../../sdk/src/service-connection.ts';
+import { parseServiceInterface } from '../../../sdk/src/service-interface.ts';
+import type { ServiceInterface } from '../../../sdk/src/service-interface.ts';
+
 /** A copied service observation that does not keep its runtime alive. */
 export interface MuonServiceState {
   /** Logical identity declared in muon.json. */
@@ -29,8 +34,14 @@ export interface MuonServiceHandle {
   readonly id: string;
   /** Decimal generation identity, preserved without conversion to a JS number. */
   readonly generation: string;
+  /** Validated runtime method and event definitions for this generation. */
+  readonly interface: ServiceInterface;
+  /** Invokes a declared method; callbacks and cancellation belong to this call. */
+  readonly call: ServiceConnection['call'];
+  /** Creates a FIFO event subscription owned by this reference. */
+  readonly subscribe: ServiceConnection['subscribe'];
   /**
-   * Releases only this reference, leaving other pages and resident policy intact.
+   * Cancels this handle's calls and subscriptions and releases its reference.
    * @returns Completion of reference release; repeated calls share this promise.
    * @remarks Page destruction also reclaims references through the native owner.
    * Releasing the final reference requests shutdown but does not await disposal.
@@ -92,7 +103,7 @@ export interface MuonServicesApi {
 }
 
 /** Internal native operation names, interpreted with the authenticated page owner. */
-export type MuonServiceOperation = 'acquire' | 'release' | 'getState' | 'setAutostart' | 'watchState';
+export type MuonServiceOperation = 'acquire' | 'release' | 'getState' | 'setAutostart' | 'watchState' | 'rpc';
 
 const checkedId = (id: string): string => {
   if (typeof id !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(id))
@@ -150,18 +161,40 @@ export const createMuonServicesApi = (
     )
       throw new Error('Invalid native service reference');
     const generation = value.generation;
-    const reference = JSON.stringify({
+    const identity = {
       serviceId,
       refId: value.refId,
       generation,
-    });
+    };
+    const reference = JSON.stringify(identity);
+    const rpc = async (action: string, payload: Readonly<Record<string, unknown>>): Promise<unknown> => {
+      const json = await call('rpc', JSON.stringify({ ...identity, action, payload }));
+      if (typeof json !== 'string') throw new Error('Invalid native service response');
+      return JSON.parse(json);
+    };
+    let definition: ServiceInterface;
+    try {
+      definition = parseServiceInterface(await rpc('describe', {}));
+    } catch (error) {
+      // A successful acquisition must not leak when its interface is invalid.
+      try { await call('release', reference); }
+      catch { /* Native owner destruction also reclaims a disconnected reference. */ }
+      throw error;
+    }
+    const connection = createServiceConnection(definition, rpc);
     let releasing: Promise<void> | undefined;
     return Object.freeze({
       id: serviceId,
       generation,
+      interface: definition,
+      call: connection.call,
+      subscribe: connection.subscribe,
       release: () => {
         releasing ??= (async () => {
-          await call('release', reference);
+          // Stop local admission before releasing remotely. Native release also
+          // settles pending receives, including calls still waiting for an ACK.
+          const closed = connection.close();
+          await Promise.all([closed, call('release', reference)]);
         })();
         return releasing;
       },

@@ -15,7 +15,7 @@ export { createMuonServicesApi };
  * @param isAllowed - Checks public function permissions for this page.
  * @returns After available operations have been installed.
  * @remarks The browser process supplies the authenticated owner argument.
- * Acquiring a handle also grants permission to release that handle.
+ * Acquisition grants communication and release only for the owned handle.
  */
 export const installMuonCefServicesApi = (
   namespace: Record<string, unknown>,
@@ -31,6 +31,7 @@ export const installMuonCefServicesApi = (
     'getState',
     'setAutostart',
     'watchState',
+    'rpc',
   ] as const) {
     const value = namespace['__' + name];
     if (typeof value === 'function')
@@ -41,7 +42,7 @@ export const installMuonCefServicesApi = (
   }
   const api = createMuonServicesApi(async (name, json) => {
     const call = native.get(name);
-    if (!call || !isAllowed(name === 'release' ? 'acquire' : name))
+    if (!call || !isAllowed(name === 'release' || name === 'rpc' ? 'acquire' : name))
       throw new Error('Service function is not allowed: ' + name);
     return await call(json, '');
   });

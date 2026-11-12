@@ -143,6 +143,7 @@ it.each(["simple", "validate"] as const)(
       "muon.services.getState",
       "muon.services.setAutostart",
       "muon.services.watchState",
+      "muon.services.rpc",
       "muon.environments.getAutostart",
       "muon.environments.setAutostart",
       "muon.browser.close",

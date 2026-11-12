@@ -465,3 +465,17 @@ void MuonNativeServiceHost::SetEventSink(MuonServiceEventSink sink) { impl_->eve
 bool MuonNativeServiceHost::IsIdle() const {
   return impl_->entries.empty() && impl_->pending_tasks == 0;
 }
+
+MuonServiceExecution MuonNativeServiceHost::Execution() {
+  return {
+    std::bind_front(&MuonNativeServiceHost::Interface, this),
+    [this](const std::string& id, uint64_t generation) { return InterfaceJson(id, generation); },
+    [this](const std::string& id, uint64_t generation, const std::string& method,
+        std::vector<MuonServiceValue> arguments, MuonServiceCallbackHandler callback,
+        MuonServiceCallCompletion complete) {
+      return Invoke(id, generation, method, std::move(arguments), std::move(callback), std::move(complete));
+    },
+    [this](const std::string& id, uint64_t generation, uint64_t call) { Cancel(id, generation, call); },
+    [this](MuonServiceEventSink sink) { SetEventSink(std::move(sink)); }
+  };
+}

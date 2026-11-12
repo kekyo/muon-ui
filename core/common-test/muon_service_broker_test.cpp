@@ -5,6 +5,7 @@
  */
 
 #include "services/muon_service_broker.h"
+#include "services/muon_native_service_host.h"
 #include <yyjson.h>
 
 #include <cassert>
@@ -127,7 +128,7 @@ int main() {
     },
     [](const std::string&, bool, std::function<void(const std::string&)> complete) { complete({}); },
     [](const MuonServiceEvent&) {}, post});
-  auto broker = MuonServiceBroker(controller, host);
+  auto broker = MuonServiceBroker(controller, host.Execution());
   controller.Activate();
   pump();
   const auto a = controller.Acquire("worker", "page-a").value();

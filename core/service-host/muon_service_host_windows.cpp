@@ -216,7 +216,7 @@ class ServiceProcess final {
             if (event.kind == MuonServiceEventKind::Changed)
               std::cout << SerializeMuonServiceSnapshot(event.snapshot) << std::endl;
           }, post});
-      broker_ = std::make_unique<MuonServiceBroker>(*controller_, *native_);
+      broker_ = std::make_unique<MuonServiceBroker>(*controller_, native_->Execution());
       protocol_ = std::make_unique<MuonServiceProtocol>(*controller_,
           [this](const std::string& owner, const std::string& json) { Send(owner, json); },
           MuonServiceUiPolicy{[this] { return login_->UiEnabled(); },

@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "services/muon_native_service_host.h"
+#include "services/muon_service_execution.h"
 #include "services/muon_service_controller.h"
 
 /** Private owner-bound calls, callback requests, and event subscriptions. */
@@ -22,7 +22,7 @@ class MuonServiceBroker final {
  public:
   /** @param controller Authenticated reference registry, outliving this broker.
    *  @param host Runtime dispatcher and event source, outliving this broker. */
-  MuonServiceBroker(MuonServiceController& controller, MuonNativeServiceHost& host);
+  MuonServiceBroker(MuonServiceController& controller, MuonServiceExecution host);
   /** Cancels remaining RPC work and detaches the event sink. */
   ~MuonServiceBroker();
   /** Owner-bound communication state cannot be copied. */

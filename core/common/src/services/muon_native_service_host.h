@@ -7,7 +7,7 @@
 #pragma once
 
 #include "muon_service_api.h"
-#include "services/muon_service_interface.h"
+#include "services/muon_service_execution.h"
 
 #include <functional>
 #include <memory>
@@ -46,25 +46,6 @@ struct MuonNativeServicePlatform {
 
 /** Private library and instance ownership. */
 struct MuonNativeServiceHostImpl;
-
-/** Copied invocation result; success has a value, failure has a nonempty code. */
-struct MuonServiceResult {
-  std::optional<MuonServiceValue> value; /**< Typed success value, including void. */
-  std::string code; /**< Empty on success; common or declared application code. */
-  std::string message; /**< Copied UTF-8 diagnostic on failure. */
-};
-
-/** One terminal result, delivered on the owner dispatcher. */
-using MuonServiceCallCompletion = std::function<void(MuonServiceResult)>;
-/**
- * Dispatches an invocation-owned callback with copied arguments.
- * The completion may outlive cancellation; late completions are ignored.
- */
-using MuonServiceCallbackHandler = std::function<void(uint64_t,
-    const MuonServiceSignature&, std::vector<MuonServiceValue>, MuonServiceCallCompletion)>;
-/** Receives a copied event scoped to one logical service generation. */
-using MuonServiceEventSink = std::function<void(const std::string&, uint64_t,
-    const std::string&, const MuonServiceValue&)>;
 
 /**
  * Executes the native service ABI on one externally owned dispatcher.
@@ -149,6 +130,9 @@ class MuonNativeServiceHost final {
 
   /** @param sink Event receiver on the owner dispatcher; empty detaches it. */
   void SetEventSink(MuonServiceEventSink sink);
+
+  /** @returns Borrowed operations for a broker; this host must outlive them. */
+  MuonServiceExecution Execution();
 
   /** @return True when every instance and host completion has settled. */
   bool IsIdle() const;

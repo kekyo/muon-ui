@@ -214,7 +214,7 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
       },
       [state](const MuonServiceEvent& event) { state->Notify(event); },
       [state](std::function<void()> task) { state->Post(std::move(task)); }});
-  runtime->broker = std::make_unique<MuonServiceBroker>(*runtime->controller, *runtime->host);
+  runtime->broker = std::make_unique<MuonServiceBroker>(*runtime->controller, runtime->host->Execution());
   return reinterpret_cast<jlong>(runtime.release());
 }
 

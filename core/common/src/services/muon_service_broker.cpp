@@ -62,7 +62,7 @@ struct BrokerReference {
 
 struct MuonServiceBrokerImpl {
   MuonServiceController& controller;
-  MuonNativeServiceHost& host;
+  MuonServiceExecution host;
   std::map<uint64_t, std::shared_ptr<BrokerReference>> references;
   size_t calls = 0;
   size_t subscriptions = 0;
@@ -279,7 +279,7 @@ static void DropReference(const std::shared_ptr<MuonServiceBrokerImpl>& impl,
     if (auto waiting = Take(call->result_wait)) replies.emplace_back(std::move(waiting), Error("cancelled", "Service reference was released"));
     if (auto waiting = Take(call->callback_wait)) replies.emplace_back(std::move(waiting), kDone);
     EraseCall(impl, reference, call);
-    impl->host.Cancel(reference->identity.service_id, reference->identity.generation, call->native_id);
+    impl->host.cancel(reference->identity.service_id, reference->identity.generation, call->native_id);
   }
   for (const auto& subscription : subscriptions) {
     if (auto waiting = Take(subscription->wait)) replies.emplace_back(std::move(waiting), kDone);
@@ -288,10 +288,10 @@ static void DropReference(const std::shared_ptr<MuonServiceBrokerImpl>& impl,
   for (const auto& [reply, json] : replies) reply(json);
 }
 
-MuonServiceBroker::MuonServiceBroker(MuonServiceController& controller, MuonNativeServiceHost& host)
-    : impl_(std::make_shared<MuonServiceBrokerImpl>(MuonServiceBrokerImpl{controller, host, {}, 0, 0, 0, false})) {
+MuonServiceBroker::MuonServiceBroker(MuonServiceController& controller, MuonServiceExecution host)
+    : impl_(std::make_shared<MuonServiceBrokerImpl>(MuonServiceBrokerImpl{controller, std::move(host), {}, 0, 0, 0, false})) {
   const auto weak = std::weak_ptr<MuonServiceBrokerImpl>(impl_);
-  host.SetEventSink([weak](const std::string& id, uint64_t generation,
+  impl_->host.set_event_sink([weak](const std::string& id, uint64_t generation,
       const std::string& name, const MuonServiceValue& value) {
     if (const auto impl = weak.lock()) Event(impl, id, generation, name, value);
   });
@@ -299,7 +299,7 @@ MuonServiceBroker::MuonServiceBroker(MuonServiceController& controller, MuonNati
 
 MuonServiceBroker::~MuonServiceBroker() {
   Shutdown();
-  impl_->host.SetEventSink({});
+  impl_->host.set_event_sink({});
 }
 
 void MuonServiceBroker::Release(const MuonServiceReference& reference) {
@@ -330,7 +330,7 @@ static void Begin(const std::shared_ptr<MuonServiceBrokerImpl>& impl,
       "Service call capacity exceeded");
   const auto method = Text(yyjson_obj_get(root, "method"));
   const auto& identity = reference->identity;
-  const auto& interface = impl->host.Interface(identity.service_id, identity.generation);
+  const auto& interface = impl->host.interface(identity.service_id, identity.generation);
   const auto found = interface.methods.find(method);
   Require(found != interface.methods.end(), "Unknown service method");
   auto arguments = DecodeMuonServiceArguments(found->second.signature.parameters,
@@ -344,7 +344,7 @@ static void Begin(const std::shared_ptr<MuonServiceBrokerImpl>& impl,
   const auto weak_impl = std::weak_ptr<MuonServiceBrokerImpl>(impl);
   const auto weak_call = std::weak_ptr<BrokerCall>(call);
   try {
-    call->native_id = impl->host.Invoke(identity.service_id, identity.generation, method, std::move(arguments),
+    call->native_id = impl->host.invoke(identity.service_id, identity.generation, method, std::move(arguments),
       [weak_impl, weak_call](uint64_t token, const MuonServiceSignature& signature,
           std::vector<MuonServiceValue> values, MuonServiceCallCompletion complete) {
         const auto owner = weak_impl.lock();
@@ -402,7 +402,7 @@ void MuonServiceBroker::Request(const MuonServiceReference& identity, const std:
   auto* root = yyjson_doc_get_root(doc.get());
   Require(yyjson_is_obj(root), "Service RPC payload must be an object");
   if (action == "describe") {
-    const auto schema = impl->host.InterfaceJson(identity.service_id, identity.generation);
+    const auto schema = impl->host.interface_json(identity.service_id, identity.generation);
     const auto definition = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
         yyjson_read(schema.data(), schema.size(), 0), &yyjson_doc_free);
     // Author-formatted metadata can contain line breaks. Keep every response a
@@ -429,7 +429,7 @@ void MuonServiceBroker::Request(const MuonServiceReference& identity, const std:
         reply(result);
       } else call->result_wait = std::move(reply);
     } else if (action == "cancel") {
-      impl->host.Cancel(identity.service_id, identity.generation, call->native_id);
+      impl->host.cancel(identity.service_id, identity.generation, call->native_id);
       reply("null");
     } else if (action == "callbackNext") NextCallback(impl, call, std::move(reply));
     else CallbackResult(impl, call, root, reply);
@@ -439,7 +439,7 @@ void MuonServiceBroker::Request(const MuonServiceReference& identity, const std:
     Require(impl->subscriptions < 256 && reference->next_subscription != std::numeric_limits<uint64_t>::max(),
         "Service subscription capacity exceeded");
     const auto name = Text(yyjson_obj_get(root, "event"));
-    const auto& interface = impl->host.Interface(identity.service_id, identity.generation);
+    const auto& interface = impl->host.interface(identity.service_id, identity.generation);
     const auto event = interface.events.find(name);
     Require(event != interface.events.end(), "Unknown service event");
     const auto subscription = std::make_shared<BrokerSubscription>();

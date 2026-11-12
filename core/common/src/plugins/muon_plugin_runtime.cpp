@@ -341,6 +341,7 @@ struct MuonPluginRuntimeImpl {
   void RequestTrafficDrain(tra_ffic_task_queue* queue);
   void DrainTrafficTasks();
   bool HasTrafficTasks();
+  void CheckContextDrains();
 
   std::filesystem::path plugin_directory;
   std::vector<MuonPluginRuntimeLoadEntry> plugins;
@@ -394,6 +395,7 @@ struct MuonPluginRuntimeImpl {
   std::map<std::string, std::map<std::string, uint32_t>>
       proxy_leases_by_owner;
   std::map<std::string, MuonFunctionOwner> active_function_owners;
+  std::map<std::string, std::vector<MuonPluginRuntime::StopCompletion>> context_drains;
 
   std::map<muon_shared_buffer_handle,
            std::unique_ptr<muon_shared_buffer>>
@@ -615,6 +617,36 @@ void MuonPluginRuntimeImpl::DrainTrafficTasks() {
   }
   if (HasTrafficTasks()) {
     RequestTrafficDrain(&traffic_queue);
+  } else {
+    CheckContextDrains();
+  }
+}
+
+void MuonPluginRuntimeImpl::CheckContextDrains() {
+  if (context_drains.empty() || HasTrafficTasks()) return;
+  std::vector<MuonPluginRuntime::StopCompletion> completions;
+  for (auto it = context_drains.begin(); it != context_drains.end();) {
+    const auto& owner = it->first;
+    const auto counts = function_wrapper_lifecycle.GetOwnerCounts(owner);
+    bool pending = active_function_owners.contains(owner) || counts.renderer_source_count ||
+        counts.plugin_proxy_lease_count || proxy_leases_by_owner.contains(owner);
+    for (const auto* source : live_renderer_function_sources) {
+      pending |= source && source->owner_id == owner;
+    }
+    for (const auto& [id, call] : pending_renderer_function_calls) {
+      (void)id;
+      pending |= call.source && call.source->owner_id == owner;
+    }
+    if (pending) { ++it; continue; }
+    for (auto& complete : it->second) completions.push_back(std::move(complete));
+    it = context_drains.erase(it);
+  }
+  if (!completions.empty()) {
+    // Never notify within a traffic/FFI finalizer stack: it may still contain
+    // native plugin code and callers are allowed to unload after this barrier.
+    (void)services.post_owner_task([completions = std::move(completions)] {
+      for (const auto& complete : completions) complete();
+    });
   }
 }
 
@@ -3575,6 +3607,15 @@ void MuonPluginRuntime::ReleaseFunctionContext(
   ReleaseMuonFunctionOwner(
       impl_.get(), CreateMuonFunctionOwnerId(release.owner),
       release.owner.context_id);
+  impl_->CheckContextDrains();
+}
+
+void MuonPluginRuntime::DrainFunctionContext(const MuonRpcOwner& owner,
+                                            StopCompletion completion) {
+  if (!completion || !IsValidMuonRpcOwner(owner)) return;
+  impl_->context_drains[CreateMuonFunctionOwnerId(owner)].push_back(std::move(completion));
+  impl_->DrainTrafficTasks();
+  impl_->CheckContextDrains();
 }
 
 void MuonPluginRuntime::ReleaseFunctionFrame(int browser_id,

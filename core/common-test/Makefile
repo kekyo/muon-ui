@@ -23,6 +23,25 @@ QUICKJS_SOURCE_DIR := $(COMMON)/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
 QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
 TESTS += $(OUT)/quickjs-engine $(OUT)/quickjs-service $(OUT)/quickjs-service-sdk
 TESTS += $(OUT)/service-execution-router
+TESTS += $(OUT)/service-plugin-pool
+PLUGIN_RUNTIME_SOURCES := $(COMMON)/src/plugins/muon_plugin_runtime.cpp \
+  $(COMMON)/src/plugins/muon_plugin_metadata.cpp $(COMMON)/src/plugins/muon_traffic_type_metadata.cpp \
+  $(COMMON)/src/plugins/muon_function_wrapper_lifecycle.cpp \
+  $(COMMON)/src/muon_filesystem.cpp $(COMMON)/src/muon_sha256.cpp
+# This portable driver runs before SDK staging. cardio's documented header-only
+# profile avoids depending on generated native packages; production uses its
+# existing process-shared cardio target.
+PLUGIN_DRIVER_FLAGS := -I../../deps/cardio/include -I../../deps/tra-ffic/include \
+  -I../../deps/sha2 -DCARDIO_WITH_LINUX_IO_URING=0 $(shell pkg-config --cflags libffi)
+
+$(OUT)/sha2.o: ../../deps/sha2/sha2.c | $(OUT)
+	$(CC) -std=c99 -D_DEFAULT_SOURCE -I../../deps/sha2 -c $< -o $@
+
+$(OUT)/service-native-plugin-fixture.so: muon_service_native_plugin_fixture.c ../../sdk/include/muon_plugin_api.h | $(OUT)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared $< -o $@
+
+$(OUT)/service-plugin-pool: muon_service_plugin_pool_test.cpp $(COMMON)/src/services/muon_service_plugin_pool.cpp $(COMMON)/src/services/muon_quickjs_plugin_bindings.cpp $(COMMON)/src/services/muon_quickjs_service_plugins.cpp $(COMMON)/src/services/muon_quickjs_service_host.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_module.cpp $(PLUGIN_RUNTIME_SOURCES) $(RPC_SOURCES) $(SERVICE_VALUES) $(OUT)/sha2.o $(OUT)/yyjson.o $(QUICKJS_OBJECTS) $(OUT)/service-native-plugin-fixture.so | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PLUGIN_DRIVER_FLAGS) -DMUON_PLUGIN_FIXTURE_PATH='"$(abspath $(OUT)/service-native-plugin-fixture.so)"' -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) $(shell pkg-config --libs libffi) -ldl -o $@
 
 .PHONY: all test clean service-driver quickjs-source
 all: $(TESTS)

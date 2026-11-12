@@ -50,6 +50,7 @@ public final class MuonServiceDriverActivity extends Activity {
                 request("getState", "alpha.v1-test", alphaState -> request("getState", "beta", betaState -> {
                     try {
                         JSONObject result = new JSONObject().put("uiPid", Process.myPid())
+                                .put("taskId", getTaskId())
                                 .put("alphaGeneration", alpha.getString("generation"))
                                 .put("betaGeneration", beta.getString("generation"))
                                 .put("alphaClientReferences", alphaState.getInt("clientReferences"))
@@ -61,6 +62,11 @@ public final class MuonServiceDriverActivity extends Activity {
                         release.setContentDescription("release-beta");
                         release.setOnClickListener(view -> releaseBeta(beta));
                         layout.addView(release);
+                        Button remove = new Button(this);
+                        remove.setText("Remove task from Recents");
+                        remove.setContentDescription("remove-service-task");
+                        remove.setOnClickListener(view -> finishAndRemoveTask());
+                        layout.addView(remove);
                     } catch (JSONException error) { fail(error.toString()); }
                 }))));
     }

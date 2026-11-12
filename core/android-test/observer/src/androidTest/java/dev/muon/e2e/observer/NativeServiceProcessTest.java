@@ -267,6 +267,38 @@ public final class NativeServiceProcessTest {
     }
 
     @Test
+    public void keepsResidentWorkAfterRemovingTheUiTaskFromRecents() throws Exception {
+        JSONObject before = startDriver();
+        try (Socket alpha = connect("alpha"); Socket beta = connect("beta")) {
+            JSONObject first = challenge(alpha);
+            challenge(beta);
+            UiObject2 remove = device.findObject(By.desc("remove-service-task"));
+            assertNotNull("The driver must remove its root task, not only finish an Activity", remove);
+            Pattern task = Pattern.compile("(?m)^\\s*\\* Recent #.* #" + before.getInt("taskId")
+                    + "(?: |\\})");
+            assertTrue("The task must be present before it is removed",
+                    task.matcher(device.executeShellCommand("dumpsys activity recents")).find());
+            remove.click();
+            assertTrue(device.wait(Until.gone(By.pkg(APPLICATION)), 60000));
+            assertEquals("Removing the task must release its page-owned service", -1,
+                    beta.getInputStream().read());
+            String recent = device.executeShellCommand("dumpsys activity recents");
+            assertFalse("The removed task must no longer appear in Recents",
+                    task.matcher(recent).find());
+            JSONObject after = challenge(alpha);
+            assertEquals(first.getInt("pid"), after.getInt("pid"));
+            assertEquals(first.getString("generation"), after.getString("generation"));
+            assertTrue(after.getLong("count") > first.getLong("count"));
+            JSONObject next = startDriver();
+            assertTrue(before.getInt("taskId") != next.getInt("taskId"));
+            assertEquals(before.getString("alphaGeneration"), next.getString("alphaGeneration"));
+            assertTrue(next.getLong("betaGeneration") > before.getLong("betaGeneration"));
+            assertEquals(1, next.getInt("alphaClientReferences"));
+            assertEquals(1, next.getInt("betaClientReferences"));
+        }
+    }
+
+    @Test
     public void keepsResidentNativeWorkAfterUiProcessDeathAndReconnects() throws Exception {
         device.executeShellCommand("am force-stop " + APPLICATION);
         JSONObject before = startDriver();

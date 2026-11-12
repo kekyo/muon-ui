@@ -5,7 +5,9 @@
  */
 
 #include "quickjs/muon_quickjs_engine.h"
+#include "quickjs/muon_quickjs_module.h"
 #include <cassert>
+#include <cstring>
 #include <iostream>
 
 static std::string Text(JSContext* context, JSValue value) {
@@ -28,9 +30,35 @@ static bool Fails(MuonQuickJsEngine& engine, const std::string& source) {
   }
 }
 
+static JSModuleDef* Load(JSContext* context, const char* name, void*) {
+  if (std::strcmp(name, "muon:fixture") != 0) {
+    JS_ThrowReferenceError(context, "Unknown host module: %s", name);
+    return nullptr;
+  }
+  const auto module = JS_NewObject(context);
+  JS_SetPropertyStr(context, module, "answer", JS_NewBigUint64(context, UINT64_MAX));
+  return CreateMuonQuickJsObjectModule(context, name, module);
+}
+
 int main() {
   const auto limits = MuonQuickJsLimits{64 * 1024 * 1024, 1024 * 1024,
       std::chrono::milliseconds(100)};
+  {
+    MuonQuickJsEngine engine(limits);
+    JS_SetModuleLoaderFunc(engine.Runtime(), nullptr, Load, nullptr);
+    const auto module = engine.Evaluate(
+        "import api, { answer } from 'muon:fixture'; globalThis.same = api.answer === answer;",
+        "modules.mjs", JS_EVAL_TYPE_MODULE);
+    while (engine.RunJobs(16)) {}
+    assert(JS_PromiseState(engine.Context(), module) == JS_PROMISE_FULFILLED);
+    JS_FreeValue(engine.Context(), module);
+    assert(Text(engine.Context(), engine.Evaluate("same", "probe.js", JS_EVAL_TYPE_GLOBAL)) == "true");
+    try {
+      JS_FreeValue(engine.Context(), engine.Evaluate(
+          "import 'muon:missing';", "missing.mjs", JS_EVAL_TYPE_MODULE));
+      assert(false);
+    } catch (const std::runtime_error&) {}
+  }
   {
     MuonQuickJsEngine first(limits);
     MuonQuickJsEngine second(limits);

@@ -50,6 +50,10 @@ target_link_libraries(quickjs_android PUBLIC
 
 add_library(muon_javascript_runtime SHARED
   muon_javascript_runtime_jni.cpp
+  "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_module.cpp"
+  )
+target_include_directories(muon_javascript_runtime PRIVATE
+  "${MUON_COMMON_ROOT}/src"
   )
 target_compile_features(muon_javascript_runtime PRIVATE cxx_std_20)
 target_compile_options(muon_javascript_runtime PRIVATE

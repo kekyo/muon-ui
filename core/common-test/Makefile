@@ -40,7 +40,7 @@ $(OUT)/quickjs:
 $(QUICKJS_OBJECTS): $(OUT)/quickjs/%.o: $(COMMON)/quickjs-source.json $(COMMON)/prepare-quickjs-source.mjs Makefile | quickjs-source $(OUT)/quickjs
 	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
 
-$(OUT)/quickjs-engine: muon_quickjs_engine_test.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(QUICKJS_OBJECTS)
+$(OUT)/quickjs-engine: muon_quickjs_engine_test.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(COMMON)/src/quickjs/muon_quickjs_module.cpp $(COMMON)/src/quickjs/muon_quickjs_module.h $(QUICKJS_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) -lm -o $@
 
 $(OUT)/rpc: muon_rpc_test.cpp $(RPC_SOURCES) $(COMMON)/src/plugins/muon_plugin_metadata.cpp | $(OUT)

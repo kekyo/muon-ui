@@ -14,6 +14,7 @@
 
 struct MuonQuickJsEngineImpl {
   MuonQuickJsLimits limits;
+  std::function<bool()> should_interrupt;
   const std::thread::id owner = std::this_thread::get_id();
   JSRuntime* runtime = nullptr;
   JSContext* context = nullptr;
@@ -21,7 +22,8 @@ struct MuonQuickJsEngineImpl {
   size_t depth = 0;
   std::chrono::steady_clock::time_point deadline;
 
-  explicit MuonQuickJsEngineImpl(MuonQuickJsLimits value) : limits(value) {}
+  explicit MuonQuickJsEngineImpl(MuonQuickJsLimits value, std::function<bool()> stop)
+      : limits(value), should_interrupt(std::move(stop)) {}
   ~MuonQuickJsEngineImpl() {
     assert(owner == std::this_thread::get_id());
     if (context) JS_FreeContext(context);
@@ -47,6 +49,12 @@ struct Execution {
 
 static int Interrupt(JSRuntime*, void* opaque) {
   const auto& engine = *static_cast<MuonQuickJsEngineImpl*>(opaque);
+  try {
+    if (engine.should_interrupt && engine.should_interrupt()) return 1;
+  } catch (...) {
+    // A host predicate must never unwind through the C engine.
+    return 1;
+  }
   return engine.interrupted.load(std::memory_order_relaxed) ||
       (engine.depth && std::chrono::steady_clock::now() >= engine.deadline);
 }
@@ -62,8 +70,7 @@ static std::string String(JSContext* context, JSValueConst value) {
   return result;
 }
 
-static std::string Exception(JSContext* context) {
-  const auto exception = JS_GetException(context);
+static std::string DescribeException(JSContext* context, JSValueConst exception) {
   auto result = String(context, exception);
   if (JS_IsError(context, exception)) {
     // Error properties may be getters; the surrounding execution deadline
@@ -81,12 +88,19 @@ static std::string Exception(JSContext* context) {
       JS_FreeValue(context, value);
     }
   }
-  JS_FreeValue(context, exception);
   return result.empty() ? "QuickJS execution failed" : result;
 }
 
-MuonQuickJsEngine::MuonQuickJsEngine(MuonQuickJsLimits limits)
-    : impl_(std::make_unique<MuonQuickJsEngineImpl>(limits)) {
+static std::string Exception(JSContext* context) {
+  const auto error = JS_GetException(context);
+  const auto result = DescribeException(context, error);
+  JS_FreeValue(context, error);
+  return result;
+}
+
+MuonQuickJsEngine::MuonQuickJsEngine(MuonQuickJsLimits limits,
+    std::function<bool()> should_interrupt)
+    : impl_(std::make_unique<MuonQuickJsEngineImpl>(limits, std::move(should_interrupt))) {
   if (!limits.memory_bytes || !limits.stack_bytes || limits.execution_time.count() <= 0)
     throw std::invalid_argument("QuickJS resource limits must be positive");
   impl_->runtime = JS_NewRuntime();
@@ -134,6 +148,11 @@ bool MuonQuickJsEngine::RunJobs(size_t maximum_jobs) {
       throw std::runtime_error(Exception(context ? context : impl_->context));
   }
   return JS_IsJobPending(impl_->runtime);
+}
+
+std::string MuonQuickJsEngine::ExceptionText(JSValueConst error) {
+  Execution scope(*impl_);
+  return DescribeException(impl_->context, error);
 }
 
 void MuonQuickJsEngine::RequestInterrupt() { impl_->interrupted.store(true, std::memory_order_relaxed); }

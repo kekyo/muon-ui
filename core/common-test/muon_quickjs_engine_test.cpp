@@ -6,6 +6,7 @@
 
 #include "quickjs/muon_quickjs_engine.h"
 #include "quickjs/muon_quickjs_module.h"
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <iostream>
@@ -60,6 +61,13 @@ int main() {
     } catch (const std::runtime_error&) {}
   }
   {
+    std::atomic<bool> stopped{false};
+    MuonQuickJsEngine engine(limits, [&stopped]() { return stopped.load(); });
+    assert(Text(engine.Context(), engine.Evaluate("21 * 2", "live.js", JS_EVAL_TYPE_GLOBAL)) == "42");
+    stopped.store(true);
+    assert(Fails(engine, "for (;;) {}"));
+  }
+  {
     MuonQuickJsEngine first(limits);
     MuonQuickJsEngine second(limits);
     const auto module = first.Evaluate(
@@ -98,6 +106,11 @@ int main() {
   }
   {
     MuonQuickJsEngine engine(limits);
+    const auto error = engine.Evaluate(
+        "Object.defineProperty(new Error(), 'message', {get() { for (;;) {} }})",
+        "host-error.js", JS_EVAL_TYPE_GLOBAL);
+    assert(!engine.ExceptionText(error).empty());
+    JS_FreeValue(engine.Context(), error);
     assert(Fails(engine, "for (;;) {}"));
     assert(Fails(engine, "throw { toString() { for (;;) {} } }"));
     assert(Fails(engine, "throw Object.defineProperty(new Error(), 'message', {get() { for (;;) {} }})"));

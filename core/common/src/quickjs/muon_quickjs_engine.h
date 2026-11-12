@@ -7,6 +7,7 @@
 #pragma once
 #include <quickjs.h>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,8 +32,12 @@ struct MuonQuickJsEngineImpl;
 class MuonQuickJsEngine final {
  public:
   /** @param limits Heap, stack, and execution limits; every limit must be positive.
+   *  @param should_interrupt Optional host stop predicate, called on the owner
+   *      thread. It must not invoke JavaScript or block; an exception also stops
+   *      execution. Captured resources must outlive this engine.
    *  @throws std::runtime_error When engine or context creation fails. */
-  explicit MuonQuickJsEngine(MuonQuickJsLimits limits);
+  explicit MuonQuickJsEngine(MuonQuickJsLimits limits,
+      std::function<bool()> should_interrupt = {});
   /** Releases pending jobs, context, and heap on the owner thread. */
   ~MuonQuickJsEngine();
   MuonQuickJsEngine(const MuonQuickJsEngine&) = delete;
@@ -68,6 +73,13 @@ class MuonQuickJsEngine final {
    * @throws std::runtime_error If a job throws or exceeds its execution deadline.
    */
   bool RunJobs(size_t maximum_jobs);
+  /**
+   * Describes a borrowed thrown value or rejected promise reason under the
+   * execution deadline. Does not call a custom toString method.
+   * @param error Borrowed value retained by the caller.
+   * @returns Bounded diagnostic, including a fallback for unprintable values.
+   */
+  std::string ExceptionText(JSValueConst error);
   /** Requests permanent interruption; the sole operation allowed from any thread. */
   void RequestInterrupt();
 

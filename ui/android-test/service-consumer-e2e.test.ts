@@ -662,6 +662,7 @@ it.skipIf(
           "android.permission.POST_NOTIFICATIONS",
         );
         let generations: string[] | undefined;
+        let previousHostPid: number | undefined;
         for (let session = 0; session < 5; ++session) {
           const start = messages.length;
           await device(
@@ -689,6 +690,16 @@ it.skipIf(
           if (generations && session < 3)
             expect(result.generations).toEqual(generations);
           generations = result.generations;
+          if (session >= 3) {
+            expect(previousHostPid).toBeDefined();
+            for (const state of result.initial)
+              expect(state.lastHostExit).toMatchObject({
+                platform: "android",
+                processName: `${appId}:muon_services`,
+                pid: previousHostPid,
+                reason: "user-requested",
+              });
+          }
           if (session === 2) {
             expect(result.off).toHaveLength(2);
             for (const state of result.off)
@@ -747,7 +758,13 @@ it.skipIf(
             const json = line.split(`consumer-work:${nonce}:`)[1];
             return json !== undefined && JSON.parse(json).at > closedAt;
           });
-          if (session >= 2) await device("shell", "am", "force-stop", appId);
+          if (session >= 2) {
+            previousHostPid = Number(
+              (await device("shell", "pidof", `${appId}:muon_services`)).trim(),
+            );
+            expect(previousHostPid).toBeGreaterThan(0);
+            await device("shell", "am", "force-stop", appId);
+          }
         }
         await device("shell", "am", "force-stop", appId);
         await device("uninstall", appId);

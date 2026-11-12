@@ -48,6 +48,43 @@ export interface WindowsNotificationDriver {
 
 const psLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
+/** Captures a notification after its screen position and pixels settle.
+ * @param bounds Reads the current notification group's physical screen bounds.
+ * @param screenshot Captures the supplied rectangle without changing the UI.
+ * @returns The complete notification image.
+ */
+export const captureWindowsNotification = async (
+  bounds: () => Promise<ScreenRect>,
+  screenshot: (rectangle: ScreenRect) => Promise<Buffer>,
+): Promise<Buffer> => {
+  const sameBounds = (left: ScreenRect, right: ScreenRect): boolean =>
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height;
+  const deadline = performance.now() + 30000;
+  let previous: { bounds: ScreenRect; image: Buffer } | undefined;
+  do {
+    const before = await bounds();
+    const image = await screenshot(before);
+    const after = await bounds();
+    // UIA visibility precedes the shell's slide/expand animation. Both the
+    // rectangle around this capture and the next captured frame must agree.
+    if (sameBounds(before, after)) {
+      if (
+        previous &&
+        sameBounds(previous.bounds, after) &&
+        previous.image.equals(image)
+      )
+        return image;
+      previous = { bounds: after, image };
+    } else previous = undefined;
+  } while (performance.now() < deadline);
+  throw new Error(
+    "Notification position and pixels did not settle for capture",
+  );
+};
+
 /** Creates an observer for the English Windows test machine.
  * @param agent Existing agent-rover connection, owned by the caller.
  * @param appId Dedicated dev.muon.NotificationTest application ID for cleanup.
@@ -156,11 +193,13 @@ export const createWindowsNotificationDriver = async (
     path: string,
   ): Promise<void> => {
     await center();
-    const bounds = JSON.parse(
-      await observe("prepare", title, action),
-    ) as ScreenRect;
+    const image = await captureWindowsNotification(
+      async () =>
+        JSON.parse(await observe("prepare", title, action)) as ScreenRect,
+      async (bounds) => (await agent.screenshot({ rect: bounds })).image,
+    );
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, (await agent.screenshot({ rect: bounds })).image);
+    await writeFile(path, image);
   };
   const close = async (): Promise<void> => {
     if (closed) return;

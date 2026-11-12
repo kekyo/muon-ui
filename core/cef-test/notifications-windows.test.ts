@@ -380,10 +380,16 @@ describeWindowsE2e(suiteName, () => {
         await evaluate(
           `await notificationApi.post({id:'status-probe',title:${JSON.stringify(statusTitle)},body:'Register this notification source'}); return true;`,
         );
-        await driver.waitForNotification(
-          statusTitle,
-          join(artifacts, "status-probe.png"),
-        );
+        // Retain the opening animation as evidence alongside the stable crop.
+        const [opening] = await Promise.all([
+          remote.recordVideo(3000, join(artifacts, "status-probe-opening.mp4")),
+          driver.waitForNotification(
+            statusTitle,
+            join(artifacts, "status-probe.png"),
+          ),
+        ]);
+        expect(opening.frameCount).toBeGreaterThan(1);
+        expect(opening.clipped).toBe(false);
         await evaluate(
           "await notificationApi.cancel('status-probe'); return true;",
         );

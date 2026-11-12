@@ -72,6 +72,16 @@ static cardio::promise<void> Start(std::shared_ptr<MuonServiceSessionImpl> impl)
   // Keep exactly one, and never turn it into a service lifetime reference.
   if (impl->monitor) transport.close();
   else impl->monitor = std::move(transport);
+  if (!impl->options.startup.empty()) {
+    MuonServiceClient administration([impl](cardio::cancellation cancellation) {
+      return Connect(impl, cancellation);
+    });
+    std::exception_ptr error;
+    try { co_await administration.Call("configureStartup", "{\"startup\":" + impl->options.startup + "}"); }
+    catch (...) { error = std::current_exception(); }
+    co_await administration.Close();
+    if (error) std::rethrow_exception(error);
+  }
 }
 
 static cardio::promise<void> Release(std::shared_ptr<MuonServiceSessionImpl> impl,

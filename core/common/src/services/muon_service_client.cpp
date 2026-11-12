@@ -160,20 +160,29 @@ static void StartWriter(const std::shared_ptr<MuonServiceClientImpl>& impl) {
 static cardio::promise<std::string> Call(std::shared_ptr<MuonServiceClientImpl> impl,
                                         std::string operation, std::string json) {
   if (operation != "acquire" && operation != "release" && operation != "getState" &&
-      operation != "setAutostart" && operation != "watchState")
+      operation != "setAutostart" && operation != "watchState" &&
+      operation != "getUiAutostart" && operation != "setUiAutostart" && operation != "configureStartup")
     throw std::invalid_argument("Unsupported service client operation");
   auto doc = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
       yyjson_read(json.data(), json.size(), 0), yyjson_doc_free);
   if (!doc) throw std::invalid_argument("Invalid service request JSON");
   auto* root = yyjson_doc_get_root(doc.get());
-  Text(root, "serviceId");
-  auto payload = ",\"serviceId\":" + Json(yyjson_obj_get(root, "serviceId"));
+  if (!yyjson_is_obj(root)) throw std::invalid_argument("Service request must be an object");
+  auto payload = std::string{};
+  if (operation == "configureStartup") {
+    auto* startup = yyjson_obj_get(root, "startup");
+    if (!yyjson_is_obj(startup)) throw std::invalid_argument("startup must be an object");
+    payload = ",\"startup\":" + Json(startup);
+  } else if (operation != "getUiAutostart" && operation != "setUiAutostart") {
+    Text(root, "serviceId");
+    payload = ",\"serviceId\":" + Json(yyjson_obj_get(root, "serviceId"));
+  }
   if (operation == "release") {
     Text(root, "refId");
     Text(root, "generation");
     payload += ",\"refId\":" + Json(yyjson_obj_get(root, "refId")) +
                ",\"generation\":" + Json(yyjson_obj_get(root, "generation"));
-  } else if (operation == "setAutostart") {
+  } else if (operation == "setAutostart" || operation == "setUiAutostart") {
     auto* enabled = yyjson_obj_get(root, "enabled");
     if (!yyjson_is_bool(enabled)) throw std::invalid_argument("enabled must be boolean");
     payload += ",\"enabled\":" + Json(enabled);

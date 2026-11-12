@@ -8,10 +8,14 @@
 #include "services/muon_service_session.h"
 #include "config/muon_config.h"
 #include "config/muon_paths.h"
+#include "config/muon_autostart.h"
+#include "config/muon_startup.h"
 #include "muon_filesystem.h"
 #include "muon_service_renderer_generated.h"
 #include "sha2.h"
+#include <yyjson.h>
 #include <array>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <system_error>
@@ -83,19 +87,7 @@ static const muon_plugin_namespace service_namespace{"muon.services", kMuonServi
 static const muon_plugin_namespace* const namespaces[] = {&service_namespace, nullptr};
 static const muon_plugin_metadata metadata{namespaces, &Stop, &ReleaseOwner};
 
-void InitializeMuonBuiltinServices(const MuonConfig& config) {
-  session.reset();
-  shutdown_requested = false;
-  if (config.service_registry.empty()) return;
-  auto identity = config.app_id + "\n" + muon_internal::FilesystemPathToUtf8(config.browser.profile.lexically_normal());
-#if defined(_WIN32)
-  DWORD logon_session = 0;
-  if (!ProcessIdToSessionId(GetCurrentProcessId(), &logon_session))
-    throw std::system_error(GetLastError(), std::system_category(), "get service user session");
-  identity += "\n" + std::to_string(logon_session);
-#else
-  if (const auto* logon_session = std::getenv("XDG_SESSION_ID")) identity += "\n" + std::string(logon_session);
-#endif
+static std::string IdentityDigest(const std::string& identity) {
   SHA256_CTX hash{};
   std::array<uint8_t, SHA256_DIGEST_LENGTH> bytes{};
   if (!SHA256_Init(&hash) || !SHA256_Update(&hash, reinterpret_cast<const uint8_t*>(identity.data()), identity.size()) ||
@@ -105,6 +97,55 @@ void InitializeMuonBuiltinServices(const MuonConfig& config) {
     digest.push_back("0123456789abcdef"[byte >> 4]);
     digest.push_back("0123456789abcdef"[byte & 15]);
   }
+  return digest;
+}
+
+static std::string StartupMetadata(const MuonConfig& config,
+    const std::vector<std::filesystem::path>& paths, const std::string& identity, bool refresh) {
+  MuonAutostartOptions options;
+  std::string error;
+  if (!CreateDefaultMuonAutostartOptions(&options, &error)) throw std::runtime_error(error);
+  if (options.launch_source != kMuonLaunchSourceNone && options.launch_source != kMuonLaunchSourceNormal)
+    return {};
+  if (options.appimage_id.empty() && !config.launcher_path.empty()) options.executable_path = config.launcher_path;
+  // The registration identifies the persistent profile, not a particular login
+  // session. The IPC endpoint below additionally isolates OS login sessions.
+  options.appimage_id = config.app_id + "-" + IdentityDigest(identity).substr(0, 16);
+  auto document = std::unique_ptr<yyjson_mut_doc, decltype(&yyjson_mut_doc_free)>(yyjson_mut_doc_new(nullptr), yyjson_mut_doc_free);
+  auto* root = yyjson_mut_obj(document.get());
+  yyjson_mut_doc_set_root(document.get(), root);
+  yyjson_mut_obj_add_strcpy(document.get(), root, "executable",
+      muon_internal::FilesystemPathToUtf8(options.executable_path).c_str());
+  yyjson_mut_obj_add_strcpy(document.get(), root, "source", options.launch_source.c_str());
+  yyjson_mut_obj_add_strcpy(document.get(), root, "id", options.appimage_id.c_str());
+  yyjson_mut_obj_add_bool(document.get(), root, "refresh", refresh);
+  auto* arguments = yyjson_mut_arr(document.get());
+  yyjson_mut_obj_add_val(document.get(), root, "arguments", arguments);
+  yyjson_mut_arr_add_str(document.get(), arguments, "--muon-autostart");
+  yyjson_mut_arr_add_strcpy(document.get(), arguments, ("--muon-launch-from=" + options.launch_source).c_str());
+  for (const auto& path : paths) {
+    yyjson_mut_arr_add_str(document.get(), arguments, "-c");
+    yyjson_mut_arr_add_strcpy(document.get(), arguments, muon_internal::FilesystemPathToUtf8(path).c_str());
+  }
+  size_t size = 0;
+  auto json = std::unique_ptr<char, decltype(&std::free)>(yyjson_mut_write(document.get(), 0, &size), std::free);
+  if (!json) throw std::bad_alloc();
+  return {json.get(), size};
+}
+
+std::shared_ptr<MuonServiceSession> CreateMuonBuiltinServiceSession(const MuonConfig& config,
+    const std::vector<std::filesystem::path>& config_paths, bool refresh) {
+  auto identity = config.app_id + "\n" + muon_internal::FilesystemPathToUtf8(config.browser.profile.lexically_normal());
+  const auto startup = StartupMetadata(config, config_paths, identity, refresh);
+#if defined(_WIN32)
+  DWORD logon_session = 0;
+  if (!ProcessIdToSessionId(GetCurrentProcessId(), &logon_session))
+    throw std::system_error(GetLastError(), std::system_category(), "get service user session");
+  identity += "\n" + std::to_string(logon_session);
+#else
+  if (const auto* logon_session = std::getenv("XDG_SESSION_ID")) identity += "\n" + std::string(logon_session);
+#endif
+  const auto digest = IdentityDigest(identity);
 #if defined(_WIN32)
   const auto endpoint = "\\\\.\\pipe\\muon-service-" + digest;
   const auto executable = GetMuonExecutableDirectory() / "muon-service-host.exe";
@@ -113,11 +154,36 @@ void InitializeMuonBuiltinServices(const MuonConfig& config) {
   const auto endpoint = directory + "/control";
   const auto executable = GetMuonExecutableDirectory() / "muon-service-host";
 #endif
-  session = std::make_shared<MuonServiceSession>(MuonServiceProcessOptions{
+  return std::make_shared<MuonServiceSession>(MuonServiceProcessOptions{
       muon_internal::FilesystemPathToUtf8(executable),
       muon_internal::FilesystemPathToUtf8(config.service_registry), endpoint,
-      muon_internal::FilesystemPathToUtf8(config.browser.profile / "services")});
+      muon_internal::FilesystemPathToUtf8(config.browser.profile / "services"), startup});
+}
+
+void InitializeMuonBuiltinServices(const MuonConfig& config,
+    const std::vector<std::filesystem::path>& config_paths) {
+  shutdown_requested = false;
+  const auto arguments = GetMuonStartupCommandLine();
+  const auto login = std::find(arguments.begin(), arguments.end(), "--muon-autostart") != arguments.end();
+  session = CreateMuonBuiltinServiceSession(config, config_paths, !login);
   cardio::fire_and_forget(Start(session));
+}
+
+void GetMuonBuiltinUiAutostart(muon_completion_func completion) {
+  cardio::fire_and_forget(Invoke(session, completion, "getUiAutostart", "{}", "@ui-policy"));
+}
+
+static cardio::promise<void> SetUiAutostart(std::shared_ptr<MuonServiceSession> state,
+    muon_completion_func completion, bool enabled) {
+  try {
+    if (!state) throw std::runtime_error("UI service session is unavailable");
+    co_await state->Call("@ui-policy", "setUiAutostart", enabled ? "{\"enabled\":true}" : "{\"enabled\":false}");
+    muon_internal::CompleteMuonVoid(completion);
+  } catch (const std::exception& error) { muon_internal::CompleteMuonError(completion, error.what()); }
+}
+
+void SetMuonBuiltinUiAutostart(muon_completion_func completion, bool enabled) {
+  cardio::fire_and_forget(SetUiAutostart(session, completion, enabled));
 }
 
 const muon_plugin_metadata* GetMuonBuiltinServicesMetadata() { return session ? &metadata : nullptr; }

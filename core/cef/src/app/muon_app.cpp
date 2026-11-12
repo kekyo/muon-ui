@@ -890,7 +890,7 @@ void MuonApp::OnContextInitialized() {
   InitializeMuonBuiltinLauncher(config_.default_version_policy);
   InitializeMuonBuiltinEnvironments(config_.config);
   InitializeMuonBuiltinNotifications(config_);
-  InitializeMuonBuiltinServices(config_);
+  InitializeMuonBuiltinServices(config_, config_paths_);
   const auto rpc_bridge = CreateMuonCefRpcBridge();
   const auto plugin_runtime =
       CreateMuonPluginRuntime(config_.plugin.path, std::move(plugins),

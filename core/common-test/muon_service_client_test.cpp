@@ -69,6 +69,22 @@ static cardio::promise<void> Tests(bool& passed) {
     MuonServiceClient client([&](cardio::cancellation) -> cardio::promise<MuonServiceTransport> {
       co_return channel.Transport();
     });
+    auto value = client.Call("getUiAutostart", "{}");
+    co_await channel.WaitSent(1);
+    channel.Emit("{\"requestId\":\"1\",\"result\":false}\n");
+    assert(co_await value == "false");
+    auto changed = client.Call("setUiAutostart", R"({"enabled":true,"op":"shutdown"})");
+    co_await channel.WaitSent(2);
+    assert(channel.sent[1].find("shutdown") == std::string::npos);
+    channel.Emit("{\"requestId\":\"2\",\"result\":null}\n");
+    assert(co_await changed == "null");
+    co_await client.Close();
+  }
+  {
+    Channel channel;
+    MuonServiceClient client([&](cardio::cancellation) -> cardio::promise<MuonServiceTransport> {
+      co_return channel.Transport();
+    });
     auto enabled = client.Call("setAutostart", R"({"serviceId":"worker","enabled":false,"op":"shutdown"})");
     co_await channel.WaitSent(1);
     assert(channel.sent.size() == 1);

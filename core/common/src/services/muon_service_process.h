@@ -14,6 +14,7 @@ struct MuonServiceProcessOptions {
   std::string registry; /**< Application service registry JSON. */
   std::string endpoint; /**< Unix socket path or Windows named pipe name. */
   std::string data_root; /**< Private persistent service data directory. */
+  std::string startup{}; /**< Trusted login command metadata, empty for standalone drivers. */
 };
 
 /** Non-owning startup connection; destroying it never kills resident services. */

@@ -49,6 +49,7 @@ it.each(["simple", "validate"] as const)(
     const events = new EventEmitter();
     let moduleSource = "";
     let browserSource = "";
+    let environmentsSource = "";
     let diagnostic = "";
     let application: ChildProcess | undefined;
     let client: Client | undefined;
@@ -60,7 +61,11 @@ it.each(["simple", "validate"] as const)(
       if (url.pathname.endsWith(".mjs")) {
         response.setHeader("Content-Type", "text/javascript");
         response.end(
-          url.pathname === "/services.mjs" ? moduleSource : browserSource,
+          url.pathname === "/services.mjs"
+            ? moduleSource
+            : url.pathname === "/environments.mjs"
+              ? environmentsSource
+              : browserSource,
         );
       } else if (url.pathname === "/ready") {
         response.end("ok");
@@ -68,12 +73,32 @@ it.each(["simple", "validate"] as const)(
       } else {
         response.setHeader("Content-Type", "text/html");
         response.end(`<!doctype html><title>Muon native services</title>
-        <h1>Native service lifecycle</h1><pre id="state">Ready</pre>
+        <h1>Native service lifecycle</h1>
+        <label><input id="ui-autostart" type="checkbox">Show UI at login</label>
+        <label><input id="service-autostart" type="checkbox">Start service automatically</label>
+        <pre id="state">Ready</pre>
         <script type="module">
         try {
           globalThis.serviceApi = ${mode === "simple" ? "window.muon?.services" : "await import('/services.mjs')"};
           globalThis.browserApi = ${mode === "simple" ? "window.muon?.browser" : "await import('/browser.mjs')"};
+          globalThis.settingsApi = ${mode === "simple" ? "window.muon?.environments" : "await import('/environments.mjs')"};
           if (typeof serviceApi?.acquire !== 'function') throw new Error('Missing service acquire API');
+          const ui = document.querySelector('#ui-autostart');
+          const service = document.querySelector('#service-autostart');
+          const state = document.querySelector('#state');
+          ui.checked = await settingsApi.getAutostart();
+          ui.addEventListener('change', async () => {
+            try { await settingsApi.setAutostart(ui.checked); }
+            catch(error) { state.textContent = String(error); }
+          });
+          service.addEventListener('change', async () => {
+            try { await serviceApi.setAutostart('resident', service.checked); }
+            catch(error) { state.textContent = String(error); }
+          });
+          globalThis.observer = await serviceApi.watchState('resident', snapshot => {
+            service.checked = snapshot.autostart;
+            state.textContent = JSON.stringify(snapshot);
+          });
           await fetch('/ready');
         } catch(error) { await fetch('/ready?error=' + encodeURIComponent(String(error))); }
         </script>`);
@@ -109,6 +134,10 @@ it.each(["simple", "validate"] as const)(
         "muon.services.acquire",
         "muon.services.release",
         "muon.services.getState",
+        "muon.services.setAutostart",
+        "muon.services.watchState",
+        "muon.environments.getAutostart",
+        "muon.environments.setAutostart",
         "muon.browser.close",
         "muon.browser.shutdown",
       ];
@@ -122,6 +151,9 @@ it.each(["simple", "validate"] as const)(
       )!;
       browserSource = resolver.load(
         resolver.resolveId("muon:browser", join(directory, "main.ts"))!.id,
+      )!;
+      environmentsSource = resolver.load(
+        resolver.resolveId("muon:environments", join(directory, "main.ts"))!.id,
       )!;
       const registry = join(directory, "muon-services.json");
       const library = resolve("../service-host/.build/probe-service.so");
@@ -168,7 +200,7 @@ it.each(["simple", "validate"] as const)(
         if (name !== "muon-core" && name !== "muon.json")
           await symlink(join(runtime, name), join(directory, name));
       await copyFile(join(runtime, "muon-core"), join(directory, "muon-core"));
-      const start = async () => {
+      const start = async (login: boolean) => {
         const ready = once(events, "ready", {
           signal: AbortSignal.timeout(60000),
         });
@@ -180,8 +212,13 @@ it.each(["simple", "validate"] as const)(
             "--ozone-platform=x11",
             "--disable-gpu",
             "--disable-vulkan",
+            ...(login ? ["--muon-autostart"] : []),
           ],
-          { cwd: directory, stdio: ["ignore", "pipe", "pipe"] },
+          {
+            cwd: directory,
+            stdio: ["ignore", "pipe", "pipe"],
+            env: { ...process.env, XDG_CONFIG_HOME: join(directory, "xdg") },
+          },
         );
         application.stderr!.on("data", (bytes: Buffer) => {
           diagnostic += bytes.toString();
@@ -239,11 +276,67 @@ it.each(["simple", "validate"] as const)(
         hostPid = result.pid;
         return result;
       };
-      await start();
+      // A login with UI disabled must work with no graphical display or CEF.
+      const login = await execute(
+        join(directory, "muon-core"),
+        ["-c", config, "--muon-autostart"],
+        {
+          cwd: directory,
+          env: {
+            ...process.env,
+            DISPLAY: "",
+            XDG_CONFIG_HOME: join(directory, "xdg"),
+          },
+          timeout: 30_000,
+        },
+      );
+      diagnostic += login.stdout + login.stderr;
+      const atLogin = await probe();
+      await start(false);
+      expect(await evaluate("return await settingsApi.getAutostart();")).toBe(
+        false,
+      );
+      expect(
+        await evaluate(
+          "return (await serviceApi.getState('resident')).clientReferences;",
+        ),
+      ).toBe(0);
+      expect(
+        await evaluate(
+          "await settingsApi.setAutostart(true); return await settingsApi.getAutostart();",
+        ),
+      ).toBe(true);
+      expect(
+        await evaluate(
+          "await settingsApi.setAutostart(false); return await settingsApi.getAutostart();",
+        ),
+      ).toBe(false);
       const first = await evaluate<{ generation: string }>(
         "globalThis.handle = await serviceApi.acquire('resident'); globalThis.borrowed = await serviceApi.acquire('borrowed'); return {generation:handle.generation};",
       );
       const before = await probe();
+      expect(before.pid).toBe(atLogin.pid);
+      expect(before.generation).toBe(atLogin.generation);
+      expect(
+        await evaluate(
+          "await serviceApi.setAutostart('resident', false); return await serviceApi.getState('resident');",
+        ),
+      ).toMatchObject({
+        autostart: false,
+        resident: false,
+        clientReferences: 1,
+        state: "running",
+      });
+      expect(
+        await evaluate(
+          "await serviceApi.setAutostart('resident', true); await serviceApi.setAutostart('resident', true); return await serviceApi.getState('resident');",
+        ),
+      ).toMatchObject({
+        autostart: true,
+        resident: true,
+        clientReferences: 1,
+        generation: before.generation,
+      });
       const borrowedSocket = createConnection({
         host: "127.0.0.1",
         port: ports[1]!,
@@ -264,7 +357,7 @@ it.each(["simple", "validate"] as const)(
       const withoutUi = await probe();
       expect(withoutUi.pid).toBe(before.pid);
       expect(withoutUi.count).toBeGreaterThan(before.count);
-      await start();
+      await start(false);
       expect(
         await evaluate(
           "globalThis.handle = await serviceApi.acquire('resident'); return handle.generation;",
@@ -280,12 +373,28 @@ it.each(["simple", "validate"] as const)(
       const shutdown = once(application!, "exit", {
         signal: AbortSignal.timeout(30000),
       });
+      await evaluate("await settingsApi.setAutostart(true); return true;");
       await Promise.allSettled([
         evaluate("await browserApi.shutdown(0); return true;"),
         shutdown,
       ]);
       expect(application!.exitCode, diagnostic).toBe(0);
       await serviceClosed;
+      await disconnect();
+      await start(true);
+      expect(await evaluate("return await settingsApi.getAutostart();")).toBe(
+        true,
+      );
+      const fromLogin = await probe();
+      expect(fromLogin.pid).not.toBe(before.pid);
+      const loginExit = once(application!, "exit", {
+        signal: AbortSignal.timeout(30000),
+      });
+      await Promise.allSettled([
+        evaluate("await browserApi.shutdown(0); return true;"),
+        loginExit,
+      ]);
+      expect(application!.exitCode, diagnostic).toBe(0);
     } finally {
       await disconnect();
       if (

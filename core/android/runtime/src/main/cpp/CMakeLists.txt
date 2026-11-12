@@ -115,3 +115,20 @@ target_link_libraries(muon_android_rpc PRIVATE
 target_link_options(muon_android_rpc PRIVATE
   -Wl,-z,max-page-size=16384
   )
+
+# The background process owns this host independently of the page plugin runtime.
+add_library(muon_android_services SHARED
+  muon_android_services_jni.cpp
+  "${MUON_COMMON_ROOT}/src/muon_filesystem.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_native_service_library.cpp"
+  )
+target_compile_features(muon_android_services PRIVATE cxx_std_20)
+target_compile_options(muon_android_services PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_include_directories(muon_android_services PRIVATE
+  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
+  "${MUON_REPOSITORY_ROOT}/sdk/include")
+target_link_libraries(muon_android_services PRIVATE muon_cardio android dl log)
+target_link_options(muon_android_services PRIVATE -Wl,-z,max-page-size=16384)

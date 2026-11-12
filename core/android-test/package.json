@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
+    "test:services": "node scripts/test-native-services.mjs",
     "test": "vitest run && vite build && node scripts/build-native-dependencies.mjs && node scripts/generate-android-plugin-registry.mjs && cd android && ./gradlew assembleDebug assembleRelease assembleDebugAndroidTest buildReleaseApks && cd .. && node scripts/verify-native-dependencies.mjs && node scripts/verify-android-plugin-registry.mjs && node scripts/verify-android-release-apks.mjs && node scripts/stage-plugins.mjs",
     "test:android": "vite build && cd android && ./gradlew :app:connectedDebugAndroidTest assembleRelease buildReleaseApks && cd .. && node scripts/stage-plugins.mjs && node scripts/verify-android-release-apks.mjs && MUON_ANDROID_TEST_PROFILE=vm-x86_64-16k node scripts/test-android-release-packages.mjs",
     "test:android:pixel6": "vite build && cd android && ./gradlew :app:connectedDebugAndroidTest assembleRelease buildReleaseApks && cd .. && node scripts/stage-plugins.mjs && node scripts/verify-android-release-apks.mjs && MUON_ANDROID_TEST_PROFILE=pixel6-arm64-4k node scripts/test-android-release-packages.mjs"

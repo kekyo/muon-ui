@@ -1,0 +1,37 @@
+{
+  "services": {
+    "alpha": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": true,
+      "config": {"port": "49171"},
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureAlphaService",
+        "foregroundServiceType": "specialUse",
+        "notification": {"channelId": "alpha", "title": "Muon alpha fixture", "text": "Resident native processing"}
+      }
+    },
+    "rejected": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": false,
+      "config": {"port": "49173"},
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureRejectedService",
+        "foregroundServiceType": "camera",
+        "notification": {"channelId": "rejected", "title": "Rejected FGS", "text": "Must fail before native start"}
+      }
+    },
+    "beta": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": false,
+      "config": {"port": "49172"},
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureBetaService",
+        "foregroundServiceType": "specialUse",
+        "notification": {"channelId": "beta", "title": "Muon beta fixture", "text": "Page-owned native processing"}
+      }
+    }
+  }
+}

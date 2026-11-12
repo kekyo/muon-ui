@@ -47,7 +47,9 @@ it.each(['ES2022', 'DOM', 'Node'] as const)(
       const signal: ServiceCancellationSignal = ${environment !== 'ES2022' ? 'new AbortController().signal' : '{ aborted: false, addEventListener: () => {}, removeEventListener: () => {} }'};
       const result: Promise<bigint> = client.call('ping', [], { signal });
       void result;
-      ${environment === 'DOM' ? `
+      ${
+        environment === 'DOM'
+          ? `
       import ${JSON.stringify(fileURLToPath(new URL('../../ui/muon.d.ts', import.meta.url)))};
       declare const reference: MuonServiceHandle;
       const bound = bindServiceClient(definition, reference);
@@ -57,7 +59,9 @@ it.each(['ES2022', 'DOM', 'Node'] as const)(
       // @ts-expect-error no undeclared method can be called
       void bound.call('missing', []);
       void pageResult;
-      ` : ''}
+      `
+          : ''
+      }
     `
       );
       const result = await (async () => {

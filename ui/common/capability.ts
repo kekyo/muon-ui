@@ -351,9 +351,12 @@ export const expandMuonServicePermissions = (
   allow: readonly string[],
 ): readonly string[] => {
   const result = [...allow];
-  if (allow.some((pattern) => isGlobMatch(pattern, "muon.services.acquire", "."))) {
+  if (
+    allow.some((pattern) => isGlobMatch(pattern, "muon.services.acquire", "."))
+  ) {
     for (const path of ["muon.services.release", "muon.services.rpc"])
-      if (!allow.some((pattern) => isGlobMatch(pattern, path, "."))) result.push(path);
+      if (!allow.some((pattern) => isGlobMatch(pattern, path, ".")))
+        result.push(path);
   }
   return result;
 };
@@ -1317,7 +1320,10 @@ const createModuleSource = (rule: ResolvedRule): string => {
     rule.namespace,
     rule.rule.allow,
     rule.functionPaths,
-  ).filter(([, path]) => path !== "muon.services.release" && path !== "muon.services.rpc");
+  ).filter(
+    ([, path]) =>
+      path !== "muon.services.release" && path !== "muon.services.rpc",
+  );
   if (exportedFunctions.length === 0) {
     const hasWildcardAllow = rule.rule.allow.some(containsGlob);
     throw new Error(

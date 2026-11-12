@@ -20,7 +20,8 @@ it.each(["android", "cef"] as const)(
     const call = vi.fn(
       async (_capability: string, path: string, args: readonly unknown[]) => {
         expect(typeof args[0]).toBe("string");
-        if (path.endsWith("rpc")) return '{"schemaVersion":1,"methods":{},"events":{}}';
+        if (path.endsWith("rpc"))
+          return '{"schemaVersion":1,"methods":{},"events":{}}';
         return path.endsWith("acquire")
           ? '{"serviceId":"worker","refId":"1","generation":"1"}'
           : null;
@@ -105,7 +106,9 @@ it("installs only allowed CEF methods while retaining handle release", async () 
       value: async () => '{"serviceId":"worker","refId":"2","generation":"3"}',
     },
     __release: { value: released },
-    __rpc: { value: async () => '{"schemaVersion":1,"methods":{},"events":{}}' },
+    __rpc: {
+      value: async () => '{"schemaVersion":1,"methods":{},"events":{}}',
+    },
   });
   installMuonCefServicesApi(namespace, (name) => name === "acquire");
   expect(Object.keys(namespace)).toEqual(["acquire"]);

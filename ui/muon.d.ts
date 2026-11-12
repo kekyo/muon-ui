@@ -81,16 +81,23 @@ declare global {
      * @returns Decoded result; errors include a stable code property.
      * @remarks Input callbacks expire when their method completes or is cancelled.
      */
-    readonly call: (method: string, args: readonly unknown[], options?: {
-      readonly signal?: MuonServiceCancellationSignal;
-    }) => Promise<unknown>;
+    readonly call: (
+      method: string,
+      args: readonly unknown[],
+      options?: {
+        readonly signal?: MuonServiceCancellationSignal;
+      },
+    ) => Promise<unknown>;
     /**
      * Receives typed event values sequentially without creating a lifetime reference.
      * @param event - Declared event name.
      * @param listener - Event handler; rejection closes this subscription.
      * @returns A subscription that reports termination and can be closed explicitly.
      */
-    readonly subscribe: (event: string, listener: (value: unknown) => void | Promise<void>) => Promise<MuonServiceSubscription>;
+    readonly subscribe: (
+      event: string,
+      listener: (value: unknown) => void | Promise<void>,
+    ) => Promise<MuonServiceSubscription>;
     /**
      * Cancels this handle's calls and subscriptions and releases its reference.
      * @returns Completion of reference release; repeated calls share this promise.
@@ -103,7 +110,9 @@ declare global {
   /** A FIFO event subscription tied to one acquired service handle. */
   interface MuonServiceSubscription {
     /** Always resolves; overflow and disconnection are reported as a failure value. */
-    readonly closed: Promise<{ readonly code: string; readonly message: string } | undefined>;
+    readonly closed: Promise<
+      { readonly code: string; readonly message: string } | undefined
+    >;
     /** @returns Completion of unsubscribe; repeated calls share the same promise. */
     readonly close: () => Promise<void>;
   }
@@ -113,9 +122,13 @@ declare global {
     /** Whether cancellation has already been requested. */
     readonly aborted: boolean;
     /** @param type - Abort event. @param listener - Cancellation callback. @param options - One-shot registration. */
-    readonly addEventListener: (type: 'abort', listener: () => void, options: { readonly once: boolean }) => void;
+    readonly addEventListener: (
+      type: "abort",
+      listener: () => void,
+      options: { readonly once: boolean },
+    ) => void;
     /** @param type - Abort event. @param listener - Previously registered callback. */
-    readonly removeEventListener: (type: 'abort', listener: () => void) => void;
+    readonly removeEventListener: (type: "abort", listener: () => void) => void;
   }
 
   /** A non-owning state observer, automatically removed when its page disappears. */

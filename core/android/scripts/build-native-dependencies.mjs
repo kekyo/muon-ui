@@ -19,6 +19,7 @@ import {
 import { availableParallelism } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareMuonQuickJsSource } from '../../common/prepare-quickjs-source.mjs';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const projectRoot = resolve(dirname(scriptPath), '..');
@@ -45,7 +46,9 @@ const libffiSourceArchiveUrl =
   'https://github.com/libffi/libffi/releases/download/v3.8.0/libffi-3.8.0.tar.gz';
 const libffiSourceArchiveSha256 =
   '7da3e2d9a171eb0a038f592ecad3ff2bb2550f3496d87b3b29ad0cf4430c0db4';
-const cflags = '-O3 -g -fPIC';
+// Upstream java_raw_api.c calls its own deprecated compatibility API. These
+// flags apply only to unchanged libffi; Muon/tra-ffic retain their diagnostics.
+const cflags = '-O3 -g -fPIC -Wno-deprecated-declarations';
 const ldflags = '-Wl,-z,max-page-size=16384';
 const cardioDefinitions = [
   'CARDIO_BUILD_SHARED_LIB=1',
@@ -279,6 +282,7 @@ if (argumentsSet.has('--clean')) {
 mkdirSync(dependencyRoot, { recursive: true });
 // Share the pinned, hash-checked JSON source preparation with desktop builds.
 execute('bash', [join(repositoryRoot, 'builder/build_yyjson.sh')]);
+await prepareMuonQuickJsSource(join(dependencyRoot, 'quickjs'), false);
 const sourceArchivePath = join(dependencyRoot, libffiSourceArchiveName);
 const sourceArchive = await loadOfficialSourceArchive(sourceArchivePath);
 

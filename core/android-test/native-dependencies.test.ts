@@ -22,6 +22,12 @@ it('builds native dependencies from shallow checkouts without release tags', asy
   try {
     await mkdir(join(project, 'scripts'), { recursive: true });
     await mkdir(join(fixture, 'builder'), { recursive: true });
+    await mkdir(join(fixture, 'core/common'), { recursive: true });
+    for (const name of ['prepare-quickjs-source.mjs', 'quickjs-source.json'])
+      await cp(
+        join(repository, 'core/common', name),
+        join(fixture, 'core/common', name)
+      );
     await cp(
       join(repository, 'builder/build_yyjson.sh'),
       join(fixture, 'builder/build_yyjson.sh')

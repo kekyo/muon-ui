@@ -240,6 +240,9 @@ const toolchainRoot = join(
   'bin'
 );
 const ar = requireExecutable(join(toolchainRoot, 'llvm-ar'));
+const nm = requireExecutable(join(toolchainRoot, 'llvm-nm'));
+const objdump = requireExecutable(join(toolchainRoot, 'llvm-objdump'));
+const readelf = requireExecutable(join(toolchainRoot, 'llvm-readelf'));
 const ranlib = requireExecutable(join(toolchainRoot, 'llvm-ranlib'));
 const strip = requireExecutable(join(toolchainRoot, 'llvm-strip'));
 const libffiCommit = capture('git', [
@@ -332,8 +335,17 @@ for (const entry of abis) {
     CC: cc,
     CFLAGS: cflags,
     CXX: cxx,
+    // file identifies either Android ELF ABI without a target-prefixed binary.
+    FILECMD: 'file',
     LDFLAGS: ldflags,
+    // Android does not use Windows manifests. Do not probe the host tape tool.
+    MANIFEST_TOOL: ':',
+    // Libtool otherwise searches obsolete target-prefixed tools and falls back
+    // to host nm; the NDK LLVM tool supports every selected Android ABI.
+    NM: nm,
+    OBJDUMP: objdump,
     RANLIB: ranlib,
+    READELF: readelf,
     STRIP: strip,
   };
   execute('./configure', [`--prefix=${installRoot}`, ...configureArguments], {

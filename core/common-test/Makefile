@@ -17,7 +17,7 @@ YYJSON_SOURCE_DIR := ../cef/.deps/src/yyjson-0.12.0/src
 SERVICE_VALUES := $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/services/muon_service_interface.cpp
 SERVICE_HEADERS := $(COMMON)/src/services/muon_native_service_host.h $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_value.h
 CPPFLAGS += -I$(YYJSON_SOURCE_DIR)
-TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-calls $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value $(OUT)/service-interface
+TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-calls $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value $(OUT)/service-interface $(OUT)/service-broker
 
 .PHONY: all test clean service-driver
 all: $(TESTS)
@@ -61,6 +61,9 @@ $(OUT)/native-service-host: muon_native_service_host_test.cpp $(COMMON)/src/serv
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.o,$^) -o $@
 
 $(OUT)/native-service-calls: muon_native_service_calls_test.cpp $(COMMON)/src/services/muon_native_service_host.cpp $(SERVICE_VALUES) $(SERVICE_HEADERS) $(OUT)/yyjson.o | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.o,$^) -o $@
+
+$(OUT)/service-broker: muon_service_broker_test.cpp $(COMMON)/src/services/muon_service_broker.cpp $(COMMON)/src/services/muon_service_broker.h $(COMMON)/src/services/muon_native_service_host.cpp $(COMMON)/src/services/muon_service_controller.cpp $(COMMON)/src/services/muon_service_lifecycle.cpp $(SERVICE_VALUES) $(SERVICE_HEADERS) $(OUT)/yyjson.o | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.o,$^) -o $@
 
 $(OUT)/service-fixture.so: muon_service_fixture.c ../../sdk/include/muon_service_api.h | $(OUT)

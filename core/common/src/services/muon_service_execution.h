@@ -36,7 +36,7 @@ using MuonServiceEventSink = std::function<void(const std::string&, uint64_t,
  */
 struct MuonServiceExecution {
   /** Returns validated metadata for an exact running generation. */
-  std::function<const MuonServiceInterface&(const std::string&, uint64_t)> interface;
+  std::function<const MuonServiceInterface&(const std::string&, uint64_t)> describe;
   /** Returns portable interface JSON for that generation. */
   std::function<std::string(const std::string&, uint64_t)> interface_json;
   /** Starts a typed call; returns a nonzero identity and completes once later. */

@@ -59,7 +59,7 @@ int main() {
   assert(started == 0);
   pump();
   assert(started == 2 && !host.IsIdle());
-  assert(host.Execution().interface("first", 1).methods.size() == 2);
+  assert(host.Execution().describe("first", 1).methods.size() == 2);
   auto results = std::vector<MuonServiceResult>{};
   const auto collect = [&](MuonServiceResult result) { results.push_back(std::move(result)); };
   host.Execution().invoke("first", 1, "echo", {{std::string("hello\0world", 11)}}, {}, collect);
@@ -81,6 +81,12 @@ int main() {
   assert(stopped == 2 && host.IsIdle() && timers.empty());
   auto startup_error = std::string{};
   host.Start({"broken", "broken.mjs", "throw new Error('bad module')", "/private", {}}, 2,
+      [&](const std::string& error) { startup_error = error; });
+  pump();
+  assert(!startup_error.empty() && host.IsIdle() && timers.empty());
+  startup_error.clear();
+  host.Start({"expired", "expired.mjs", source, "/private", {},
+      std::chrono::steady_clock::now() - std::chrono::milliseconds(1)}, 8,
       [&](const std::string& error) { startup_error = error; });
   pump();
   assert(!startup_error.empty() && host.IsIdle() && timers.empty());
@@ -134,5 +140,79 @@ int main() {
   pump();
   assert(stopped == 4 && host.IsIdle() && timers.empty());
   assert(failures.back() == "failed-before-stop");
+  const auto boundaries = R"(
+    globalThis.__muonServiceInterface = {schemaVersion:1,methods:{
+      touch:{parameters:[],returns:'uint32',errors:[]},
+      count:{parameters:[],returns:'uint32',errors:[]},
+      leak:{parameters:[{callback:{parameters:['string'],returns:'string'}}],returns:'string',errors:[]},
+      flood:{parameters:[{callback:{parameters:['string'],returns:'string'}}],returns:'string',errors:[]}
+    },events:{}};
+    let count = 0;
+    globalThis.__muonServiceRuntime = {
+      async start() {},
+      async invoke(id, method, args) {
+        if (method === 'touch') ++count;
+        if (method === 'leak') {
+          __muonServiceCallback(id, args[0], ['pending']);
+          return {status:'ok',value:'parent returned'};
+        }
+        if (method === 'flood') {
+          const pending = [];
+          const reentrant = [null];
+          Object.defineProperty(reentrant, 0, {get() {
+            for (let index = 0; index < 32; ++index)
+              pending.push(__muonServiceCallback(id, args[0], ['inner']));
+            return 'outer';
+          }});
+          let outcome = 'accepted';
+          try { pending.push(__muonServiceCallback(id, args[0], reentrant)); }
+          catch (error) { outcome = error.code; }
+          await Promise.all(pending);
+          return {status:'ok',value:outcome};
+        }
+        return {status:'ok',value:count};
+      },
+      cancel() {},
+      async stop() {}
+    };
+  )";
+  host.Start({"boundaries", "boundaries.mjs", boundaries, "/private", {}}, 6,
+      [&](const std::string& error) { assert(error.empty()); });
+  pump();
+  const auto touch = host.Execution().invoke("boundaries", 6, "touch", {}, {}, collect);
+  host.Execution().cancel("boundaries", 6, touch);
+  pump();
+  host.Execution().invoke("boundaries", 6, "count", {}, {}, collect);
+  pump();
+  assert(std::get<uint32_t>(results.back().value->data) == 0);
+  MuonServiceCallCompletion pending_callback;
+  host.Execution().invoke("boundaries", 6, "leak", {{MuonServiceCallback{1}}},
+      [&](uint64_t, const MuonServiceSignature&, std::vector<MuonServiceValue>, MuonServiceCallCompletion complete) {
+        pending_callback = std::move(complete);
+      }, collect);
+  pump();
+  assert(pending_callback && results.back().code == "invalid-result");
+  const auto results_before_late_reply = results.size();
+  pending_callback({MuonServiceValue{std::string("late")}, {}, {}});
+  pump();
+  assert(results.size() == results_before_late_reply);
+  size_t callback_count = 0;
+  host.Execution().invoke("boundaries", 6, "flood", {{MuonServiceCallback{1}}},
+      [&](uint64_t, const MuonServiceSignature&, std::vector<MuonServiceValue>, MuonServiceCallCompletion complete) {
+        ++callback_count;
+        complete({MuonServiceValue{std::string("done")}, {}, {}});
+      }, collect);
+  pump();
+  assert(std::get<std::string>(results.back().value->data) == "resource-exhausted");
+  assert(callback_count == 32);
+  host.Stop("boundaries", 6, [&] { ++stopped; });
+  pump();
+  assert(host.IsIdle() && timers.empty());
+  startup_error.clear();
+  host.Start({"oversized-config", "config.mjs", source, "/private",
+      {{"value", std::string(80 * 1024 * 1024, 'x')}}}, 7,
+      [&](const std::string& error) { startup_error = error; });
+  pump();
+  assert(!startup_error.empty() && host.IsIdle() && timers.empty());
   std::cout << "QuickJS service isolation, typed calls, interruption, and async stop passed\n";
 }

@@ -21,7 +21,7 @@ TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-a
 QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
 QUICKJS_SOURCE_DIR := $(COMMON)/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
 QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
-TESTS += $(OUT)/quickjs-engine $(OUT)/quickjs-service
+TESTS += $(OUT)/quickjs-engine $(OUT)/quickjs-service $(OUT)/quickjs-service-sdk
 
 .PHONY: all test clean service-driver quickjs-source
 all: $(TESTS)
@@ -45,6 +45,12 @@ $(OUT)/quickjs-engine: muon_quickjs_engine_test.cpp $(COMMON)/src/quickjs/muon_q
 
 $(OUT)/quickjs-service: muon_quickjs_service_host_test.cpp $(COMMON)/src/services/muon_quickjs_service_host.cpp $(COMMON)/src/services/muon_quickjs_service_host.h $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(SERVICE_VALUES) $(SERVICE_HEADERS) $(OUT)/yyjson.o $(QUICKJS_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) -lm -o $@
+
+$(OUT)/quickjs-service-fixture.h: ../../sdk/scripts/build-service-runtime-fixture.mjs $(wildcard ../../sdk/src/service*.ts) ../../sdk/test/fixtures/quickjs-service.ts | $(OUT)
+	node ../../sdk/scripts/build-service-runtime-fixture.mjs $(OUT)/quickjs-service-fixture.js $@
+
+$(OUT)/quickjs-service-sdk: muon_quickjs_service_sdk_test.cpp $(OUT)/quickjs-service-fixture.h $(COMMON)/src/services/muon_quickjs_service_host.cpp $(COMMON)/src/services/muon_quickjs_service_host.h $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(SERVICE_VALUES) $(SERVICE_HEADERS) $(OUT)/yyjson.o $(QUICKJS_OBJECTS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -I$(OUT) -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) -lm -o $@
 
 $(OUT)/rpc: muon_rpc_test.cpp $(RPC_SOURCES) $(COMMON)/src/plugins/muon_plugin_metadata.cpp | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ -o $@

@@ -330,7 +330,7 @@ static void Begin(const std::shared_ptr<MuonServiceBrokerImpl>& impl,
       "Service call capacity exceeded");
   const auto method = Text(yyjson_obj_get(root, "method"));
   const auto& identity = reference->identity;
-  const auto& interface = impl->host.interface(identity.service_id, identity.generation);
+  const auto& interface = impl->host.describe(identity.service_id, identity.generation);
   const auto found = interface.methods.find(method);
   Require(found != interface.methods.end(), "Unknown service method");
   auto arguments = DecodeMuonServiceArguments(found->second.signature.parameters,
@@ -439,7 +439,7 @@ void MuonServiceBroker::Request(const MuonServiceReference& identity, const std:
     Require(impl->subscriptions < 256 && reference->next_subscription != std::numeric_limits<uint64_t>::max(),
         "Service subscription capacity exceeded");
     const auto name = Text(yyjson_obj_get(root, "event"));
-    const auto& interface = impl->host.interface(identity.service_id, identity.generation);
+    const auto& interface = impl->host.describe(identity.service_id, identity.generation);
     const auto event = interface.events.find(name);
     Require(event != interface.events.end(), "Unknown service event");
     const auto subscription = std::make_shared<BrokerSubscription>();

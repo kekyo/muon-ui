@@ -16,6 +16,8 @@ struct MuonQuickJsServiceSpec {
   std::string source; /**< Verified application bundle, loaded by the platform. */
   std::string data_directory; /**< Private directory created by the platform. */
   std::vector<std::pair<std::string, std::string>> config; /**< String settings. */
+  /** Optional platform deadline, including time spent loading the bundle. */
+  std::optional<std::chrono::steady_clock::time_point> startup_deadline = std::nullopt;
 };
 
 /** OS operations; all completions are serialized on the owner dispatcher. */

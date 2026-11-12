@@ -77,6 +77,7 @@ it.each(["simple", "validate"] as const)(
         <label><input id="ui-autostart" type="checkbox">Show UI at login</label>
         <label><input id="service-autostart" type="checkbox">Start service automatically</label>
         <pre id="state">Ready</pre>
+        <script>globalThis.pageReady=new Promise(resolve=>globalThis.finishPageReady=resolve);</script>
         <script type="module">
         try {
           globalThis.serviceApi = ${mode === "simple" ? "window.muon?.services" : "await import('/services.mjs')"};
@@ -99,8 +100,11 @@ it.each(["simple", "validate"] as const)(
             service.checked = snapshot.autostart;
             state.textContent = JSON.stringify(snapshot);
           });
+          if (location.pathname.endsWith('/popup.html'))
+            globalThis.handle = await serviceApi.acquire('resident');
           await fetch('/ready');
         } catch(error) { await fetch('/ready?error=' + encodeURIComponent(String(error))); }
+        finally { finishPageReady(); }
         </script>`);
       }
     });
@@ -248,7 +252,9 @@ it.each(["simple", "validate"] as const)(
       const evaluate = async <T>(source: string): Promise<T> => {
         const result = await client!.callTool({
           name: "browser_evaluate",
-          arguments: { function: `async () => { ${source} }` },
+          arguments: {
+            function: `async () => { await globalThis.pageReady; ${source} }`,
+          },
         });
         const text = (result.content as { type: string; text?: string }[])
           .filter((x) => x.type === "text")
@@ -315,6 +321,135 @@ it.each(["simple", "validate"] as const)(
       const first = await evaluate<{ generation: string }>(
         "globalThis.handle = await serviceApi.acquire('resident'); globalThis.borrowed = await serviceApi.acquire('borrowed'); return {generation:handle.generation};",
       );
+
+      expect(
+        await evaluate(`
+        const text = '日本\\0🙂';
+        const bytes = new Uint8Array(1024 * 1024).fill(197);
+        const echoed = await handle.call('echoBytes', [bytes]);
+        const abort = new AbortController();
+        let entered;
+        const started = new Promise(resolve => entered = resolve);
+        const cancelled = (async () => {
+          try {
+            await handle.call('callback', ['pending', () => {
+              entered(); return new Promise(() => {});
+            }], {signal: abort.signal});
+            return 'unexpected-success';
+          } catch(error) { return error.code; }
+        })();
+        await started;
+        abort.abort();
+        return {
+          text: await handle.call('echo', [text]),
+          integer: String(await handle.call('echoUint64', [(1n << 64n) - 1n])),
+          binary: echoed.length === bytes.length && echoed.every(value => value === 197),
+          escaped: (await handle.call('echo', ['\\0'.repeat(1024 * 1024)])).length,
+          nested: await handle.call('callback', ['outer', async value =>
+            await handle.call('callback', [value, async inner => inner + '-nested'])]),
+          cancelled: await cancelled,
+        };
+      `),
+      ).toEqual({
+        text: "日本\0🙂",
+        integer: "18446744073709551615",
+        binary: true,
+        escaped: 1024 * 1024,
+        nested: "outer-nested",
+        cancelled: "cancelled",
+      });
+      await evaluate(`
+        globalThis.rpcEvents = [];
+        globalThis.rpcEvent = new Promise(resolve => globalThis.rpcNext = resolve);
+        globalThis.rpcSubscription = await handle.subscribe('progress', value => {
+          rpcEvents.push(value); rpcNext();
+        });
+        let entered;
+        const started = new Promise(resolve => entered = resolve);
+        globalThis.mainPending = (async () => {
+          try { return await handle.call('callback', ['main', async () => {
+            entered(); return await new Promise(resolve => globalThis.rpcContinue = resolve);
+          }]); } catch(error) { return error.code; }
+        })();
+        await started;
+        let appeared;
+        const ready = new Promise(resolve => appeared = resolve);
+        const watcher = await serviceApi.watchState('resident', state => {
+          if (state.clientReferences === 2) appeared();
+        });
+        window.open(new URL('popup.html', location.href).href);
+        await ready;
+        await watcher.close();
+        return true;
+      `);
+      const tabs = async (
+        action: string,
+        index: number | undefined,
+      ): Promise<string> => {
+        const result = await client!.callTool({
+          name: "browser_tabs",
+          arguments: {
+            action,
+            ...(index === undefined ? {} : { index }),
+          },
+        });
+        const text = (result.content as { type: string; text?: string }[])
+          .filter((item) => item.type === "text")
+          .map((item) => item.text ?? "")
+          .join("\n");
+        if (result.isError) throw new Error(text);
+        return text;
+      };
+      const listing = await tabs("list", undefined);
+      const peer = Number(listing.match(/- (\d+):[^\n]*popup\.html/)?.[1]);
+      expect(Number.isFinite(peer), listing).toBe(true);
+      await tabs("select", peer);
+      expect(
+        await evaluate(`
+        await globalThis.pageReady;
+        const result = await handle.call('callback', ['peer', async value => value + '-callback']);
+        await handle.call('emit', [31]);
+        let entered;
+        const started = new Promise(resolve => entered = resolve);
+        globalThis.peerPending = (async () => {
+          try { return await handle.call('callback', ['pending', () => {
+            entered(); return new Promise(() => {});
+          }]); } catch(error) { return error.code; }
+        })();
+        await started;
+        return result;
+      `),
+      ).toBe("peer-callback");
+      await tabs("select", 0);
+      await evaluate(`
+        await rpcEvent;
+        let gone;
+        globalThis.rpcGone = new Promise(resolve => gone = resolve);
+        globalThis.rpcWatch = await serviceApi.watchState('resident', state => {
+          if (state.clientReferences === 1) gone();
+        });
+        return true;
+      `);
+      await tabs("close", peer);
+      await tabs("select", 0);
+      expect(
+        await evaluate(`
+        await rpcGone;
+        await rpcWatch.close();
+        rpcContinue('main-continued');
+        const result = await mainPending;
+        globalThis.rpcEvent = new Promise(resolve => globalThis.rpcNext = resolve);
+        await handle.call('emit', [32]);
+        await rpcEvent;
+        await rpcSubscription.close();
+        return {result, events: rpcEvents, alive: await handle.call('echo', ['still-running'])};
+      `),
+      ).toEqual({
+        result: "main-continued",
+        events: [31, 32],
+        alive: "still-running",
+      });
+
       const before = await probe();
       expect(before.pid).toBe(atLogin.pid);
       expect(before.generation).toBe(atLogin.generation);

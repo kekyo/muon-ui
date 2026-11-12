@@ -42,7 +42,10 @@ export const installMuonCefServicesApi = (
   }
   const api = createMuonServicesApi(async (name, json) => {
     const call = native.get(name);
-    if (!call || !isAllowed(name === 'release' || name === 'rpc' ? 'acquire' : name))
+    if (
+      !call ||
+      !isAllowed(name === 'release' || name === 'rpc' ? 'acquire' : name)
+    )
       throw new Error('Service function is not allowed: ' + name);
     return await call(json, '');
   });

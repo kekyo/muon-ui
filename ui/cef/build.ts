@@ -155,6 +155,7 @@ export const buildDesktopMuonApp = async (
     buildConfig.config.services,
     buildConfig.directory,
     targets,
+    { root, environment },
   );
   const notifications = resolveMuonNotificationConfig(
     buildConfig.config.notifications,

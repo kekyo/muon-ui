@@ -402,6 +402,13 @@ export const buildMuonAndroidTarget = async (input: {
       config.services,
       input.configDirectory,
       abis.map((abi) => `android-${abi}` as const),
+      {
+        root,
+        environment: input.environment,
+        ...(resolved.sdkPath === undefined
+          ? {}
+          : { androidSdkPath: resolved.sdkPath }),
+      },
     ),
     abis,
     plugins,

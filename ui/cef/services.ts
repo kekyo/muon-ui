@@ -7,6 +7,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { MuonDesktopTarget } from "./targets.ts";
 import type { MuonResolvedService } from "../common/service-config.ts";
+import { mergeMuonServicePlugins } from "../common/service-plugins.ts";
+import { stageMuonNativePlugins } from "../common/native-plugins.ts";
 
 /** Normalized runtime settings stored beside a desktop application. */
 export interface MuonDesktopServiceSettings {
@@ -26,6 +28,7 @@ export type MuonDesktopServiceEntry = MuonDesktopServiceSettings &
     | {
         /** JavaScript engine adapter. */ readonly runtime: "quickjs";
         /** Registry-relative bundled source. */ readonly script: string;
+        /** Concrete native capabilities of this service. */ readonly plugins: readonly string[];
       }
   );
 
@@ -65,6 +68,7 @@ export const stageMuonDesktopServices = async (
         script,
         autostart: definition.autostart,
         config: definition.config,
+        plugins: definition.plugins.flatMap((plugin) => plugin.allow),
       };
       continue;
     }
@@ -101,9 +105,28 @@ export const stageMuonDesktopServices = async (
       await writeFile(join(output, path), source);
   }
   const registry = "muon-services.json";
+  const plugins = mergeMuonServicePlugins(
+    definitions.flatMap((definition) =>
+      definition.runtime === "quickjs" ? [definition.plugins] : [],
+    ),
+  );
+  const paths = await stageMuonNativePlugins(
+    new Map(plugins.map((plugin) => [plugin.name, plugin.artifact])),
+    target,
+    join(output, "services", "plugins"),
+  );
+  const pluginRegistry = plugins.map((plugin) => ({
+    name: plugin.name,
+    library: "./services/plugins/" + basename(paths.get(plugin.name)!),
+    allow: plugin.allow,
+    expectedFunctions: plugin.allow,
+    config: plugin.config,
+    signature: plugin.artifact.manifest.targets[target]!.library.sha256,
+    salt: "",
+  }));
   await writeFile(
     join(output, registry),
-    JSON.stringify({ services }, null, 2) + "\n",
+    JSON.stringify({ services, plugins: pluginRegistry }, null, 2) + "\n",
   );
   return registry;
 };

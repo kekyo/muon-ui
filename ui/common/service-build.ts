@@ -10,12 +10,14 @@ import { runScriptOnceToText } from "funcity";
 /**
  * Bundles one declared TS/JS service with its portable runtime adapter.
  * @param entry - Absolute author entry exporting a service definition.
+ * @param modules - Explicitly granted host module specifiers.
  * @returns Self-contained ESM source, evaluated only by the service host.
  * @remarks Requires Vite 8 and the author's muon-plugin-sdk installation.
  * Node builtins and external chunks are rejected for the QuickJS runtime.
  */
 export const buildMuonQuickJsService = async (
   entry: string,
+  modules: readonly string[],
 ): Promise<string> => {
   const vite = await import("vite");
   if (Number(vite.version.split(".")[0]) < 8)
@@ -48,6 +50,9 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
         name: "muon-quickjs-service",
         enforce: "pre",
         resolveId: (id) => {
+          if (modules.includes(id)) return { id, external: true };
+          if (id.startsWith("muon:"))
+            throw new Error(`Service is not allowed to import ${id}.`);
           if (isBuiltin(id) || id.startsWith("node:"))
             throw new Error(`QuickJS services cannot import ${id}.`);
           if (id === virtual) return "\0" + virtual;
@@ -79,7 +84,7 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
   if (
     files.length !== 1 ||
     files[0]!.type !== "chunk" ||
-    files[0]!.imports.length ||
+    files[0]!.imports.some((id) => !modules.includes(id)) ||
     files[0]!.dynamicImports.length
   )
     throw new Error(

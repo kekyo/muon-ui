@@ -34,6 +34,7 @@ export interface ResolveMuonNativePluginsOptions {
   /** Selected native targets, independent of the build host. */ readonly targets: readonly MuonPluginTarget[];
   /** Environment for explicitly requested source builds. */ readonly environment: NodeJS.ProcessEnv;
   /** Android SDK selected by the application. */ readonly androidSdkPath?: string;
+  /** Separate source-build directory for an independent runtime host. */ readonly outputDirectory?: string;
 }
 
 /**
@@ -81,7 +82,10 @@ export const resolveMuonNativePlugins = async (
           `Plugin ${plugin.name} requires the authoring SDK. Run npm install -D muon-plugin-sdk in ${options.root}. ${error instanceof Error ? error.message : String(error)}`,
         );
       }
-      const output = join(options.root, ".muon/plugins", plugin.name);
+      const output = join(
+        options.outputDirectory ?? join(options.root, ".muon/plugins"),
+        plugin.name,
+      );
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(plugin.name))
         throw new Error(`Invalid native plugin name: ${plugin.name}`);
       const androidSdkPath =

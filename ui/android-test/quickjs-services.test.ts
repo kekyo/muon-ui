@@ -15,6 +15,7 @@ it("resolves QuickJS services for both Android ABIs without native artifacts", a
       {
         id: "worker.v1",
         runtime: "quickjs",
+        plugins: [],
         bundle: "globalThis.ready = true;",
         autostart: true,
         config: { role: "background" },

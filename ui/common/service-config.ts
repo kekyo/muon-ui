@@ -5,6 +5,12 @@
 
 import { resolve } from "node:path";
 import { buildMuonQuickJsService } from "./service-build.ts";
+import {
+  resolveMuonServicePlugins,
+  getMuonServicePluginModules,
+  type MuonServiceBuildOptions,
+  type MuonServicePlugin,
+} from "./service-plugins.ts";
 import type { MuonPluginTarget } from "muon-plugin-sdk";
 import {
   readServiceArtifact,
@@ -50,6 +56,7 @@ export interface MuonResolvedNativeService extends MuonServiceSettings {
 export interface MuonResolvedQuickJsService extends MuonServiceSettings {
   /** Executes an independent QuickJS heap. */ readonly runtime: "quickjs";
   /** Self-contained JavaScript source, evaluated by the runtime host. */ readonly bundle: string;
+  /** Explicit native capabilities; never inherited from a page. */ readonly plugins: readonly MuonServicePlugin[];
 }
 
 /** One independently configured native or JavaScript service. */
@@ -151,6 +158,7 @@ const androidConfig = (
  * @param input - Parsed muon.json services map, or undefined when absent.
  * @param directory - Directory of the configuration declaring artifact paths.
  * @param targets - Actual application targets whose binaries must be present.
+ * @param options - Package resolution and source-build environment.
  * @returns Independent logical definitions with verified absolute artifact paths.
  * @remarks Native factories remain separate from the page plugin catalog. The
  * same factory may implement several IDs with different policy and configuration.
@@ -159,18 +167,35 @@ export const resolveMuonServices = async (
   input: unknown,
   directory: string,
   targets: readonly MuonPluginTarget[],
+  options?: MuonServiceBuildOptions,
 ): Promise<readonly MuonResolvedService[]> => {
   if (input === undefined) return [];
   const services = record(input, "services");
-  const result: MuonResolvedService[] = [];
-  for (const [id, definition] of Object.entries(services)) {
+  for (const id of Object.keys(services)) {
     if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(id))
       throw new Error(`Invalid service identity: ${id}`);
+  }
+  const plugins = await resolveMuonServicePlugins(
+    services,
+    directory,
+    targets,
+    options ?? { root: directory, environment: process.env },
+  );
+  const result: MuonResolvedService[] = [];
+  for (const [id, definition] of Object.entries(services)) {
     const label = `services.${id}`;
     const value = record(definition, label);
     knownKeys(
       value,
-      ["runtime", "artifact", "entry", "autostart", "config", "android"],
+      [
+        "runtime",
+        "artifact",
+        "entry",
+        "autostart",
+        "config",
+        "android",
+        "plugins",
+      ],
       label,
     );
     if (value.runtime !== "native" && value.runtime !== "quickjs")
@@ -227,10 +252,15 @@ export const resolveMuonServices = async (
       if (value.artifact !== undefined)
         throw new Error(`${label}.artifact requires the native runtime.`);
       const entry = resolve(directory, text(value.entry, `${label}.entry`));
+      const nativePlugins = plugins.get(id) ?? [];
       result.push({
         ...settings,
         runtime: "quickjs",
-        bundle: await buildMuonQuickJsService(entry),
+        bundle: await buildMuonQuickJsService(
+          entry,
+          getMuonServicePluginModules(nativePlugins),
+        ),
+        plugins: nativePlugins,
       });
     }
   }

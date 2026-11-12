@@ -49,4 +49,9 @@ val copyRuntimeRenderer by tasks.registering(Copy::class) {
     from("../../android/dist/renderer/renderer.js")
     into("build/framework/muon")
 }
-tasks.named("preBuild") { dependsOn(":app:buildNativeDependencies", buildServiceWeb, copyRuntimeRenderer) }
+val buildQuickJsService by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("node", "../../sdk/scripts/build-service-runtime-fixture.mjs",
+        "service-driver/build/framework/muon/services/quickjs.js")
+}
+tasks.named("preBuild") { dependsOn(":app:buildNativeDependencies", buildServiceWeb, copyRuntimeRenderer, buildQuickJsService) }

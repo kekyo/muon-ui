@@ -18,9 +18,9 @@ import { expect, it } from 'vitest';
 
 const execute = promisify(execFile);
 const enabled = process.env.MUON_ANDROID_SERVICE_RPC_TEST === '1';
-it.skipIf(!enabled)(
-  'isolates page RPC owners over the Android service FD transport',
-  async () => {
+it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
+  'isolates %s page RPC owners over the Android service FD transport',
+  async (serviceId) => {
     const serial = process.env.ANDROID_SERIAL;
     if (!serial) throw new Error('ANDROID_SERIAL is required');
     const adb = async (args: string[]) =>
@@ -90,9 +90,14 @@ it.skipIf(!enabled)(
       return text;
     };
     const evaluate = async <T>(source: string): Promise<T> => {
-      const text = await tool('browser_evaluate', {
-        function: `async () => { ${source} }`,
-      });
+      let text: string;
+      try {
+        text = await tool('browser_evaluate', {
+          function: `async () => { ${source} }`,
+        });
+      } catch (cause) {
+        throw new Error(`Service page evaluation failed: ${source}`, { cause });
+      }
       const value = /### Result\n([\s\S]*?)(?:\n### |$)/u.exec(text)?.[1];
       if (!value) throw new Error(text);
       return JSON.parse(value) as T;
@@ -134,13 +139,15 @@ it.skipIf(!enabled)(
       await client.connect(a);
       await select(first);
       expect(
-        await evaluate(`globalThis.handle = await muon.services.acquire('alpha.v1-test');
+        await evaluate(`globalThis.handle = await muon.services.acquire('${serviceId}');
       const value = 'Android\\0日本語😀';
       return await handle.call('echo', [value]);`)
       ).toBe('Android\0日本語😀');
       expect(
         await evaluate(`const bytes = new Uint8Array(1024 * 1024); bytes[0]=37; bytes[bytes.length-1]=91;
-      const result = await handle.call('echoBytes',[bytes]);
+      let result;
+      try { result = await handle.call('echoBytes',[bytes]); }
+      catch(error) { throw new Error(JSON.stringify({error:String(error),state:await muon.services.getState('${serviceId}')})); }
       return [result.length,result[0],result[result.length-1],
         await handle.call('echoInt64',[-9223372036854775808n]),
         await handle.call('echoUint64',[18446744073709551615n])].map(x=>String(x));`)
@@ -156,8 +163,28 @@ it.skipIf(!enabled)(
           `return await handle.call('callback',['outer',async value => await handle.call('echo',[value + ':nested'])]);`
         )
       ).toBe('outer:nested');
+      if (serviceId === 'quickjs') {
+        expect(
+          await evaluate(`const broken = await muon.services.acquire('quickjs-fault');
+          let failure=false; try { await broken.call('spin',[]); } catch { failure=true; }
+          let changed; const failed=new Promise(resolve=>changed=resolve);
+          const watch=await muon.services.watchState('quickjs-fault',state=>{if(state.state==='failed') changed();});
+          await failed; await watch.close(); await broken.release();
+          const state=await muon.services.getState('quickjs-fault');
+          const native=await muon.services.acquire('alpha.v1-test');
+          const value=await native.call('echo',['native-after-fault']); await native.release();
+          return [failure,state.state,state.clientReferences,state.resident,await handle.call('echo',['other-heap']),value];`)
+        ).toEqual([
+          true,
+          'failed',
+          0,
+          true,
+          'other-heap',
+          'native-after-fault',
+        ]);
+      }
       expect(
-        await evaluate(`const second = await muon.services.acquire('alpha.v1-test'); await second.release();
+        await evaluate(`const second = await muon.services.acquire('${serviceId}'); await second.release();
       const abort = new AbortController(); let entered;
       const ready = new Promise(resolve=>entered=resolve);
       const pending = handle.call('callback',['cancel',()=>{ entered(); return new Promise(()=>{}); }],{signal:abort.signal});
@@ -169,7 +196,7 @@ it.skipIf(!enabled)(
       await ready; return true;`);
       const second = await start();
       await select(second);
-      await evaluate(`globalThis.handle = await muon.services.acquire('alpha.v1-test');
+      await evaluate(`globalThis.handle = await muon.services.acquire('${serviceId}');
       let entered; const ready = new Promise(resolve=>entered=resolve);
       globalThis.pending = handle.call('callback',['second',value=>{entered(); return new Promise(resolve=>globalThis.finishCallback=()=>resolve(value+':alive'));}]);
       globalThis.received = new Promise(resolve=>globalThis.receive=resolve);
@@ -185,17 +212,17 @@ it.skipIf(!enabled)(
       expect(
         await evaluate(`let changed;
       const ownerGone = new Promise(resolve=>changed=resolve);
-      const watch = await muon.services.watchState('alpha.v1-test',state=>{if(state.clientReferences===1) changed();});
+      const watch = await muon.services.watchState('${serviceId}',state=>{if(state.clientReferences===1) changed();});
       await ownerGone; await watch.close(); finishCallback();
       await handle.call('emit',[41]);
       return [await pending,await received,await handle.call('echo',['still-running'])];`)
       ).toEqual(['second:alive', 41, 'still-running']);
       expect(
         await evaluate(`await subscription.close(); await handle.release();
-      const state = await muon.services.getState('alpha.v1-test');
+      const state = await muon.services.getState('${serviceId}');
       return [state.state,state.clientReferences];`)
       ).toEqual(['running', 0]);
-      await evaluate(`globalThis.handle = await muon.services.acquire('alpha.v1-test');
+      await evaluate(`globalThis.handle = await muon.services.acquire('${serviceId}');
         let entered; const ready = new Promise(resolve=>entered=resolve);
         globalThis.pending = (async()=>{try { await handle.call('callback',['disconnect',()=>{entered(); return new Promise(()=>{});}]); return false; } catch { return true; }})();
         await ready; return true;`);
@@ -207,14 +234,14 @@ it.skipIf(!enabled)(
       expect(await evaluate(`return await pending;`)).toBe(true);
       expect(
         await evaluate(
-          `try { await muon.services.acquire('alpha.v1-test'); return false; } catch { return true; }`
+          `try { await muon.services.acquire('${serviceId}'); return false; } catch { return true; }`
         )
       ).toBe(true);
       const replacement = await start();
       await select(replacement);
       expect(
         await evaluate(
-          `globalThis.handle = await muon.services.acquire('alpha.v1-test'); return await handle.call('echo',['replacement']);`
+          `globalThis.handle = await muon.services.acquire('${serviceId}'); return await handle.call('echo',['replacement']);`
         )
       ).toBe('replacement');
       await select(second);
@@ -226,10 +253,22 @@ it.skipIf(!enabled)(
       await select(replacement);
       expect(
         await evaluate(
-          `return [await handle.call('echo',['unaffected']), (await muon.services.getState('alpha.v1-test')).clientReferences];`
+          `return [await handle.call('echo',['unaffected']), (await muon.services.getState('${serviceId}')).clientReferences];`
         )
       ).toEqual(['unaffected', 1]);
       await evaluate(`await handle.release(); return true;`);
+      expect(
+        await evaluate(`await muon.services.setAutostart('${serviceId}',false);
+        let stopped; const done = new Promise(resolve=>stopped=resolve);
+        const watch = await muon.services.watchState('${serviceId}',state=>{if(state.state==='stopped') stopped();});
+        await done; await watch.close(); return (await muon.services.getState('${serviceId}')).state;`)
+      ).toBe('stopped');
+      if (serviceId === 'quickjs') {
+        expect(
+          await evaluate(`const native = await muon.services.acquire('alpha.v1-test');
+          const value = await native.call('echo',['native-after-quickjs-stop']); await native.release(); return value;`)
+        ).toBe('native-after-quickjs-stop');
+      }
     } finally {
       const results = await Promise.allSettled([client?.close(), closeMcp?.()]);
       lines.close();

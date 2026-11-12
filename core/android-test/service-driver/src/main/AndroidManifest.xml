@@ -27,5 +27,15 @@
         </service>
         <service android:name="dev.muon.runtime.MuonFixtureRejectedService" android:exported="false"
             android:process=":muon_services" android:foregroundServiceType="camera" />
+        <service android:name="dev.muon.runtime.MuonFixtureQuickJsService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="QuickJS service communication and lifecycle regression fixture" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickJsFaultService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="QuickJS heap failure isolation regression fixture" />
+        </service>
     </application>
 </manifest>

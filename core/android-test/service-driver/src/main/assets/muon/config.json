@@ -15,6 +15,35 @@
     ]
   },
   "services": {
+    "quickjs-fault": {
+      "runtime": "quickjs",
+      "asset": "muon/services/quickjs-fault.js",
+      "autostart": true,
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickJsFaultService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "quickjs-fault",
+          "title": "QuickJS fault fixture",
+          "text": "Execution deadline regression"
+        }
+      }
+    },
+    "quickjs": {
+      "runtime": "quickjs",
+      "asset": "muon/services/quickjs.js",
+      "autostart": true,
+      "config": { "label": "日本語😀", "stopDelayMs": "1" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickJsService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "quickjs",
+          "title": "Muon QuickJS fixture",
+          "text": "Resident JavaScript processing"
+        }
+      }
+    },
     "alpha.v1-test": {
       "runtime": "native",
       "library": "libmuon_service_fixture.so",

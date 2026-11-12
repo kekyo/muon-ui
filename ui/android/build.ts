@@ -89,7 +89,7 @@ export interface MuonAndroidApplicationInput {
     Record<string, string>
   >;
   /** Explicit prebuilt plugins; an empty array builds a standard app. */ plugins: readonly MuonAndroidPackagedPlugin[];
-  /** Native factories with one Android component per logical identity. */ services: readonly MuonAndroidPackagedService[];
+  /** Runtime inputs with one Android component per logical identity. */ services: readonly MuonAndroidPackagedService[];
   /** Validated common plugin access settings. */ pluginAccess: MuonAndroidPluginAccess;
   /** Optional PNG icon already converted by the public build boundary. */ icon:
     string | undefined;
@@ -224,8 +224,10 @@ export const buildAndroidApplication = async (
         input.services.map((service) => [
           service.id,
           {
-            runtime: "native",
-            library: service.soname,
+            runtime: service.runtime,
+            ...(service.runtime === "native"
+              ? { library: service.soname }
+              : { asset: service.asset }),
             autostart: service.autostart,
             config: service.config,
             android: service.android,
@@ -249,7 +251,10 @@ export const buildAndroidApplication = async (
       ),
     }),
   );
-  for (const plugin of [...input.plugins, ...input.services]) {
+  for (const plugin of [
+    ...input.plugins,
+    ...input.services.filter((service) => service.runtime === "native"),
+  ]) {
     for (const abi of input.abis) {
       const library = plugin.libraries[abi];
       if (!library)
@@ -270,6 +275,11 @@ export const buildAndroidApplication = async (
     }
   }
   for (const service of input.services) {
+    if (service.runtime === "quickjs") {
+      const destination = join(assets, service.asset);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, service.bundle);
+    }
     const className = service.android.component.split(".").at(-1)!;
     const directory = join(project, "app/src/main/java/dev/muon/generated");
     await mkdir(directory, { recursive: true });

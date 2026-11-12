@@ -17,7 +17,7 @@ import androidx.core.app.NotificationCompat;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-/** Per-logical-service Android component, delegated to the shared native host. */
+/** Per-logical-service Android component, delegated to the shared execution host. */
 public abstract class MuonNativeService extends Service {
     private MuonServiceProcess process;
     private long generation;

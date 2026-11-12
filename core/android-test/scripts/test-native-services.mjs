@@ -75,7 +75,7 @@ const dispatcherResult = adb([
   '-r',
   '-e',
   'class',
-  'dev.muon.runtime.MuonServiceDispatcherTest',
+  'dev.muon.runtime.MuonServiceDispatcherTest,dev.muon.runtime.MuonServiceSourceTest',
   'dev.muon.servicefixture.test/androidx.test.runner.AndroidJUnitRunner',
 ]);
 process.stdout.write(dispatcherResult);
@@ -83,7 +83,7 @@ if (
   !/OK \(\d+ tests?\)/u.test(dispatcherResult) ||
   /FAILURES|INSTRUMENTATION_FAILED/u.test(dispatcherResult)
 ) {
-  throw new Error('Shared service dispatcher assertions failed.');
+  throw new Error('Service source or shared dispatcher assertions failed.');
 }
 execFileSync('npm', ['exec', '--', 'vitest', 'run', 'service-rpc.test.ts'], {
   cwd: root,

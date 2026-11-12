@@ -12,13 +12,21 @@ import type {
 } from "../common/service-config.ts";
 import type { MuonAndroidAbi, MuonAndroidPackagedPlugin } from "./build.ts";
 
-/** Verified native libraries and Android execution settings for one logical service. */
-export interface MuonAndroidPackagedService {
-  /** Application-local identity passed to the native factory. */ readonly id: string;
+/** Common Android settings for one independently declared service component. */
+interface MuonAndroidPackagedServiceBase {
+  /** Application-local service identity. */ readonly id: string;
   /** Initial resident setting. */ readonly autostart: boolean;
   /** Configuration passed to this instance. */ readonly config: Readonly<
     Record<string, string>
   >;
+  /** Independent component and purpose for this service. */ readonly android: MuonAndroidServiceConfig & {
+    /** Fully qualified generated Java Service class. */ readonly component: string;
+  };
+}
+
+/** Verified native factory libraries packaged for a logical service. */
+export interface MuonAndroidPackagedNativeService extends MuonAndroidPackagedServiceBase {
+  /** Native service execution. */ readonly runtime: "native";
   /** Shared factory library name in the APK. */ readonly soname: string;
   /** Absolute library paths selected for the APK. */ readonly libraries: Readonly<
     Partial<Record<MuonAndroidAbi, string>>
@@ -26,10 +34,18 @@ export interface MuonAndroidPackagedService {
   /** Additional ordinary libraries selected for the APK. */ readonly dependencies: Readonly<
     Partial<Record<MuonAndroidAbi, readonly string[]>>
   >;
-  /** Independent component and purpose for this service. */ readonly android: MuonAndroidServiceConfig & {
-    /** Fully qualified generated Java Service class. */ readonly component: string;
-  };
 }
+
+/** Bundled JavaScript executed in an independent QuickJS heap. */
+export interface MuonAndroidPackagedQuickJsService extends MuonAndroidPackagedServiceBase {
+  /** QuickJS service execution. */ readonly runtime: "quickjs";
+  /** Validated bundled JavaScript source. */ readonly bundle: string;
+  /** APK asset path, relative to the assets root. */ readonly asset: string;
+}
+
+/** Verified runtime inputs and Android settings for one logical service. */
+export type MuonAndroidPackagedService =
+  MuonAndroidPackagedNativeService | MuonAndroidPackagedQuickJsService;
 
 const reserved = new Set([
   "libcardio.so",
@@ -56,6 +72,24 @@ export const resolveAndroidServices = async (
       throw new Error(
         `Service ${definition.id} requires Android foreground settings.`,
       );
+    const common = {
+      id: definition.id,
+      autostart: definition.autostart,
+      config: definition.config,
+      android: {
+        ...definition.android,
+        component: `dev.muon.generated.MuonService_${Buffer.from(definition.id, "utf8").toString("hex")}`,
+      },
+    };
+    if (definition.runtime === "quickjs") {
+      services.push({
+        ...common,
+        runtime: "quickjs",
+        bundle: definition.bundle,
+        asset: `muon/services/${definition.id}.js`,
+      });
+      continue;
+    }
     const libraries: Partial<Record<MuonAndroidAbi, string>> = {};
     const dependencies: Partial<Record<MuonAndroidAbi, readonly string[]>> = {};
     const names = new Set<string>();
@@ -81,21 +115,19 @@ export const resolveAndroidServices = async (
         `Service ${definition.id} requires the same library filename for every ABI.`,
       );
     services.push({
-      id: definition.id,
-      autostart: definition.autostart,
-      config: definition.config,
+      ...common,
+      runtime: "native",
       soname: [...names][0]!,
       libraries,
       dependencies,
-      android: {
-        ...definition.android,
-        component: `dev.muon.generated.MuonService_${Buffer.from(definition.id, "utf8").toString("hex")}`,
-      },
     });
   }
   for (const abi of abis) {
     const files = new Map<string, Buffer>();
-    for (const entry of [...plugins, ...services]) {
+    for (const entry of [
+      ...plugins,
+      ...services.filter((service) => service.runtime === "native"),
+    ]) {
       for (const [index, path] of [
         entry.libraries[abi]!,
         ...(entry.dependencies?.[abi] ?? []),

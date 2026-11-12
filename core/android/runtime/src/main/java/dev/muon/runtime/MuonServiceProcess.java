@@ -19,6 +19,7 @@ import android.os.Messenger;
 import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.util.Log;
 import dalvik.system.BaseDexClassLoader;
 import java.io.File;
@@ -79,10 +80,22 @@ final class MuonServiceProcess {
     private final ArrayList<Runnable> initializing = new ArrayList<>();
     private final Map<String, SaveRequest> saves = new HashMap<>();
     private final Map<String, Watch> watches = new HashMap<>();
+    private final Map<Long, Runnable> delayedTasks = new HashMap<>();
+    private final Map<String, SourceStart> sourceStarts = new HashMap<>();
     private long nextWatch = 1;
     private long nativeHandle;
     private boolean initialized;
     private String initializationError;
+
+    private static final class SourceStart {
+        final long generation;
+        final long deadline;
+        Runnable timeout;
+        SourceStart(long generation) {
+            this.generation = generation;
+            deadline = SystemClock.elapsedRealtime() + 10000;
+        }
+    }
 
     static MuonServiceProcess get(Context context) {
         if (Looper.myLooper() != Looper.getMainLooper())
@@ -109,6 +122,7 @@ final class MuonServiceProcess {
             int count = definitions.size();
             String[] ids = new String[count];
             String[] libraries = new String[count];
+            String[] runtimes = new String[count];
             String[] directories = new String[count];
             boolean[] autostarts = new boolean[count];
             String[][] configurations = new String[count][];
@@ -116,19 +130,26 @@ final class MuonServiceProcess {
             for (Map.Entry<String, JSONObject> entry : definitions.entrySet()) {
                 String id = entry.getKey();
                 JSONObject definition = entry.getValue();
-                if (!"native".equals(definition.getString("runtime")))
-                    throw new JSONException("Unsupported service runtime");
-                String library = definition.getString("library");
-                if (!library.matches("lib[A-Za-z0-9_][A-Za-z0-9_.+-]*\\.so"))
-                    throw new JSONException("Invalid service library name");
-                String path = ((BaseDexClassLoader)context.getClassLoader()).findLibrary(
-                        library.substring(3, library.length() - 3));
-                if (path == null) throw new IllegalStateException("Service library is not installed: " + library);
+                String runtime = definition.getString("runtime");
+                String path;
+                if ("native".equals(runtime)) {
+                    String library = definition.getString("library");
+                    if (!library.matches("lib[A-Za-z0-9_][A-Za-z0-9_.+-]*\\.so"))
+                        throw new JSONException("Invalid service library name");
+                    path = ((BaseDexClassLoader)context.getClassLoader()).findLibrary(
+                            library.substring(3, library.length() - 3));
+                    if (path == null) throw new IllegalStateException("Service library is not installed: " + library);
+                } else if ("quickjs".equals(runtime)) {
+                    path = definition.getString("asset");
+                    if (!path.equals("muon/services/" + id + ".js"))
+                        throw new JSONException("Invalid service bundle asset");
+                } else throw new JSONException("Unsupported service runtime");
                 File directory = new File(new File(context.getFilesDir(), "services"), id);
                 if (!directory.isDirectory() && !directory.mkdirs())
                     throw new IllegalStateException("Cannot create service data directory: " + id);
                 ids[index] = id;
                 libraries[index] = path;
+                runtimes[index] = runtime;
                 directories[index] = directory.getAbsolutePath();
                 autostarts[index] = definition.optBoolean("autostart", false);
                 JSONObject values = definition.optJSONObject("config");
@@ -145,7 +166,7 @@ final class MuonServiceProcess {
             }
             preferences.load(ids, (overrides, error) -> {
                 initializationError = error;
-                if (error == null) nativeHandle = nativeCreate(this, ids, libraries, directories,
+                if (error == null) nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
                         autostarts, overrides, configurations);
                 initialized = true;
                 ArrayList<Runnable> pending = new ArrayList<>(initializing);
@@ -342,12 +363,35 @@ final class MuonServiceProcess {
     // Called by JNI on the owner Looper. No native callback is invoked inline.
     private void postTask(long task) { handler.post(() -> nativeRunTask(nativeHandle, task)); }
 
+    private void delayTask(long task, long milliseconds) {
+        Runnable action = () -> {
+            delayedTasks.remove(task);
+            nativeRunTask(nativeHandle, task);
+        };
+        delayedTasks.put(task, action);
+        handler.postDelayed(action, milliseconds);
+    }
+
+    private void cancelTask(long task) {
+        Runnable action = delayedTasks.remove(task);
+        if (action != null) handler.removeCallbacks(action);
+    }
+
     private void saveAutostart(String id, boolean enabled, long task) {
         preferences.save(id, enabled, (ignored, error) -> nativeSaved(nativeHandle, task, error));
     }
 
     private void startComponent(String id, long generation) {
         try {
+            if ("quickjs".equals(definition(id).getString("runtime"))) {
+                SourceStart start = new SourceStart(generation);
+                start.timeout = () -> {
+                    if (sourceStarts.get(id) == start)
+                        nativeStartFailed(nativeHandle, id, generation, "Service source startup deadline exceeded");
+                };
+                sourceStarts.put(id, start);
+                handler.postDelayed(start.timeout, 10000);
+            }
             String component = definition(id).getJSONObject("android").getString("component");
             Intent intent = new Intent().setClassName(context, component)
                     .putExtra("generation", generation);
@@ -359,13 +403,35 @@ final class MuonServiceProcess {
     }
 
     private void stopComponent(String id, long generation) {
+        SourceStart start = sourceStarts.get(id);
+        if (start != null && start.generation == generation) {
+            sourceStarts.remove(id);
+            handler.removeCallbacks(start.timeout);
+        }
         MuonNativeService component = components.get(id);
         if (component != null) component.stopGeneration(generation);
     }
 
     void foregroundReady(MuonNativeService component, String id, long generation) {
         components.put(id, component);
-        if (!nativeForegroundReady(nativeHandle, id, generation)) component.stopGeneration(generation);
+        SourceStart start = sourceStarts.get(id);
+        if (start == null) {
+            if (!nativeForegroundReady(nativeHandle, id, generation, null, 0)) component.stopGeneration(generation);
+            return;
+        }
+        if (start.generation != generation) { component.stopGeneration(generation); return; }
+        MuonServiceSource.read(context, definition(id).optString("asset"), handler, (source, error) -> {
+            if (sourceStarts.get(id) != start) return;
+            sourceStarts.remove(id);
+            handler.removeCallbacks(start.timeout);
+            long remaining = start.deadline - SystemClock.elapsedRealtime();
+            if (error != null || remaining <= 0) {
+                nativeStartFailed(nativeHandle, id, generation,
+                        error == null ? "Service source startup deadline exceeded" : error);
+            } else if (!nativeForegroundReady(nativeHandle, id, generation, source, remaining)) {
+                component.stopGeneration(generation);
+            }
+        });
     }
 
     void startFailed(String id, long generation, String error) {
@@ -412,7 +478,7 @@ final class MuonServiceProcess {
         } catch (JSONException error) { Log.e("MuonNativeService", "Invalid native service event", error); }
     }
 
-    private static native long nativeCreate(MuonServiceProcess owner, String[] ids,
+    private static native long nativeCreate(MuonServiceProcess owner, String[] ids, String[] runtimes,
             String[] libraries, String[] directories, boolean[] autostarts, int[] overrides, String[][] configurations);
     private static native void nativeRunTask(long handle, long task);
     private static native void nativeActivate(long handle);
@@ -423,7 +489,7 @@ final class MuonServiceProcess {
     private static native void nativeReleaseOwner(long handle, String owner);
     private static native void nativeOpenRpc(long handle, String owner, int descriptor);
     private static native String nativeSnapshot(long handle, String id);
-    private static native boolean nativeForegroundReady(long handle, String id, long generation);
+    private static native boolean nativeForegroundReady(long handle, String id, long generation, String source, long remaining);
     private static native void nativeStartFailed(long handle, String id, long generation, String error);
     private static native void nativeRuntimeStop(long handle, String id, long generation, String error);
 }

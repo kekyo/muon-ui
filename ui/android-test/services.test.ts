@@ -77,8 +77,10 @@ it("packages one factory as separate logical Android components for both ABIs", 
   );
   expect(services[0]!.android.foregroundServiceType).toBe("specialUse");
   expect(services[1]!.android.foregroundServiceType).toBe("dataSync");
-  expect(services[0]!.libraries).toEqual(services[1]!.libraries);
-  expect(Object.keys(services[0]!.libraries)).toEqual(["arm64-v8a", "x86_64"]);
+  const native = services.filter((service) => service.runtime === "native");
+  expect(native).toHaveLength(2);
+  expect(native[0]!.libraries).toEqual(native[1]!.libraries);
+  expect(Object.keys(native[0]!.libraries)).toEqual(["arm64-v8a", "x86_64"]);
   expect(getAndroidServicePermissions(services)).toEqual([
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.POST_NOTIFICATIONS",
@@ -140,6 +142,9 @@ it("rejects conflicting plugin and service libraries before the package builder 
   );
   const services = await resolveAndroidServices(definitions, ["arm64-v8a"], []);
   const conflict = join(root, "conflict.so");
+  const service = services[0]!;
+  if (service.runtime !== "native")
+    throw new Error("Expected the native fixture");
   await writeFile(conflict, "different bytes");
   await expect(
     resolveAndroidServices(
@@ -148,7 +153,7 @@ it("rejects conflicting plugin and service libraries before the package builder 
       [
         {
           name: "page",
-          soname: services[0]!.soname,
+          soname: service.soname,
           allow: ["page.run"],
           config: [],
           libraries: { "arm64-v8a": conflict },

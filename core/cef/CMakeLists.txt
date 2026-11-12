@@ -1366,6 +1366,8 @@ else()
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.."
     DEPENDS renderer/services.ts service-renderer.vite.config.ts
       ../common/renderer/services.ts ../common/build-service-renderer.mts
+      ../../sdk/src/service-connection.ts ../../sdk/src/service-interface.ts
+      ../../sdk/src/service-values.ts
     COMMENT "Building the shared service renderer"
     VERBATIM)
 endif()

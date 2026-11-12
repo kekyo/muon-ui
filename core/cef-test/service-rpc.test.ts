@@ -255,7 +255,28 @@ it.each(["native", "quickjs"] as const)(
       }
       await subscription.close();
       expect(await subscription.closed).toBeUndefined();
+      const workerStopped = new Promise<void>((resolve) => {
+        output.on("line", (line) => {
+          const state = JSON.parse(line);
+          if (state.id === "worker" && state.state === "stopped") resolve();
+        });
+      });
+      await second.request("setAutostart", {
+        serviceId: "worker",
+        enabled: false,
+      });
+      expect(
+        await second.request("getState", { serviceId: "worker" }),
+      ).toMatchObject({
+        state: "running",
+        resident: false,
+        clientReferences: 1,
+      });
+      expect(await second.service.call("echo", ["after-autostart-off"])).toBe(
+        "after-autostart-off",
+      );
       await second.service.release();
+      await workerStopped;
       await second.request("shutdown", {});
       expect((await exited)[0], diagnostics).toBe(0);
     } finally {

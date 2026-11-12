@@ -2970,6 +2970,70 @@ requestedAtUnix=0
       ).toBe(false);
     });
 
+    it.each([
+      { channel: "LTS", lts: "Krypton" },
+      { channel: "non-LTS", lts: false },
+    ] as const)(
+      "ignores prereleases when selecting a compatible $channel release",
+      async ({ lts }) => {
+        const fixture = await createPrepareFixture();
+        const selectedArtifact = await createFakeNodeTarGzArtifact("v24.4.0", {
+          includeLicense: true,
+          nodeIsSymlink: false,
+          includeNpmSymlink: false,
+          includeTraversalEntry: false,
+        });
+        const distribution = createFakeNodeDistribution([
+          createFakeNodeRelease("v27.0.0-alpha.0.0.0", false),
+          createFakeNodeRelease("v24.4.0", lts, selectedArtifact),
+          createFakeNodeRelease("v26.0.0-rc.1", false),
+        ]);
+        const server = await startNodeDistributionServer(distribution);
+
+        await prepareNodeFixture(fixture, server.baseUrl, {
+          ...createNodeRequirement("*", [[]]),
+          engineRangeSpecified: lts === false,
+        });
+
+        await expect(
+          readFile(join(fixture.stageDir, "runtimes", "node", "bin", "node")),
+        ).resolves.toEqual(createFakeNodeExecutableContent("v24.4.0"));
+        expect(
+          server
+            .getRequests()
+            .some(
+              ({ pathname }) =>
+                pathname.includes("alpha") || pathname.includes("rc.1"),
+            ),
+        ).toBe(false);
+      },
+    );
+
+    it.each(["v27.0", "v27.0.0-alpha..1", "v27.0.0-alpha.01"])(
+      "rejects malformed Node catalog version %s before selecting a release",
+      async (version) => {
+        const fixture = await createPrepareFixture();
+        const distribution = createFakeNodeDistribution([
+          createFakeNodeRelease("v24.4.0", "Krypton"),
+          createFakeNodeRelease(version, false),
+        ]);
+        const server = await startNodeDistributionServer(distribution);
+
+        await expect(
+          prepareNodeFixture(
+            fixture,
+            server.baseUrl,
+            createNodeRequirement("*", [[]]),
+          ),
+        ).rejects.toThrow("Invalid Node.js release index entry.");
+        expect(
+          server
+            .getRequests()
+            .some(({ pathname }) => pathname !== "/index.json"),
+        ).toBe(false);
+      },
+    );
+
     it("does not use a non-LTS fallback when package.json omits engines.node", async () => {
       const fixture = await createPrepareFixture();
       const distribution = createFakeNodeDistribution([

@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include "muon_notification_toggle.h"
 
 // Native UIA sees Windows 11's XAML notification tree. The older managed
 // System.Windows.Automation client omits this tree on the test machine.
@@ -109,7 +110,7 @@ static void Invoke(IUIAutomationElement* element) {
   Check(pattern.value->Invoke(), "Invoke notification UI control");
 }
 
-static std::optional<ToggleState> Setting(IUIAutomation* automation,
+static std::optional<bool> Setting(IUIAutomation* automation,
     IUIAutomationElement* root, const std::wstring& desired, bool& toggled) {
   auto window = FindProperty(automation, root, UIA_NamePropertyId, L"Settings", TreeScope_Children);
   if (!window.value) return {};
@@ -119,18 +120,18 @@ static std::optional<ToggleState> Setting(IUIAutomation* automation,
   ComPointer<IUIAutomationTogglePattern> pattern;
   Check(control.value->GetCurrentPatternAs(UIA_TogglePatternId, IID_IUIAutomationTogglePattern,
       reinterpret_cast<void**>(&pattern.value)), "Get notification setting pattern");
-  ToggleState state;
-  Check(pattern.value->get_CurrentToggleState(&state), "Read notification setting");
-  if (state == ToggleState_Indeterminate)
-    throw std::runtime_error("Notification setting is indeterminate");
-  if (desired.empty()) return state;
-  const auto requested = desired == L"1" ? ToggleState_On : ToggleState_Off;
-  if (state != requested && !toggled) {
-    Check(pattern.value->Toggle(), "Change notification setting");
-    toggled = true;
-    Check(pattern.value->get_CurrentToggleState(&state), "Read changed notification setting");
-  }
-  return state == requested ? std::optional{state} : std::nullopt;
+  // UIA has a third, indeterminate state. For this boolean Settings switch it
+  // provides no value to restore or toggle safely; await the already subscribed
+  // ToggleToggleState/structure events, subject to Observe's original deadline.
+  // https://learn.microsoft.com/windows/win32/api/uiautomationcore/ne-uiautomationcore-togglestate
+  return ObserveMuonNotificationToggle([&]() -> std::optional<bool> {
+    ToggleState state;
+    Check(pattern.value->get_CurrentToggleState(&state), "Read notification setting");
+    if (state == ToggleState_On) return true;
+    if (state == ToggleState_Off) return false;
+    return std::nullopt;
+  }, [&] { Check(pattern.value->Toggle(), "Change notification setting"); },
+      desired.empty() ? std::nullopt : std::optional{desired == L"1"}, toggled);
 }
 
 class Changes final : public IUIAutomationStructureChangedEventHandler,
@@ -199,7 +200,7 @@ static int Observe(const std::wstring& operation, const std::wstring& title,
       if (operation == L"setting") {
         const auto state = Setting(automation.value, root.value, action, toggled);
         if (state) {
-          std::cout << (*state == ToggleState_On ? "1\n" : "0\n");
+          std::cout << (*state ? "1\n" : "0\n");
           break;
         }
       }

@@ -76,6 +76,10 @@ typedef struct muon_service_context {
  * @remarks Invoke exactly once on the owner dispatcher. Do not call host
  *     operations or leave callbacks outstanding after invoking this completion.
  *     The host keeps the library loaded until the stop callback returns.
+ *     This includes asynchronous framework cleanup: a detached coroutine can
+ *     still queue its own destruction after its body returns. Retain such work
+ *     in the instance, post final disposal with host.post after it completes,
+ *     and destroy the completed promises before invoking this callback.
  */
 typedef void (*muon_service_stop_completion)(void* completion_data);
 

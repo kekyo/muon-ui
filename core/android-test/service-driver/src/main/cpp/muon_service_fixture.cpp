@@ -61,6 +61,9 @@ struct Fixture {
   uint64_t count = 0;
   cardio::cancellation_source cancellation{};
   std::optional<cardio::promise<void>> work{};
+  std::optional<cardio::promise<void>> stopping{};
+  muon_service_stop_completion stop_completion = nullptr;
+  void* stop_data = nullptr;
 };
 
 static std::string LabelHex(const muon_service_context* context) {
@@ -132,8 +135,17 @@ static cardio::promise<void> Serve(Fixture* state) {
   }
 }
 
-static cardio::promise<void> StopAsync(Fixture* state,
-    muon_service_stop_completion completion, void* data) {
+static void FinishStop(void* data) {
+  auto* state = static_cast<Fixture*>(data);
+  const auto completion = state->stop_completion;
+  auto* completion_data = state->stop_data;
+  // Both coroutine frames must be destroyed before the host may unload this
+  // library. The deferred task runs after StopAsync has returned completely.
+  delete state;
+  completion(completion_data);
+}
+
+static cardio::promise<void> StopAsync(Fixture* state) {
   state->cancellation.cancel();
   co_await *state->work;
   if (state->client != invalid_socket) CloseSocket(state->client);
@@ -141,12 +153,14 @@ static cardio::promise<void> StopAsync(Fixture* state,
 #if defined(_WIN32)
   WSACleanup();
 #endif
-  delete state;
-  completion(data);
+  state->context->host->post(state->context->host->user_data, FinishStop, state);
 }
 
-static void Stop(void* state, muon_service_stop_completion completion, void* data) {
-  cardio::fire_and_forget(StopAsync(static_cast<Fixture*>(state), completion, data));
+static void Stop(void* data, muon_service_stop_completion completion, void* completion_data) {
+  auto* state = static_cast<Fixture*>(data);
+  state->stop_completion = completion;
+  state->stop_data = completion_data;
+  state->stopping.emplace(StopAsync(state));
 }
 
 static void Start(const muon_service_context* context,

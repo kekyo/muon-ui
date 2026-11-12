@@ -24,7 +24,13 @@ export const environmentFunctionNames = [
 ] as const;
 
 /** Internal service operations authenticated with the current document owner. */
-export const serviceFunctionNames = ['acquire', 'release', 'getState'] as const;
+export const serviceFunctionNames = [
+  'acquire',
+  'release',
+  'getState',
+  'setAutostart',
+  'watchState',
+] as const;
 
 /** Filesystem functions implemented by Android. */
 export const filesystemFunctionNames = [

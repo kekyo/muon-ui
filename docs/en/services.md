@@ -46,6 +46,14 @@ Add the service to `muon.json`. Without `autostart`, it runs while pages hold re
 }
 ```
 
+Build the application with its services, then run the generated launcher:
+
+```bash
+npx muon build --target linux-amd64
+```
+
+Select `windows-amd64` or `windows-i686` for Windows, or `android` to produce an APK to install. Currently, `muon run` and `vite dev` do not assemble service declarations. After changing a service, rebuild the application and run the generated artifact.
+
 Acquire a reference in the page, call the service, and release it when finished.
 
 ```ts

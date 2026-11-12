@@ -46,6 +46,14 @@ export default defineService({
 }
 ```
 
+サービスを含むアプリをビルドし、生成先のランチャーを実行します。
+
+```bash
+npx muon build --target linux-amd64
+```
+
+Windows向けは`windows-amd64`または`windows-i686`、Android向けは`android`を指定し、Androidでは生成APKをインストールします。現在の`muon run`と`vite dev`はサービス定義を組み立てません。サービスを変更した後は、アプリを再ビルドして生成物から実行してください。
+
 画面では参照を取得してから呼び出し、使い終わったら解放します。
 
 ```ts

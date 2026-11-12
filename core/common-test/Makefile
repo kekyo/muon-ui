@@ -22,9 +22,13 @@ QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').ver
 QUICKJS_SOURCE_DIR := $(COMMON)/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
 QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
 TESTS += $(OUT)/quickjs-engine $(OUT)/quickjs-service $(OUT)/quickjs-service-sdk
+TESTS += $(OUT)/service-execution-router
 
 .PHONY: all test clean service-driver quickjs-source
 all: $(TESTS)
+
+$(OUT)/service-execution-router: muon_service_execution_router_test.cpp $(COMMON)/src/services/muon_service_execution_router.cpp $(COMMON)/src/services/muon_service_execution_router.h | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) -o $@
 
 $(OUT):
 	mkdir -p $@

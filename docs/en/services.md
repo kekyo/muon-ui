@@ -211,4 +211,15 @@ Autostart ON does not guarantee continuous OS execution. Background starts, whil
 
 Closing the UI differs from an OS stop of the entire application. Android's Active apps stop action terminates the whole app without guaranteed cleanup callbacks. Reference counts do not override that action. See [user-initiated stopping](https://developer.android.com/develop/background-work/services/fgs/handle-user-stopping).
 
+On Android API 30 and later, service host startup reads OS exit history and exposes it as `lastHostExit` in `getState()` and `watchState()` observations. It includes `reason`, the OS `reasonCode`, and `timestampMs`, a decimal string of milliseconds since the Unix epoch. The value is `null` when no record can be obtained, on API 29 and earlier, or on PC. See [ApplicationExitInfo](https://developer.android.com/reference/android/app/ApplicationExitInfo).
+
+This is historical information about the entire service host. Services sharing that host return the same record; it does not establish that each service was running at the time. Use `state` and `error` for the current runtime state and failure.
+
+```ts
+const state = await window.muon.services!.getState('echo');
+if (state.lastHostExit) {
+  console.log(state.lastHostExit.reason, state.lastHostExit.timestampMs);
+}
+```
+
 This release does not register service startup on device boot. Saved preferences are evaluated on a normal application launch. See the [Android guide](android.md) for application builds, signing, and distribution formats.

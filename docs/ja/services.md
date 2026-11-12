@@ -211,4 +211,15 @@ AndroidではサービスをUIとは別のプロセスで動かし、foreground 
 
 画面を閉じる操作と、OSによるアプリ全体の停止は異なります。Androidの「アクティブなアプリ」から停止するとアプリ全体が終了し、終了コールバックも保証されません。muonは参照数だけを理由にOSの停止を回避しません。[ユーザーによる停止の仕様](https://developer.android.com/develop/background-work/services/fgs/handle-user-stopping)
 
+Android API 30以降では、サービスホストの起動時にOSの終了履歴を読み、`getState()`と`watchState()`の`lastHostExit`で返します。理由を表す`reason`、OSの理由コード`reasonCode`、終了時刻の`timestampMs`などを取得できます。時刻はUnix epochからのミリ秒を表す10進文字列です。OSから記録を取得できない場合、API 29以前、PCでは`null`になります。[ApplicationExitInfoの仕様](https://developer.android.com/reference/android/app/ApplicationExitInfo)
+
+この情報はサービスホスト全体の過去の終了を表します。同じホストで動くサービスは同じ記録を返し、個々のサービスがその時点で動いていたとは限りません。現在の実行状態や失敗理由は、引き続き`state`と`error`で確認してください。
+
+```ts
+const state = await window.muon.services!.getState('echo');
+if (state.lastHostExit) {
+  console.log(state.lastHostExit.reason, state.lastHostExit.timestampMs);
+}
+```
+
 このバージョンでは端末の起動完了からサービスを開始する登録を追加しません。アプリの正規の起動時に保存済み設定を評価します。Androidアプリのビルド、署名、配布形式については[Androidガイド](android.md)を参照してください。

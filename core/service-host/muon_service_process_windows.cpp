@@ -4,6 +4,8 @@
  * https://github.com/kekyo/muon-ui
  */
 #include "services/muon_service_process.h"
+#include "services/muon_service_transport.h"
+#include "muon_service_process_lock.h"
 #include "muon_filesystem.h"
 #include <windows.h>
 #include <objbase.h>
@@ -100,18 +102,32 @@ static cardio::promise<void> Detach(std::shared_ptr<Handle> input) {
   co_return;
 }
 
+static cardio::promise<void> DetachTransport(std::shared_ptr<MuonServiceTransport> transport) {
+  transport->close();
+  co_return;
+}
+
 cardio::promise<MuonServiceProcess> LaunchMuonServiceProcess(
     MuonServiceProcessOptions options, cardio::cancellation cancellation) {
   for (const auto* path : {&options.executable, &options.registry, &options.data_root}) {
+    if (path == &options.registry && path->empty()) continue;
     const auto native = muon_internal::FilesystemPathFromUtf8(*path);
     const auto absolute = native.is_absolute() || native.native().starts_with(L"\\\\") ||
         native.native().starts_with(L"//");
     if (!absolute || path->find('\0') != std::string::npos)
       throw std::invalid_argument("Service process paths must be absolute and contain no NUL");
   }
-  if (options.endpoint.find('\0') != std::string::npos)
+  if (options.endpoint.find('\0') != std::string::npos || options.startup.find('\0') != std::string::npos)
     throw std::invalid_argument("Service endpoint cannot contain NUL");
   if (cancellation.is_cancellation_requested()) throw cardio::canceled_exception();
+  auto launch_lock = co_await AcquireMuonServiceProcessLock("launch:" + options.endpoint, cancellation);
+  try {
+    auto transport = std::make_shared<MuonServiceTransport>(
+        co_await ConnectMuonServiceTransport(options.endpoint, cancellation));
+    co_return MuonServiceProcess{[transport] { return DetachTransport(transport); }};
+  } catch (const std::system_error& error) {
+    if (error.code().value() != ERROR_FILE_NOT_FOUND && error.code().value() != ERROR_PATH_NOT_FOUND) throw;
+  }
   const auto security = PipeSecurity();
   auto input = CreatePipePair(security.get());
   auto output = CreatePipePair(security.get());
@@ -155,7 +171,8 @@ cardio::promise<MuonServiceProcess> LaunchMuonServiceProcess(
       muon_internal::FilesystemPathFromUtf8(options.executable), muon_internal::FilesystemIoUsage::File);
   auto command = Quote(executable.native());
   for (const auto& argument : {std::string("--config"), options.registry, std::string("--endpoint"),
-      options.endpoint, std::string("--data-root"), options.data_root, std::string("--bootstrap"), std::string("stdin")})
+      options.endpoint, std::string("--data-root"), options.data_root, std::string("--bootstrap"), std::string("stdin"),
+      std::string("--startup"), options.startup})
     command += L" " + Quote(muon_internal::FilesystemPathFromUtf8(argument).native());
   PROCESS_INFORMATION created{};
   Check(CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,

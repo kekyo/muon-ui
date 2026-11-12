@@ -14,6 +14,8 @@ const execute = promisify(execFile);
 const binaryDirectory = resolve(process.argv[2]!);
 const children: ChildProcess[] = [];
 const sockets: Socket[] = [];
+const loginRegistration = "muon-policy-" + randomUUID();
+const runKey = String.raw`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`;
 const directory = join(binaryDirectory, "日本語-service-" + randomUUID());
 await mkdir(directory);
 
@@ -30,6 +32,117 @@ const availablePort = async (): Promise<number> => {
 };
 
 try {
+  const lockKey = randomUUID();
+  const lockDriver = join(binaryDirectory, "process-lock-driver.exe");
+  const lockHolder = spawn(lockDriver, [lockKey, "hold"], {
+    windowsHide: true,
+  });
+  children.push(lockHolder);
+  const lockHolderExit = once(lockHolder, "exit");
+  const holderLines = createInterface({ input: lockHolder.stdout! })[
+    Symbol.asyncIterator
+  ]();
+  assert.equal((await holderLines.next()).value, "waiting");
+  assert.equal((await holderLines.next()).value, "locked");
+  // A login-started process and a UI can inherit different temp directories.
+  // Their synchronization must still identify the same OS user/session lock.
+  const canceledLock = await execute(lockDriver, [lockKey, "cancel"], {
+    env: { ...process.env, TMP: directory, TEMP: directory },
+  });
+  assert(canceledLock.stdout.includes("canceled"));
+  const lockWaiter = spawn(lockDriver, [lockKey, "wait"], {
+    windowsHide: true,
+  });
+  children.push(lockWaiter);
+  const lockWaiterExit = once(lockWaiter, "exit");
+  const waiterLines = createInterface({ input: lockWaiter.stdout! })[
+    Symbol.asyncIterator
+  ]();
+  assert.equal((await waiterLines.next()).value, "waiting");
+  lockHolder.kill("SIGKILL");
+  await lockHolderExit;
+  assert.equal((await waiterLines.next()).value, "locked");
+  assert.equal((await lockWaiterExit)[0], 0);
+  const localLock = await execute(lockDriver, [lockKey, "local"]);
+  assert.equal(
+    localLock.stdout.replaceAll("\r", ""),
+    "waiting\ncanceled\nlocked\n",
+  );
+  console.log(JSON.stringify({ launchLock: true, passed: true }));
+
+  const raceEndpoint = String.raw`\\.\pipe\muon-service-${randomUUID()}`;
+  const raceConfig = join(directory, "race-services.json");
+  const racePort = await availablePort();
+  await writeFile(
+    raceConfig,
+    JSON.stringify({
+      services: {
+        worker: {
+          library: "../probe-service.dll",
+          autostart: true,
+          config: { port: String(racePort) },
+        },
+      },
+    }),
+  );
+  const launchJoined = async () => {
+    const child = spawn(
+      join(binaryDirectory, "process-driver.exe"),
+      [
+        "detach",
+        join(binaryDirectory, "muon-service-host.exe"),
+        raceConfig,
+        raceEndpoint,
+        join(directory, "race data"),
+      ],
+      { stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    children.push(child);
+    const exit = once(child, "exit");
+    let output = "";
+    child.stdout.on("data", (bytes: Buffer) => {
+      output += bytes.toString();
+    });
+    assert.equal((await exit)[0], 0, output);
+    return JSON.parse(output) as { launched: boolean; pid: number };
+  };
+  const joined = await Promise.all([
+    launchJoined(),
+    launchJoined(),
+    launchJoined(),
+  ]);
+  assert(
+    joined.every((value) => value.launched && value.pid === joined[0]!.pid),
+  );
+  const raceSocket = createConnection(raceEndpoint);
+  sockets.push(raceSocket);
+  const raceReplies = createInterface({ input: raceSocket })[
+    Symbol.asyncIterator
+  ]();
+  await once(raceSocket, "connect");
+  assert.equal(JSON.parse((await raceReplies.next()).value!).event, "ready");
+  const raceBusiness = createConnection({ host: "127.0.0.1", port: racePort });
+  sockets.push(raceBusiness);
+  await once(raceBusiness, "connect");
+  const raceResponse = once(createInterface({ input: raceBusiness }), "line");
+  const raceNonce = randomUUID();
+  raceBusiness.write(raceNonce + "\n");
+  const raceValue = JSON.parse((await raceResponse)[0]);
+  assert.equal(raceValue.nonce, raceNonce);
+  assert.equal(raceValue.pid, joined[0]!.pid);
+  raceBusiness.destroy();
+  const raceObserver = spawn(
+    join(binaryDirectory, "process-driver.exe"),
+    ["wait", String(joined[0]!.pid)],
+    { windowsHide: true },
+  );
+  children.push(raceObserver);
+  const raceExit = once(raceObserver, "exit");
+  await once(createInterface({ input: raceObserver.stdout! }), "line");
+  raceSocket.write('{"requestId":"exit","op":"shutdown"}\n');
+  assert.equal((await raceExit)[0], 0);
+  console.log(JSON.stringify({ concurrentLaunch: true, passed: true }));
+
   for (const mode of ["simple", "probe"]) {
     for (const shutdown of ["command", "session"]) {
       const endpoint = String.raw`\\.\pipe\muon-service-${randomUUID()}`;
@@ -532,6 +645,14 @@ try {
     policyEndpoint,
     "--data-root",
     "\\\\?\\" + policyRoot,
+    "--startup",
+    JSON.stringify({
+      executable: join(binaryDirectory, "process-driver.exe"),
+      source: "normal",
+      id: loginRegistration,
+      arguments: ["--muon-autostart"],
+      refresh: true,
+    }),
   ];
   const startPolicyHost = async () => {
     const host = spawn(
@@ -545,10 +666,17 @@ try {
     host.stderr.on("data", (bytes: Buffer) => {
       diagnostic += bytes.toString();
     });
+    let readyOutput = false;
     for await (const line of createInterface({ input: host.stdout })) {
-      if (JSON.parse(line).ready) break;
+      if (JSON.parse(line).ready) {
+        readyOutput = true;
+        break;
+      }
     }
-    assert.equal(host.exitCode, null, diagnostic);
+    if (!readyOutput) {
+      await exited;
+      throw new Error(diagnostic);
+    }
     const socket = createConnection(policyEndpoint);
     sockets.push(socket);
     const callbacks = new Map<
@@ -587,6 +715,15 @@ try {
     return { host, exited, request, shutdown };
   };
   const firstPolicy = await startPolicyHost();
+  assert.equal(
+    (await firstPolicy.request({ op: "getUiAutostart" })).result,
+    false,
+  );
+  assert.match(
+    (await execute("reg.exe", ["query", runKey, "/v", loginRegistration]))
+      .stdout,
+    /--muon-autostart/,
+  );
   const acquired = await firstPolicy.request({
     op: "acquire",
     serviceId: "worker",
@@ -668,6 +805,10 @@ try {
   firstPolicy.host.kill("SIGKILL");
   await firstPolicy.exited;
   const restoredPolicy = await startPolicyHost();
+  assert.equal(
+    (await restoredPolicy.request({ op: "getUiAutostart" })).result,
+    false,
+  );
   const off = (
     await restoredPolicy.request({ op: "getState", serviceId: "worker" })
   ).result;
@@ -691,6 +832,44 @@ try {
   assert.equal(on.generation, secondPolicy.result.generation);
   assert.equal(on.clientReferences, 0);
   assert.equal(on.resident, true);
+  assert.equal(
+    (await restoredPolicy.request({ op: "setUiAutostart", enabled: true }))
+      .result,
+    null,
+  );
+  assert.equal(
+    (await restoredPolicy.request({ op: "setUiAutostart", enabled: false }))
+      .result,
+    null,
+  );
+  await execute("reg.exe", ["query", runKey, "/v", loginRegistration]);
+  assert.equal(
+    (
+      await restoredPolicy.request({
+        op: "setAutostart",
+        serviceId: "second",
+        enabled: false,
+      })
+    ).result,
+    null,
+  );
+  await assert.rejects(
+    execute("reg.exe", ["query", runKey, "/v", loginRegistration]),
+  );
+  assert.equal(
+    (await restoredPolicy.request({ op: "setUiAutostart", enabled: true }))
+      .result,
+    null,
+  );
+  await execute("reg.exe", ["query", runKey, "/v", loginRegistration]);
+  assert.equal(
+    (await restoredPolicy.request({ op: "setUiAutostart", enabled: false }))
+      .result,
+    null,
+  );
+  await assert.rejects(
+    execute("reg.exe", ["query", runKey, "/v", loginRegistration]),
+  );
   // Shutdown acknowledgement is best effort; process exit confirms disposal.
   restoredPolicy.shutdown();
   assert.equal((await restoredPolicy.exited)[0], 0);
@@ -711,4 +890,9 @@ try {
     await exit;
   }
   await rm(directory, { recursive: true, force: true });
+  try {
+    await execute("reg.exe", ["delete", runKey, "/v", loginRegistration, "/f"]);
+  } catch {
+    /* The successful all-OFF case already removed this test's entry. */
+  }
 }

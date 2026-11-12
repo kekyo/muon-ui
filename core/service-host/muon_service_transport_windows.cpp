@@ -4,6 +4,7 @@
  * https://github.com/kekyo/muon-ui
  */
 #include "services/muon_service_transport.h"
+#include "muon_service_process_lock.h"
 #include "muon_filesystem.h"
 
 #include <windows.h>
@@ -114,13 +115,12 @@ cardio::promise<MuonServiceTransport> ConnectMuonServiceTransport(
   if (cancellation.is_cancellation_requested()) throw cardio::canceled_exception();
   // CreateFile has no asynchronous busy-pipe wait. Serialize establishment
   // through the server's rearm acknowledgement, not just the CreateFile call.
-  static cardio::primitives::mutex connections;
-  auto connection = std::move(co_await connections.lock(cancellation));
   const auto native = muon_internal::FilesystemPathFromUtf8(endpoint).native();
   constexpr auto prefix = L"\\\\.\\pipe\\muon-service-";
   if (!native.starts_with(prefix) || native.size() <= std::wcslen(prefix) ||
       native.size() > 256 || native.find(L'\\', std::wcslen(prefix)) != std::wstring::npos)
     throw std::invalid_argument("Service endpoint must be a local muon-service named pipe");
+  auto connection = co_await AcquireMuonServiceProcessLock("connect:" + endpoint, cancellation);
   auto state = std::make_shared<PipeState>();
   state->pipe = CreateFileW(native.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
       OPEN_EXISTING, FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);

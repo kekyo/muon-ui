@@ -19,18 +19,20 @@ struct MuonServiceProcessOptions {
 
 /** Non-owning startup connection; destroying it never kills resident services. */
 struct MuonServiceProcess {
-  /** Closes and drains bootstrap I/O; repeated calls never wait for or kill the host. */
+  /** Closes and drains startup or joined transport I/O; repeated calls never kill the host. */
   std::function<cardio::promise<void>()> detach;
 };
 
 /**
- * Launches an independent host and waits for its ready output.
+ * Joins an existing authenticated host or launches one and waits for readiness.
  * @param options Absolute executable/config/data paths and authenticated endpoint.
- * @param cancellation Cancels readiness, closes bootstrap input, and drains I/O.
- * @return Bootstrap connection to retain while the UI owns the initial launch.
- * @remarks The host reads --bootstrap stdin. EOF permits an unused host to exit;
- * resident references and page connections retain their own independent lives.
- * The host inherits no unrelated descriptors. stderr is inherited for diagnostics.
+ * @param cancellation Cancels lock/readiness waits and drains startup I/O.
+ * @return Non-owning connection retained until the caller establishes its session.
+ * @remarks Concurrent launches for the same endpoint are serialized. An existing
+ * host is joined through an authenticated transport; a new host receives a
+ * --bootstrap stdin pipe. Closing either connection permits an unused host to
+ * exit. Resident references and page connections retain their independent lives.
+ * A spawned host inherits no unrelated descriptors; stderr carries diagnostics.
  */
 cardio::promise<MuonServiceProcess> LaunchMuonServiceProcess(
     MuonServiceProcessOptions options, cardio::cancellation cancellation);

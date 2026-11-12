@@ -815,6 +815,7 @@ add_library(muon_service_desktop STATIC
   ${MUON_COMMON_ROOT}/src/services/muon_service_client.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_session.cpp
   ../service-host/muon_service_transport_${MUON_SERVICE_PLATFORM}.cpp
+  ../service-host/muon_service_process_lock_${MUON_SERVICE_PLATFORM}.cpp
   ../service-host/muon_service_process_${MUON_SERVICE_PLATFORM}.cpp)
 target_compile_features(muon_service_desktop PRIVATE cxx_std_20)
 target_include_directories(muon_service_desktop PUBLIC
@@ -845,7 +846,7 @@ target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson ${CMAKE_DL_LI
 set_target_properties(muon_service_host PROPERTIES
   OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
 if(WIN32)
-  target_link_libraries(muon_service_desktop PRIVATE muon_windows_path advapi32)
+  target_link_libraries(muon_service_desktop PRIVATE muon_windows_path advapi32 shell32 ole32 uuid)
   target_link_libraries(muon_service_host PRIVATE muon_windows_path advapi32 user32 ole32)
   target_compile_definitions(muon_service_desktop PRIVATE _WIN32_WINNT=0x0601)
   target_compile_definitions(muon_service_host PRIVATE _WIN32_WINNT=0x0601)

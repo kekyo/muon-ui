@@ -52,12 +52,25 @@ static cardio::promise<void> Run(MuonServiceProcessOptions options,
   group.shutdown();
 }
 
+static cardio::promise<void> Join(MuonServiceProcessOptions options,
+    cardio::dispatcher_group_glib& group, bool& passed) {
+  try {
+    auto process = co_await LaunchMuonServiceProcess(std::move(options), {});
+    co_await process.detach();
+    std::cout << "{\"joined\":true}" << std::endl;
+    passed = true;
+  } catch (const std::exception& error) { std::cerr << error.what() << '\n'; }
+  group.shutdown();
+}
+
 int main(int argc, char** argv) {
-  if (argc != 5) return 2;
+  const auto joining = argc == 6 && std::string(argv[1]) == "join";
+  if (argc != 5 && !joining) return 2;
   cardio::dispatcher_group_glib group;
   cardio::dispatcher_host_glib dispatcher(group);
   bool passed = false;
-  cardio::fire_and_forget(Run({argv[1], argv[2], argv[3], argv[4]}, group, passed));
+  if (joining) cardio::fire_and_forget(Join({argv[2], argv[3], argv[4], argv[5]}, group, passed));
+  else cardio::fire_and_forget(Run({argv[1], argv[2], argv[3], argv[4]}, group, passed));
   dispatcher.park();
   return passed ? 0 : 1;
 }

@@ -48,23 +48,50 @@ for (const apk of [
   const result = adb(['install', '-r', join(root, apk)]);
   if (!result.includes('Success')) throw new Error(result);
 }
-const result = adb([
-  'shell',
-  'am',
-  'instrument',
-  '-w',
-  '-r',
-  '-e',
-  'class',
-  'dev.muon.e2e.observer.NativeServiceProcessTest',
-  'dev.muon.e2e.observer.test/androidx.test.runner.AndroidJUnitRunner',
-]);
-process.stdout.write(result);
-if (
-  !/OK \(\d+ tests?\)/u.test(result) ||
-  /FAILURES|INSTRUMENTATION_FAILED/u.test(result)
-) {
-  throw new Error('Native service observer assertions failed.');
+// The timeout assertion alters only the disposable emulator. Keep a second
+// restore boundary outside instrumentation in case its process terminates.
+const timeoutKey = ['activity_manager', 'data_sync_fgs_timeout_duration'];
+const emulator = adb(['shell', 'getprop', 'ro.kernel.qemu']).trim() === '1';
+const originalTimeout = emulator
+  ? adb(['shell', 'device_config', 'get', ...timeoutKey]).trim()
+  : undefined;
+try {
+  const result = adb([
+    'shell',
+    'am',
+    'instrument',
+    '-w',
+    '-r',
+    '-e',
+    'class',
+    'dev.muon.e2e.observer.NativeServiceProcessTest,dev.muon.e2e.observer.ServiceConstraintsTest',
+    'dev.muon.e2e.observer.test/androidx.test.runner.AndroidJUnitRunner',
+  ]);
+  process.stdout.write(result);
+  if (
+    !/OK \(\d+ tests?\)/u.test(result) ||
+    /FAILURES|INSTRUMENTATION_FAILED/u.test(result)
+  ) {
+    throw new Error('Native service observer assertions failed.');
+  }
+} finally {
+  if (originalTimeout !== undefined) {
+    adb([
+      'shell',
+      'device_config',
+      originalTimeout === 'null' ? 'delete' : 'put',
+      ...timeoutKey,
+      ...(originalTimeout === 'null' ? [] : [originalTimeout]),
+    ]);
+    if (
+      adb(['shell', 'device_config', 'get', ...timeoutKey]).trim() !==
+      originalTimeout
+    ) {
+      throw new Error(
+        'The emulator FGS timeout configuration was not restored.'
+      );
+    }
+  }
 }
 
 const dispatcherResult = adb([

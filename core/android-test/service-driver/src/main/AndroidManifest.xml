@@ -2,6 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application android:label="Muon native service driver" android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
@@ -12,6 +13,8 @@
             </intent-filter>
         </activity>
         <activity android:name="dev.muon.runtime.MuonServiceRpcActivity" android:exported="true" />
+        <activity android:name="dev.muon.runtime.MuonServiceConstraintsActivity" android:exported="true" />
+        <receiver android:name="dev.muon.runtime.MuonServiceConstraintReceiver" android:exported="true" />
         <activity android:name="dev.muon.runtime.MuonAppActivity" android:exported="true" />
         <service android:name="dev.muon.runtime.MuonServiceControlService"
             android:exported="false" android:process=":muon_services" />
@@ -27,6 +30,13 @@
         </service>
         <service android:name="dev.muon.runtime.MuonFixtureRejectedService" android:exported="false"
             android:process=":muon_services" android:foregroundServiceType="camera" />
+        <service android:name="dev.muon.runtime.MuonFixtureHeldService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Native initialization barrier regression fixture" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureTimedService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="dataSync" />
         <service android:name="dev.muon.runtime.MuonFixtureQuickJsService" android:exported="false"
             android:process=":muon_services" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

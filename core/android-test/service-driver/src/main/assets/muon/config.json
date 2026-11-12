@@ -88,6 +88,36 @@
           "text": "Page-owned native processing"
         }
       }
+    },
+    "held": {
+      "runtime": "native",
+      "library": "libmuon_service_held_fixture.so",
+      "autostart": false,
+      "config": { "port": "49173" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureHeldService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "held",
+          "title": "Muon held fixture",
+          "text": "OS service constraints regression"
+        }
+      }
+    },
+    "timed": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": false,
+      "config": { "port": "49174" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureTimedService",
+        "foregroundServiceType": "dataSync",
+        "notification": {
+          "channelId": "timed",
+          "title": "Muon timed fixture",
+          "text": "OS service constraints regression"
+        }
+      }
     }
   }
 }

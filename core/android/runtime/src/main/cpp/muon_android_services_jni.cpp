@@ -13,6 +13,7 @@
 #include "services/muon_service_controller.h"
 
 #include <map>
+#include <charconv>
 #include <memory>
 #include <string>
 #include <utility>
@@ -217,9 +218,18 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeAcquire(
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeRelease(
-    JNIEnv* env, jclass, jlong handle, jstring id, jstring owner, jlong reference, jlong generation) {
-  return Runtime(handle)->controller->Release({static_cast<uint64_t>(reference), ReadString(env, id),
-      ReadString(env, owner), static_cast<uint64_t>(generation)}) ? JNI_TRUE : JNI_FALSE;
+    JNIEnv* env, jclass, jlong handle, jstring id, jstring owner, jstring reference, jstring generation) {
+  uint64_t reference_id = 0;
+  uint64_t version = 0;
+  const auto parse = [env](jstring input, uint64_t& output) {
+    const auto text = ReadString(env, input);
+    const auto end = text.data() + text.size();
+    const auto parsed = std::from_chars(text.data(), end, output);
+    return parsed.ec == std::errc{} && parsed.ptr == end;
+  };
+  if (!parse(reference, reference_id) || !parse(generation, version)) return JNI_FALSE;
+  return Runtime(handle)->controller->Release({reference_id, ReadString(env, id),
+      ReadString(env, owner), version}) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

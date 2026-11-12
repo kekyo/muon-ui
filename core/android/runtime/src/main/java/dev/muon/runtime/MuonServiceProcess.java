@@ -6,6 +6,7 @@
 
 package dev.muon.runtime;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
@@ -32,6 +33,8 @@ import org.json.JSONObject;
 /** One native service controller on the private process's main Looper. */
 final class MuonServiceProcess {
     static { System.loadLibrary("muon_android_services"); }
+    // This process-lifetime host retains only getApplicationContext(), never an Activity.
+    @SuppressLint("StaticFieldLeak")
     private static MuonServiceProcess instance;
 
     private static final class Client {
@@ -67,7 +70,7 @@ final class MuonServiceProcess {
                 Iterator<String> ids = services.keys();
                 while (ids.hasNext()) {
                     String id = ids.next();
-                    if (!id.matches("[A-Za-z_][A-Za-z0-9_]*"))
+                    if (!id.matches("[A-Za-z][A-Za-z0-9_.-]{0,63}"))
                         throw new JSONException("Invalid service identity");
                     definitions.put(id, services.getJSONObject(id));
                 }
@@ -174,8 +177,7 @@ final class MuonServiceProcess {
                 client.acquisitions.put(new JSONObject(reference).getString("refId"), request);
             } else if ("release".equals(operation)) {
                 boolean released = nativeRelease(nativeHandle, id, client.owner,
-                        Long.parseUnsignedLong(command.getString("refId")),
-                        Long.parseUnsignedLong(command.getString("generation")));
+                        command.getString("refId"), command.getString("generation"));
                 reply(client, request, new JSONObject().put("released", released), null);
             } else if ("getState".equals(operation)) {
                 String state = nativeSnapshot(nativeHandle, id);
@@ -258,7 +260,7 @@ final class MuonServiceProcess {
     private static native void nativeRunTask(long handle, long task);
     private static native void nativeActivate(long handle);
     private static native String nativeAcquire(long handle, String id, String owner);
-    private static native boolean nativeRelease(long handle, String id, String owner, long reference, long generation);
+    private static native boolean nativeRelease(long handle, String id, String owner, String reference, String generation);
     private static native void nativeReleaseOwner(long handle, String owner);
     private static native String nativeSnapshot(long handle, String id);
     private static native boolean nativeForegroundReady(long handle, String id, long generation);

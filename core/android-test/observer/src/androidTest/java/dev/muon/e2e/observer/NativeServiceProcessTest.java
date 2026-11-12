@@ -99,12 +99,46 @@ public final class NativeServiceProcessTest {
     }
 
     @Test
+    public void releasesPageOwnersOnNavigationAndAcquiresAgainInTheSameUiProcess() throws Exception {
+        device.executeShellCommand("am force-stop " + APPLICATION);
+        try {
+            String launch = device.executeShellCommand("am start -W -n " + APPLICATION
+                    + "/dev.muon.runtime.MuonAppActivity");
+            assertFalse("The WebView page fixture must launch: " + launch, launch.contains("Error"));
+            JSONObject before = pageReady();
+            try (Socket alpha = connect("alpha"); Socket beta = connect("beta")) {
+                JSONObject first = challenge(alpha);
+                challenge(beta);
+                device.findObject(By.text("Release page")).click();
+                assertNotNull(device.wait(Until.findObject(By.text("Page released")), 60000));
+                assertEquals("Navigation must release the old document owner", -1, beta.getInputStream().read());
+                assertEquals(first.getString("generation"), challenge(alpha).getString("generation"));
+                device.findObject(By.text("Acquire services")).click();
+                JSONObject next = pageReady();
+                assertEquals(before.getInt("uiPid"), next.getInt("uiPid"));
+                assertEquals(before.getString("alphaGeneration"), next.getString("alphaGeneration"));
+                assertTrue(next.getLong("betaGeneration") > before.getLong("betaGeneration"));
+                assertEquals(1, next.getInt("betaClientReferences"));
+            }
+        } finally { device.executeShellCommand("am force-stop " + APPLICATION); }
+    }
+
+    private JSONObject pageReady() throws Exception {
+        UiObject2 status = device.wait(Until.findObject(By.text(Pattern.compile("page-(ready|error) .*"))), 60000);
+        assertNotNull("The page must acquire services through the public API", status);
+        String text = status.getText();
+        assertTrue(text, text.startsWith("page-ready "));
+        return new JSONObject(text.substring("page-ready ".length()));
+    }
+
+    @Test
     public void keepsResidentNativeWorkAfterUiProcessDeathAndReconnects() throws Exception {
         device.executeShellCommand("am force-stop " + APPLICATION);
         JSONObject before = startDriver();
         int uiPid = before.getInt("uiPid");
         try (Socket alpha = connect("alpha"); Socket beta = connect("beta")) {
             JSONObject first = challenge(alpha);
+            assertEquals("Native configuration must use standard UTF-8", "e697a5e69cace8aa9ef09f9880", first.getString("labelHex"));
             assertFalse("Service must run outside the UI process", uiPid == first.getInt("pid"));
             challenge(beta);
             // Kill only the UI process. Force-stop would terminate every component.

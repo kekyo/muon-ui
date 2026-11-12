@@ -28,6 +28,11 @@ import {
   resolveMuonAppIconPath,
 } from "../common/app-icon.js";
 import { resolveAndroidPlugins } from "./plugins.js";
+import { resolveMuonServices } from "../common/service-config.ts";
+import {
+  getAndroidServicePermissions,
+  resolveAndroidServices,
+} from "./services.ts";
 import { resolveMuonAndroidPluginAccess } from "./plugin-access.js";
 import { readAndroidPluginMetadata } from "./plugin-metadata.js";
 import { resolveAndroidSigning, signAndroidApplication } from "./signing.js";
@@ -392,6 +397,18 @@ export const buildMuonAndroidTarget = async (input: {
     abis,
     resolved.pluginsDirectory,
   );
+  const services = await resolveAndroidServices(
+    await resolveMuonServices(
+      config.services,
+      input.configDirectory,
+      abis.map((abi) => `android-${abi}` as const),
+    ),
+    abis,
+    plugins,
+  );
+  for (const permission of getAndroidServicePermissions(services)) {
+    if (!permissions.includes(permission)) permissions.push(permission);
+  }
   const outputPath = resolve(
     root,
     options.outputRoot ?? ".",
@@ -422,6 +439,7 @@ export const buildMuonAndroidTarget = async (input: {
     values,
     pluginAccess: pluginConfiguration.pluginAccess,
     plugins,
+    services,
     icon,
     projectDirectory: resolve(root, ".muon/android"),
     outputDirectory: outputPath,

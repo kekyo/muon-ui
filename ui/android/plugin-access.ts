@@ -9,6 +9,7 @@ import {
 } from "../../core/android/function-paths.js";
 import { validateMuonAndroidConfig } from "../../core/android/renderer/android-config.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
+import { expandMuonServicePermissions } from "../common/capability.ts";
 import { readMuonPluginAccessOptions } from "../common/plugin-access.js";
 import type { MuonAndroidPluginAccess } from "./build.js";
 import { resolveMuonNotificationConfig } from "../common/notification-config.js";
@@ -114,7 +115,7 @@ export const resolveMuonAndroidPluginAccess = (
   const base = {
     enabled: plugin.pages === undefined || plugin.pages.length > 0,
     internalAllow: expandMuonAndroidFunctionAllows(
-      internal?.allow ?? [],
+      expandMuonServicePermissions(internal?.allow ?? []),
       builtinPaths,
     ),
   };

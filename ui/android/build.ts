@@ -31,6 +31,7 @@ import type {
   MuonAndroidNotificationIcon,
 } from "./notifications.js";
 import type { MuonNotificationConfig } from "../common/notification-config.js";
+import type { MuonAndroidPackagedService } from "./services.ts";
 
 /** ABI shipped by the Muon Android runtime. */
 export type MuonAndroidAbi = "arm64-v8a" | "x86_64";
@@ -88,6 +89,7 @@ export interface MuonAndroidApplicationInput {
     Record<string, string>
   >;
   /** Explicit prebuilt plugins; an empty array builds a standard app. */ plugins: readonly MuonAndroidPackagedPlugin[];
+  /** Native factories with one Android component per logical identity. */ services: readonly MuonAndroidPackagedService[];
   /** Validated common plugin access settings. */ pluginAccess: MuonAndroidPluginAccess;
   /** Optional PNG icon already converted by the public build boundary. */ icon:
     string | undefined;
@@ -218,6 +220,18 @@ export const buildAndroidApplication = async (
           : {}),
       },
       plugin: input.pluginAccess,
+      services: Object.fromEntries(
+        input.services.map((service) => [
+          service.id,
+          {
+            runtime: "native",
+            library: service.soname,
+            autostart: service.autostart,
+            config: service.config,
+            android: service.android,
+          },
+        ]),
+      ),
     }),
   );
   await writeFile(
@@ -235,11 +249,11 @@ export const buildAndroidApplication = async (
       ),
     }),
   );
-  for (const plugin of input.plugins) {
+  for (const plugin of [...input.plugins, ...input.services]) {
     for (const abi of input.abis) {
       const library = plugin.libraries[abi];
       if (!library)
-        throw new Error(`${plugin.name} is missing its ${abi} library.`);
+        throw new Error(`${plugin.soname} is missing its ${abi} library.`);
       const destination = join(
         project,
         "app/src/main/jniLibs",
@@ -254,6 +268,21 @@ export const buildAndroidApplication = async (
           join(dirname(destination), basename(dependency)),
         );
     }
+  }
+  for (const service of input.services) {
+    const className = service.android.component.split(".").at(-1)!;
+    const directory = join(project, "app/src/main/java/dev/muon/generated");
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      join(directory, `${className}.java`),
+      await render(
+        join(project, "MuonNativeService.java.fc"),
+        new Map<string, unknown>([
+          ["className", className],
+          ["serviceId", service.id],
+        ]),
+      ),
+    );
   }
   await writeFile(
     join(project, "muon-build.json"),
@@ -277,6 +306,18 @@ export const buildAndroidApplication = async (
       new Map<string, unknown>([
         ["permissions", input.permissions.map(xml)],
         ["notificationsEnabled", input.notifications.enabled],
+        ["servicesEnabled", input.services.length > 0],
+        [
+          "services",
+          input.services.map((service) => ({
+            component: xml(service.android.component),
+            foregroundServiceType: xml(service.android.foregroundServiceType),
+            specialUseSubtype:
+              service.android.specialUseSubtype === undefined
+                ? ""
+                : xml(service.android.specialUseSubtype),
+          })),
+        ],
       ]),
     ),
   );

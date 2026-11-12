@@ -115,6 +115,9 @@ static const std::vector<std::string> kFilesystemFunctionPaths = {
 };
 
 static const std::vector<std::string> kPlatformFunctionPaths = {
+    "muon.services.acquire",
+    "muon.services.release",
+    "muon.services.getState",
     "muon.environments.getConfigValues",
 #if defined(MUON_ANDROID_TEST_HOST)
     "prototype.fail",
@@ -1461,6 +1464,12 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
                            error_message)) {
     return false;
   }
+  auto service_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (!CreateBuiltinPolicy(state,
+      {"muon.services.acquire", "muon.services.release", "muon.services.getState"},
+      &service_policy, error_message)) {
+    return false;
+  }
   auto browser_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateBuiltinPolicy(
           state,
@@ -1573,6 +1582,7 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   };
   if (!state->validate_mode &&
       (!add_policy("environment-capability", environment_policy) ||
+      !add_policy("services-capability", service_policy) ||
       !add_policy("browser-capability", browser_policy) ||
       !add_policy("system-bars-capability", system_bars_policy) ||
       !add_policy("settings-capability", settings_policy) ||

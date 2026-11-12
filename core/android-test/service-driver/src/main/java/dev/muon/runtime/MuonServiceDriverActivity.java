@@ -37,8 +37,8 @@ public final class MuonServiceDriverActivity extends Activity {
             rejectForegroundStart();
             return;
         }
-        request("acquire", "alpha", alpha -> request("acquire", "beta", beta ->
-                request("getState", "alpha", alphaState -> request("getState", "beta", betaState -> {
+        request("acquire", "alpha.v1-test", alpha -> request("acquire", "beta", beta ->
+                request("getState", "alpha.v1-test", alphaState -> request("getState", "beta", betaState -> {
                     try {
                         JSONObject result = new JSONObject().put("uiPid", Process.myPid())
                                 .put("alphaGeneration", alpha.getString("generation"))

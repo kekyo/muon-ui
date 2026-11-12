@@ -55,6 +55,15 @@ final class MuonServiceClient implements AutoCloseable {
 
     MuonServiceClient(Context context) { this.context = context.getApplicationContext(); }
 
+    void activate() {
+        if (closed || bound) return;
+        try {
+            bound = context.bindService(new Intent(context, MuonServiceControlService.class),
+                    connection, Context.BIND_AUTO_CREATE);
+            if (!bound) disconnected("Unable to bind the private service host");
+        } catch (RuntimeException error) { disconnected(error.toString()); }
+    }
+
     void invoke(String operation, JSONObject arguments, Completion completion) {
         if (closed) { completion.fail("Service page session was released"); return; }
         int id = nextRequest++;
@@ -65,11 +74,7 @@ final class MuonServiceClient implements AutoCloseable {
             if (remote != null) remote.send(message);
             else {
                 queued.add(message);
-                if (!bound) {
-                    bound = context.bindService(new Intent(context, MuonServiceControlService.class),
-                            connection, Context.BIND_AUTO_CREATE);
-                    if (!bound) disconnected("Unable to bind the private service host");
-                }
+                activate();
             }
         } catch (JSONException | RuntimeException | RemoteException error) { disconnected(error.toString()); }
     }

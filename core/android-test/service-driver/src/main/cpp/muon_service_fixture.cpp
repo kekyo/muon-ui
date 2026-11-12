@@ -18,6 +18,20 @@ struct Fixture {
   std::optional<cardio::promise<void>> work{};
 };
 
+static std::string LabelHex(const muon_service_context* context) {
+  static constexpr char digits[] = "0123456789abcdef";
+  std::string result;
+  for (int32_t index = 0; index < context->config_count; ++index) {
+    const auto& entry = context->config_entries[index];
+    if (std::strcmp(entry.key, "label") != 0) continue;
+    for (const unsigned char value : std::string(entry.value)) {
+      result += digits[value >> 4];
+      result += digits[value & 15];
+    }
+  }
+  return result;
+}
+
 static cardio::promise<void> Serve(Fixture* state) {
   const auto cancellation = state->cancellation.get_cancellation();
   try {
@@ -43,6 +57,7 @@ static cardio::promise<void> Serve(Fixture* state) {
         if (nonce.find_first_not_of("0123456789abcdef-") != std::string::npos) break;
         const auto reply = "{\"nonce\":\"" + nonce + "\",\"pid\":" + std::to_string(getpid()) +
             ",\"generation\":\"" + std::to_string(state->context->generation) +
+            "\",\"labelHex\":\"" + LabelHex(state->context) +
             "\",\"count\":" + std::to_string(++state->count) + "}\n";
         size_t sent = 0;
         while (sent < reply.size()) {

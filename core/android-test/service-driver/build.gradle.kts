@@ -20,6 +20,8 @@ android {
     }
     sourceSets {
         getByName("main").java.directories.add("../../android/runtime/src/main/java")
+        getByName("main").assets.directories.add("build/web")
+        getByName("main").assets.directories.add("build/framework")
     }
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "4.1.2" } }
 }
@@ -29,4 +31,17 @@ dependencies {
     implementation("androidx.webkit:webkit:1.17.0")
 }
 
-tasks.named("preBuild") { dependsOn(":app:buildNativeDependencies") }
+val buildServiceWeb by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("npm", "exec", "--", "vite", "build", "--config", "service-driver/vite.config.ts")
+}
+val buildRuntimeRenderer by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("npm", "run", "build:js", "--workspace", "muon-android")
+}
+val copyRuntimeRenderer by tasks.registering(Copy::class) {
+    dependsOn(buildRuntimeRenderer)
+    from("../../android/dist/renderer/renderer.js")
+    into("build/framework/muon")
+}
+tasks.named("preBuild") { dependsOn(":app:buildNativeDependencies", buildServiceWeb, copyRuntimeRenderer) }

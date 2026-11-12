@@ -23,6 +23,9 @@ export const environmentFunctionNames = [
   'getRuntimeInfo',
 ] as const;
 
+/** Internal service operations authenticated with the current document owner. */
+export const serviceFunctionNames = ['acquire', 'release', 'getState'] as const;
+
 /** Filesystem functions implemented by Android. */
 export const filesystemFunctionNames = [
   'readFile',
@@ -99,6 +102,7 @@ export const muonAndroidBuiltinFunctionPaths = [
   ...notificationFunctionNames.map(
     (name) => `muon.notifications.${name}` as const
   ),
+  ...serviceFunctionNames.map((name) => `muon.services.${name}` as const),
 ] as const;
 
 /**

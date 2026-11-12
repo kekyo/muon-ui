@@ -11,6 +11,7 @@ export type {
   MuonAndroidPackagedPlugin,
 } from "./build.js";
 export { prepareAndroid } from "./toolchain.js";
+export type { MuonAndroidPackagedService } from "./services.ts";
 export type {
   MuonAndroidPrepareOptions,
   MuonAndroidPrepareResult,

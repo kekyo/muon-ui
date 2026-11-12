@@ -7,6 +7,10 @@ import {
   createMuonNotificationsApi,
   type MuonNotificationsApi,
 } from '../../common/renderer/notifications.js';
+import {
+  createMuonServicesApi,
+  type MuonServicesApi,
+} from '../../common/renderer/services.ts';
 
 import type { MuonWebViewRpcClient } from './webview-rpc.js';
 import {
@@ -38,6 +42,8 @@ export {
 
 /** Capability ids assigned to Android built-in namespaces. */
 export interface MuonAndroidCapabilityIds {
+  /** Capability for document-owned service references. */
+  readonly 'muon.services': string;
   /** Capability for browser operations. */
   readonly 'muon.browser': string;
 
@@ -381,6 +387,8 @@ export interface MuonAndroidFsApi {
 
 /** Built-in API object exposed by Android simple mode. */
 export interface MuonAndroidSimpleApi {
+  /** Services with lifetimes independent of the current document. */
+  readonly services: MuonServicesApi;
   /** Shared notification operations, filtered when disabled by application settings. */
   readonly notifications: MuonNotificationsApi;
   /** Android-specific operations available in this runtime. */
@@ -1124,6 +1132,14 @@ export const createMuonAndroidSimpleApi = (
         ),
     }),
     fs: createMuonAndroidFsApi(client, capabilityIds['muon.fs']),
+    services: createMuonServicesApi(
+      async (name, json) =>
+        await client.call(
+          capabilityIds['muon.services'],
+          `muon.services.${name}`,
+          [json]
+        )
+    ),
     notifications: createMuonNotificationsApi(
       async (name, args, options) =>
         await client.call(

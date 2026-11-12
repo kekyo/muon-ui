@@ -65,6 +65,9 @@ const expectedFunctionPaths = [
   'muon.notifications.getPendingEvents',
   'muon.notifications.watchEvents',
   'muon.notifications.acknowledgeEvent',
+  'muon.services.acquire',
+  'muon.services.release',
+  'muon.services.getState',
 ] as const;
 
 describe('muon Android API metadata', () => {
@@ -107,6 +110,7 @@ describe('muon Android API metadata', () => {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
+      'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
       'muon.android.notifications': 'android-notifications-capability',
@@ -117,6 +121,7 @@ describe('muon Android API metadata', () => {
       'browser',
       'environments',
       'fs',
+      'services',
       'notifications',
       'android',
     ]);
@@ -176,6 +181,7 @@ describe('muon Android API metadata', () => {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
+      'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
       'muon.android.notifications': 'android-notifications-capability',
@@ -234,6 +240,7 @@ describe('muon Android API metadata', () => {
       'muon.browser': 'browser-capability',
       'muon.environments': 'environment-capability',
       'muon.fs': 'fs-capability',
+      'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
       'muon.android.notifications': 'android-notifications-capability',
@@ -294,6 +301,7 @@ describe('muon Android API metadata', () => {
         'muon.browser': 'browser-capability',
         'muon.environments': 'environment-capability',
         'muon.fs': 'fs-capability',
+        'muon.services': 'services-capability',
         'muon.android.systemBars': 'system-bars-capability',
         'muon.android.settings': 'settings-capability',
         'muon.android.notifications': 'android-notifications-capability',

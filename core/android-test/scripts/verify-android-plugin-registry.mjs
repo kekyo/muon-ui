@@ -26,6 +26,7 @@ const runtimeSonames = [
   'libc++_shared.so',
   'libcardio.so',
   'libmuon_android_rpc.so',
+  'libmuon_android_services.so',
   ...(includeQuickJs ? ['libmuon_javascript_runtime.so'] : []),
 ];
 

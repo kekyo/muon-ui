@@ -62,6 +62,7 @@ const expectedLibraries = [
   "libc++_shared.so",
   "libcardio.so",
   "libmuon_android_rpc.so",
+  "libmuon_android_services.so",
 ];
 if (includePlugin)
   expectedLibraries.push(

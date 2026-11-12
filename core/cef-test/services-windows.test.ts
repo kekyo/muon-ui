@@ -17,6 +17,7 @@ import {
   createMuonCapabilityModuleResolver,
   expandMuonServicePermissions,
 } from "../../ui/common/capability.ts";
+import { buildMuonQuickJsService } from "../../ui/common/service-build.ts";
 import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.ts";
 import {
   connectWindowsAgent,
@@ -181,6 +182,15 @@ it.each(["simple", "validate"] as const)(
       } catch(error) {globalThis.setupError=String(error);}
       finishPageReady();</script>`),
       );
+    const script = win32.join(directory, "quickjs-service.mjs");
+    await remote.files.writeFile(
+      script,
+      Buffer.from(
+        await buildMuonQuickJsService(
+          resolve("../../sdk/test/fixtures/quickjs-service.ts"),
+        ),
+      ),
+    );
     const registry = win32.join(directory, "muon-services.json");
     const library = win32.join(runtime, "probe-service.dll");
     await remote.files.writeFile(
@@ -188,6 +198,7 @@ it.each(["simple", "validate"] as const)(
       Buffer.from(
         JSON.stringify({
           services: {
+            script: { runtime: "quickjs", script, autostart: true },
             resident: {
               library,
               autostart: true,
@@ -466,6 +477,35 @@ it.each(["simple", "validate"] as const)(
         nested: "outer-nested",
         cancelled: "cancelled",
       });
+      const scriptGeneration = await evaluate<string>(
+        "globalThis.scriptHandle = await serviceApi.acquire('script'); return scriptHandle.generation;",
+      );
+      expect(
+        await evaluate(`
+        const bytes = new Uint8Array(1024 * 1024).fill(197);
+        let echoed;
+        try { echoed = await scriptHandle.call('echoBytes', [bytes]); }
+        catch (error) { throw new Error('QuickJS echoBytes failed: ' + String(error) + ' ' + JSON.stringify(await serviceApi.getState('script'))); }
+        let received;
+        const event = new Promise(resolve => received = resolve);
+        const subscription = await scriptHandle.subscribe('progress', received);
+        await scriptHandle.call('emit', [47]);
+        const value = await event;
+        await subscription.close();
+        return {
+          echo: await scriptHandle.call('echo', ['日本\\0🙂']),
+          bytes: echoed.length === bytes.length && echoed.every(value => value === 197),
+          callback: await scriptHandle.call('callback', ['outer', async value =>
+            await handle.call('callback', [value, async inner => inner + '-native'])]),
+          event: value,
+        };
+      `),
+      ).toEqual({
+        echo: "日本\0🙂",
+        bytes: true,
+        callback: "outer-native",
+        event: 47,
+      });
       await evaluate(`
         globalThis.rpcEvents = [];
         globalThis.rpcEvent = new Promise(resolve => globalThis.rpcNext = resolve);
@@ -607,6 +647,16 @@ it.each(["simple", "validate"] as const)(
           "globalThis.handle=await serviceApi.acquire('resident');return handle.generation;",
         ),
       ).toBe(first.generation);
+      expect(
+        await evaluate(
+          "globalThis.scriptHandle = await serviceApi.acquire('script'); return scriptHandle.generation;",
+        ),
+      ).toBe(scriptGeneration);
+      expect(
+        await evaluate(
+          "return await scriptHandle.call('echo', ['after-ui-close']);",
+        ),
+      ).toBe("after-ui-close");
       const resident = await observeClose(ports[0]);
       await evaluate("await settingsApi.setAutostart(true); return true;");
       const shutdown = await Promise.allSettled([

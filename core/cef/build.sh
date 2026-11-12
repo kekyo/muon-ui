@@ -338,6 +338,7 @@ esac
 
 ensure_muon_node_bridge
 
+node "${SCRIPT_DIR}/../common/prepare-quickjs-source.mjs"
 bash "${SCRIPT_DIR}/build_yyjson.sh"
 YYJSON_ARGS=("-DYYJSON_SOURCE_DIR=${OUTPUT_ROOT}/.deps/src/yyjson-${YYJSON_VERSION}/src")
 bash "${SCRIPT_DIR}/build_llhttp.sh"

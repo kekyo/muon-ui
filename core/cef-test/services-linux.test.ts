@@ -160,12 +160,18 @@ it.each(["simple", "validate"] as const)(
       environmentsSource = resolver.load(
         resolver.resolveId("muon:environments", join(directory, "main.ts"))!.id,
       )!;
+      const script = join(directory, "quickjs-service.mjs");
+      await execute(process.execPath, [
+        "../../sdk/scripts/build-service-runtime-fixture.mjs",
+        script,
+      ]);
       const registry = join(directory, "muon-services.json");
       const library = resolve("../service-host/.build/probe-service.so");
       await writeFile(
         registry,
         JSON.stringify({
           services: {
+            script: { runtime: "quickjs", script, autostart: true },
             resident: {
               library,
               autostart: true,
@@ -358,6 +364,35 @@ it.each(["simple", "validate"] as const)(
         nested: "outer-nested",
         cancelled: "cancelled",
       });
+      const scriptGeneration = await evaluate<string>(
+        "globalThis.scriptHandle = await serviceApi.acquire('script'); return scriptHandle.generation;",
+      );
+      expect(
+        await evaluate(`
+        const bytes = new Uint8Array(1024 * 1024).fill(197);
+        let echoed;
+        try { echoed = await scriptHandle.call('echoBytes', [bytes]); }
+        catch (error) { throw new Error('QuickJS echoBytes failed: ' + String(error) + ' ' + JSON.stringify(await serviceApi.getState('script'))); }
+        let received;
+        const event = new Promise(resolve => received = resolve);
+        const subscription = await scriptHandle.subscribe('progress', received);
+        await scriptHandle.call('emit', [47]);
+        const value = await event;
+        await subscription.close();
+        return {
+          echo: await scriptHandle.call('echo', ['日本\\0🙂']),
+          bytes: echoed.length === bytes.length && echoed.every(value => value === 197),
+          callback: await scriptHandle.call('callback', ['outer', async value =>
+            await handle.call('callback', [value, async inner => inner + '-native'])]),
+          event: value,
+        };
+      `),
+      ).toEqual({
+        echo: "日本\0🙂",
+        bytes: true,
+        callback: "outer-native",
+        event: 47,
+      });
       await evaluate(`
         globalThis.rpcEvents = [];
         globalThis.rpcEvent = new Promise(resolve => globalThis.rpcNext = resolve);
@@ -499,6 +534,16 @@ it.each(["simple", "validate"] as const)(
           "globalThis.handle = await serviceApi.acquire('resident'); return handle.generation;",
         ),
       ).toBe(first.generation);
+      expect(
+        await evaluate(
+          "globalThis.scriptHandle = await serviceApi.acquire('script'); return scriptHandle.generation;",
+        ),
+      ).toBe(scriptGeneration);
+      expect(
+        await evaluate(
+          "return await scriptHandle.call('echo', ['after-ui-close']);",
+        ),
+      ).toBe("after-ui-close");
       const serviceSocket = createConnection({
         host: "127.0.0.1",
         port: ports[0]!,

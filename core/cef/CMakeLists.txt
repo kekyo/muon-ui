@@ -822,6 +822,11 @@ target_include_directories(muon_service_desktop PUBLIC
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include")
 target_link_libraries(muon_service_desktop PUBLIC muon_cardio PRIVATE yyjson)
 MUON_APPLY_SANITIZERS(muon_service_desktop)
+include("${MUON_COMMON_ROOT}/cmake/MuonQuickJs.cmake")
+file(READ "${MUON_COMMON_ROOT}/quickjs-source.json" MUON_QUICKJS_PROFILE)
+string(JSON MUON_QUICKJS_VERSION GET "${MUON_QUICKJS_PROFILE}" version)
+muon_add_quickjs(muon_service_quickjs
+  "${MUON_COMMON_ROOT}/.deps/quickjs/quickjs-${MUON_QUICKJS_VERSION}")
 add_executable(muon_service_host
   ../service-host/muon_service_host_${MUON_SERVICE_PLATFORM}.cpp
   ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
@@ -839,13 +844,16 @@ add_executable(muon_service_host
   ${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_broker.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_native_service_library.cpp
+  ${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_engine.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_quickjs_service_host.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_execution_router.cpp
   ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp)
 target_compile_features(muon_service_host PRIVATE cxx_std_20)
 target_include_directories(muon_service_host PRIVATE
   src
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
   "${MUON_COMMON_ROOT}/../../sdk/include")
-target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson ${CMAKE_DL_LIBS})
+target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson muon_service_quickjs ${CMAKE_DL_LIBS})
 set_target_properties(muon_service_host PROPERTIES
   OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
 if(WIN32)

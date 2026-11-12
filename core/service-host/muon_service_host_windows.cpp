@@ -11,6 +11,8 @@
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
 #include "services/muon_service_broker.h"
+#include "services/muon_quickjs_service_host.h"
+#include "services/muon_service_execution_router.h"
 #include "services/muon_service_limits.h"
 
 #include <cardio.h>
@@ -59,23 +61,23 @@ static void MakeDirectory(const std::filesystem::path& path) {
     throw std::system_error(error, "create service data directory");
 }
 
-static cardio::promise<std::string> ReadConfig(std::filesystem::path path) {
+static cardio::promise<std::string> ReadTextFile(std::filesystem::path path, cardio::cancellation cancellation) {
   const auto io_path = muon_internal::FilesystemPathForIo(
       path, muon_internal::FilesystemIoUsage::File);
   Handle file{CreateFileW(io_path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                          OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr)};
-  Check(file.value != INVALID_HANDLE_VALUE, "open service registry");
+  Check(file.value != INVALID_HANDLE_VALUE, "open service file");
   LARGE_INTEGER length{};
-  Check(GetFileSizeEx(file.value, &length) != 0, "size service registry");
+  Check(GetFileSizeEx(file.value, &length) != 0, "size service file");
   if (length.QuadPart < 0 || length.QuadPart > 8 * 1024 * 1024)
-    throw std::invalid_argument("Service registry exceeds 8 MiB");
+    throw std::invalid_argument("Service file exceeds 8 MiB");
   auto result = std::string(static_cast<size_t>(length.QuadPart), '\0');
   size_t offset = 0;
   while (offset < result.size()) {
     const auto size = co_await cardio::win32::read(file.value,
         std::as_writable_bytes(std::span(result.data() + offset, result.size() - offset)),
-        static_cast<uint64_t>(offset));
-    if (size == 0) throw std::runtime_error("Truncated service registry");
+        static_cast<uint64_t>(offset), cancellation);
+    if (size == 0) throw std::runtime_error("Truncated service file");
     offset += size;
   }
   co_return result;
@@ -141,6 +143,7 @@ class ServiceProcess final {
     protocol_.reset();
     broker_.reset();
     controller_.reset();
+    quickjs_.reset();
     native_.reset();
     listener_.reset();
     if (window_) DestroyWindow(window_);
@@ -156,23 +159,28 @@ class ServiceProcess final {
       listener_ = NewPipe(true);
       MakeDirectory(data_root_);
       MakeDirectory(data_root_ / ".autostart");
-      const auto contents = config.empty() ? std::string(R"({"services":{}})") : co_await ReadConfig(config);
+      const auto contents = config.empty() ? std::string(R"({"services":{}})") : co_await ReadTextFile(config, {});
       if (session_ending_) { FinishLoop(); co_return; }
       auto document = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
           yyjson_read(contents.data(), contents.size(), 0), yyjson_doc_free);
       if (!document) throw std::invalid_argument("Invalid service registry JSON");
       auto* services = yyjson_obj_get(yyjson_doc_get_root(document.get()), "services");
-      if (!yyjson_is_obj(services)) throw std::invalid_argument("Missing service registry");
+      if (!yyjson_is_obj(services)) throw std::invalid_argument("Missing service file");
       std::vector<MuonServiceDefinition> definitions;
       size_t index, count;
       yyjson_val *key, *value;
       yyjson_obj_foreach(services, index, count, key, value) {
         const auto id = StringValue(key);
-        if (!ValidId(id) || specs_.contains(id))
+        if (!ValidId(id) || specs_.contains(id) || scripts_.contains(id))
           throw std::invalid_argument("Invalid or duplicate service identity: " + id);
+        const auto runtime_value = yyjson_obj_get(value, "runtime");
+        const auto runtime = runtime_value ? StringValue(runtime_value) : "native";
+        if (runtime != "native" && runtime != "quickjs")
+          throw std::invalid_argument("Unsupported service runtime: " + runtime);
+        const auto source_key = runtime == "native" ? "library" : "script";
         const auto library = muon_internal::FilesystemPathToUtf8(
             muon_internal::ResolveFilesystemPath(config.parent_path(),
-                muon_internal::FilesystemPathFromUtf8(StringValue(yyjson_obj_get(value, "library")))));
+                muon_internal::FilesystemPathFromUtf8(StringValue(yyjson_obj_get(value, source_key)))));
         auto* autostart = yyjson_obj_get(value, "autostart");
         if (autostart && !yyjson_is_bool(autostart))
           throw std::invalid_argument("Service autostart must be boolean");
@@ -191,7 +199,9 @@ class ServiceProcess final {
         const auto preference = co_await LoadMuonServiceAutostart(data_root_ / ".autostart" / id);
         if (session_ending_) { FinishLoop(); co_return; }
         definitions.push_back({id, yyjson_get_bool(autostart), preference});
-        specs_.emplace(id, std::move(spec));
+        if (runtime == "native") specs_.emplace(id, std::move(spec));
+        else scripts_.emplace(id, MuonQuickJsServiceSpec{
+            id, spec.library_path, {}, spec.data_directory, std::move(spec.config)});
       }
       login_ = std::move(co_await CreateMuonServiceLoginPolicy(data_root_, definitions, std::move(startup)));
       if (session_ending_) { FinishLoop(); co_return; }
@@ -201,12 +211,29 @@ class ServiceProcess final {
           [](const std::string& id, muon_log_level, const std::string& message) {
             std::cerr << id << ": " << message << '\n';
           }});
+      quickjs_ = std::make_unique<MuonQuickJsServiceHost>(MuonQuickJsServicePlatform{
+          post,
+          [this](std::chrono::milliseconds delay, std::function<void()> task) {
+            auto cancellation = std::make_shared<cardio::cancellation_source>();
+            ++runtime_jobs_;
+            cardio::fire_and_forget(Timer(delay, cancellation, std::move(task)));
+            return std::function<void()>([cancellation] { cancellation->cancel(); });
+          },
+          [](const std::string& id, muon_log_level, const std::string& message) {
+            std::cerr << id << ": " << message << '\n';
+          },
+          [this](const std::string& id, uint64_t generation, const std::string& reason) {
+            controller_->RuntimeExited(id, generation, reason);
+          }, {64 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(2)}, std::chrono::seconds(10)});
       controller_ = std::make_unique<MuonServiceController>(definitions, MuonServiceBackend{
           [this](const MuonServiceSnapshot& state, auto complete) {
-            native_->Start(specs_.at(state.id), state.generation, std::move(complete));
+            if (scripts_.contains(state.id))
+              cardio::fire_and_forget(StartScript(state, std::move(complete)));
+            else native_->Start(specs_.at(state.id), state.generation, std::move(complete));
           },
           [this](const MuonServiceSnapshot& state, auto complete) {
-            native_->Stop(state.id, state.generation, std::move(complete));
+            if (scripts_.contains(state.id)) quickjs_->Stop(state.id, state.generation, std::move(complete));
+            else native_->Stop(state.id, state.generation, std::move(complete));
           },
           [this](const std::string& id, bool enabled, auto complete) {
             cardio::fire_and_forget(SavePolicy(id, enabled, std::move(complete)));
@@ -216,7 +243,9 @@ class ServiceProcess final {
             if (event.kind == MuonServiceEventKind::Changed)
               std::cout << SerializeMuonServiceSnapshot(event.snapshot) << std::endl;
           }, post});
-      broker_ = std::make_unique<MuonServiceBroker>(*controller_, native_->Execution());
+      broker_ = std::make_unique<MuonServiceBroker>(*controller_, RouteMuonServiceExecutions(
+          {native_->Execution(), quickjs_->Execution()},
+          [this](const std::string& id) { return scripts_.contains(id) ? size_t{1} : size_t{0}; }));
       protocol_ = std::make_unique<MuonServiceProtocol>(*controller_,
           [this](const std::string& owner, const std::string& json) { Send(owner, json); },
           MuonServiceUiPolicy{[this] { return login_->UiEnabled(); },
@@ -257,6 +286,38 @@ class ServiceProcess final {
   int ExitCode() const { return exit_code_; }
 
  private:
+  cardio::promise<void> Timer(std::chrono::milliseconds duration,
+      std::shared_ptr<cardio::cancellation_source> cancellation, std::function<void()> task) {
+    try {
+      co_await cardio::promises::delay(static_cast<uint64_t>(duration.count()), cancellation->get_cancellation());
+    } catch (const cardio::canceled_exception&) {}
+    // Even a zero timer or inline cancellation resumes on a later owner turn.
+    // Keep the process alive until the coroutine and its callback have drained.
+    Post([this, cancellation, task = std::move(task)] {
+      if (!cancellation->get_cancellation().is_cancellation_requested()) task();
+      --runtime_jobs_;
+      MaybeFinish();
+    });
+  }
+
+  cardio::promise<void> StartScript(MuonServiceSnapshot state,
+      std::function<void(const std::string&)> complete) {
+    ++runtime_jobs_;
+    auto spec = scripts_.at(state.id);
+    spec.startup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    auto timeout = cardio::cancellations::timeout(10000);
+    std::string error;
+    try {
+      spec.source = co_await ReadTextFile(muon_internal::FilesystemPathFromUtf8(spec.filename), timeout.get_cancellation());
+      timeout.cancel();
+      quickjs_->Start(spec, state.generation, complete);
+    } catch (const std::exception& failure) { error = failure.what(); }
+    timeout.cancel();
+    if (!error.empty()) complete(error);
+    --runtime_jobs_;
+    MaybeFinish();
+  }
+
   cardio::promise<void> ConfigureStartup(std::string startup,
       std::function<void(const std::string&)> complete) {
     ++policy_jobs_;
@@ -480,7 +541,7 @@ class ServiceProcess final {
   void MaybeFinish() {
     if (!initialized_ || finishing_ || policy_jobs_ != 0) return;
     if (!controller_->IsShuttingDown()) {
-      if (!bootstrap_live_ && ever_connected_ && peers_.empty() && controller_->IsQuiescent() && native_->IsIdle())
+      if (!bootstrap_live_ && ever_connected_ && peers_.empty() && controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && runtime_jobs_ == 0)
         controller_->Shutdown("No service references remain");
       else return;
     }
@@ -489,7 +550,7 @@ class ServiceProcess final {
       transport_stopping_ = true;
       transport_cancellation_.cancel();
     }
-    if (controller_->IsQuiescent() && native_->IsIdle() && posted_.empty()) {
+    if (controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && runtime_jobs_ == 0 && posted_.empty()) {
       std::vector<std::shared_ptr<Peer>> peers;
       for (const auto& [owner, peer] : peers_) {
         (void)owner;
@@ -511,6 +572,9 @@ class ServiceProcess final {
   std::shared_ptr<Handle> listener_;
   std::shared_ptr<Handle> bootstrap_;
   std::map<std::string, MuonNativeServiceSpec> specs_;
+  std::map<std::string, MuonQuickJsServiceSpec> scripts_;
+  std::unique_ptr<MuonQuickJsServiceHost> quickjs_;
+  size_t runtime_jobs_ = 0;
   std::unique_ptr<MuonServiceLoginPolicy> login_;
   size_t policy_jobs_ = 0;
   std::unique_ptr<MuonNativeServiceHost> native_;

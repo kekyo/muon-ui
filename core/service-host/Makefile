@@ -4,6 +4,7 @@
 # https://github.com/kekyo/muon-ui
 
 COMMON := ../common/src
+.DEFAULT_GOAL := all
 YYJSON := ../cef/.deps/src/yyjson-0.12.0/src
 OUT := .build
 CPPFLAGS += -I../../sdk/include -I../common/include -I$(COMMON) -I$(YYJSON) -I. -I../cef/src
@@ -14,9 +15,23 @@ CARDIO_PC := $(abspath ../../sdk/native/linux-amd64/lib/pkgconfig)
 CARDIO_CFLAGS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --cflags muon-plugin-cardio)
 CARDIO_LIBS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --libs muon-plugin-cardio)
 NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/services/muon_service_value.cpp $(COMMON)/services/muon_service_interface.cpp $(COMMON)/services/muon_service_broker.cpp $(COMMON)/muon_filesystem.cpp
+QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
+QUICKJS_SOURCE_DIR := ../common/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
+QUICKJS_SOURCES := $(COMMON)/quickjs/muon_quickjs_engine.cpp $(COMMON)/services/muon_quickjs_service_host.cpp $(COMMON)/services/muon_service_execution_router.cpp
+QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
+CPPFLAGS += -isystem $(QUICKJS_SOURCE_DIR)
 LOGIN := muon_service_login.cpp muon_service_startup.cpp ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp ../cef/src/muon_string_helpers.cpp
 
-.PHONY: all test clean windows-amd64 windows-i686
+.PHONY: all test clean windows-amd64 windows-i686 quickjs-source
+
+quickjs-source:
+	node ../common/prepare-quickjs-source.mjs
+
+$(OUT)/quickjs:
+	mkdir -p $@
+
+$(QUICKJS_OBJECTS): $(OUT)/quickjs/%.o: ../common/quickjs-source.json ../common/prepare-quickjs-source.mjs Makefile | quickjs-source $(OUT)/quickjs
+	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
 all: $(OUT)/muon-service-host $(OUT)/probe-service.so $(OUT)/linux-client-driver $(OUT)/linux-process-driver $(OUT)/process-lock-driver
 
 $(OUT):
@@ -31,8 +46,8 @@ $(OUT)/protocol-test: muon_service_protocol_test.cpp muon_service_protocol.cpp $
 $(OUT)/libcardio.so: ../../sdk/native/linux-amd64/lib/libcardio.so | $(OUT)
 	cp $< $@
 
-$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -ldl -Wl,-rpath,'$$ORIGIN' -o $@
+$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $(QUICKJS_OBJECTS) $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -ldl -lm -Wl,-rpath,'$$ORIGIN' -o $@
 
 $(OUT)/probe-service.so: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) -shared $< $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
@@ -60,6 +75,7 @@ test: $(OUT)/protocol-test $(OUT)/client-test $(OUT)/login-test
 # Each architecture uses its SDK-provided shared cardio runtime. Keep compiler
 # runtimes shared too: native factories and the host exchange C++ cardio state.
 define WINDOWS_RULES
+WIN_$(1)_QUICKJS := $(addprefix $(OUT)/windows-$(1)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
 WIN_$(1)_CC := $(2)-gcc
 WIN_$(1)_CXX := $(2)-g++
 WIN_$(1)_PC := $(abspath ../../sdk/native/windows-$(1)/lib/pkgconfig)
@@ -70,6 +86,12 @@ windows-$(1): $(OUT)/windows-$(1)/muon-service-host.exe $(OUT)/windows-$(1)/simp
 
 $(OUT)/windows-$(1):
 	mkdir -p $$@
+
+$(OUT)/windows-$(1)/quickjs:
+	mkdir -p $$@
+
+$$(WIN_$(1)_QUICKJS): $(OUT)/windows-$(1)/quickjs/%.o: ../common/quickjs-source.json ../common/prepare-quickjs-source.mjs Makefile | quickjs-source $(OUT)/windows-$(1)/quickjs
+	$$(WIN_$(1)_CC) -std=gnu11 -O2 -fwrapv $(if $(filter i686,$(1)),-msse2 -mfpmath=sse) -D__USE_MINGW_ANSI_STDIO -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' -c $(QUICKJS_SOURCE_DIR)/$$*.c -o $$@
 
 $(OUT)/windows-$(1)/yyjson.o: $(YYJSON)/yyjson.c | $(OUT)/windows-$(1)
 	# yyjson's i686 floating-point branch leaves its static power table unused.
@@ -85,8 +107,8 @@ $(OUT)/windows-$(1)/runtimes: ../../sdk/native/windows-$(1)/lib/libcardio.dll | 
 	cp $$$$($$(WIN_$(1)_CXX) -print-file-name=libwinpthread-1.dll) $(OUT)/windows-$(1)/
 	touch $$@
 
-$(OUT)/windows-$(1)/muon-service-host.exe: muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes
-	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -ladvapi32 -luser32 -lole32 -o $$@
+$(OUT)/windows-$(1)/muon-service-host.exe: muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -o $$@
 
 $(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@

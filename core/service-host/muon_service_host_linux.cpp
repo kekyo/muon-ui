@@ -10,6 +10,8 @@
 #include "services/muon_native_service_host.h"
 #include "services/muon_native_service_library.h"
 #include "services/muon_service_broker.h"
+#include "services/muon_quickjs_service_host.h"
+#include "services/muon_service_execution_router.h"
 #include "services/muon_service_limits.h"
 
 #include <cardio.h>
@@ -22,6 +24,8 @@
 #include <unistd.h>
 #include <signal.h>
 
+#include <array>
+#include <span>
 #include <cerrno>
 #include <cstring>
 #include <deque>
@@ -61,6 +65,34 @@ static cardio::promise<void> MakeDirectory(std::filesystem::path path) {
   }
 }
 
+static cardio::promise<std::string> ReadTextFile(std::filesystem::path path,
+                                               cardio::cancellation cancellation) {
+  auto file = std::unique_ptr<GFile, decltype(&g_object_unref)>(
+      g_file_new_for_path(path.c_str()), g_object_unref);
+  const auto raw = co_await cardio::gio::submit<GFileInputStream*>(
+      [file = file.get()](GCancellable* cancel, GAsyncReadyCallback callback, gpointer data) {
+        g_file_read_async(file, G_PRIORITY_DEFAULT, cancel, callback, data);
+      }, [](GObject* source, GAsyncResult* result, GError** error) {
+        return g_file_read_finish(G_FILE(source), result, error);
+      }, cancellation);
+  auto input = std::unique_ptr<GFileInputStream, decltype(&g_object_unref)>(raw, g_object_unref);
+  std::string contents;
+  auto failure = std::exception_ptr{};
+  try {
+    auto bytes = std::array<std::byte, 65536>{};
+    for (;;) {
+      const auto count = co_await cardio::gio::read(G_INPUT_STREAM(input.get()), std::span(bytes), cancellation);
+      if (!count) break;
+      if (count > 8 * 1024 * 1024 - contents.size())
+        throw std::invalid_argument("Service file exceeds 8 MiB");
+      contents.append(reinterpret_cast<const char*>(bytes.data()), count);
+    }
+  } catch (...) { failure = std::current_exception(); }
+  co_await cardio::gio::close(G_INPUT_STREAM(input.get()));
+  if (failure) std::rethrow_exception(failure);
+  co_return contents;
+}
+
 struct Peer {
   int fd;
   std::string owner;
@@ -87,6 +119,7 @@ class ServiceProcess final {
     protocol_.reset();
     broker_.reset();
     controller_.reset();
+    quickjs_.reset();
     native_.reset();
     if (listener_ >= 0) close(listener_);
     if (signal_fd_ >= 0) close(signal_fd_);
@@ -102,12 +135,7 @@ class ServiceProcess final {
       LockEndpoint();
       co_await MakeDirectory(std::filesystem::path(data_root_) / ".autostart");
       auto contents = std::string(R"({"services":{}})");
-      if (!config.empty()) {
-        auto file = std::unique_ptr<GFile, decltype(&g_object_unref)>(
-            g_file_new_for_path(config.c_str()), g_object_unref);
-        const auto loaded = co_await cardio::gio::load_contents(file.get());
-        contents.assign(reinterpret_cast<const char*>(loaded.bytes.data()), loaded.bytes.size());
-      }
+      if (!config.empty()) contents = co_await ReadTextFile(config, {});
       auto document = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
           yyjson_read(contents.data(), contents.size(), 0), yyjson_doc_free);
       if (!document) throw std::invalid_argument("Invalid service registry JSON");
@@ -118,10 +146,15 @@ class ServiceProcess final {
       yyjson_val *key, *value;
       yyjson_obj_foreach(services, index, count, key, value) {
         const auto id = StringValue(key);
-        if (!ValidId(id) || specs_.contains(id))
+        if (!ValidId(id) || specs_.contains(id) || scripts_.contains(id))
           throw std::invalid_argument("Invalid or duplicate service identity: " + id);
+        const auto runtime_value = yyjson_obj_get(value, "runtime");
+        const auto runtime = runtime_value ? StringValue(runtime_value) : "native";
+        if (runtime != "native" && runtime != "quickjs")
+          throw std::invalid_argument("Unsupported service runtime: " + runtime);
+        const auto source_key = runtime == "native" ? "library" : "script";
         const auto library = (std::filesystem::path(config).parent_path() /
-            StringValue(yyjson_obj_get(value, "library"))).lexically_normal().string();
+            StringValue(yyjson_obj_get(value, source_key))).lexically_normal().string();
         auto* autostart = yyjson_obj_get(value, "autostart");
         if (autostart && !yyjson_is_bool(autostart))
           throw std::invalid_argument("Service autostart must be boolean");
@@ -139,7 +172,9 @@ class ServiceProcess final {
         co_await MakeDirectory(directory);
         const auto preference = co_await LoadMuonServiceAutostart(std::filesystem::path(data_root_) / ".autostart" / id);
         definitions.push_back({id, yyjson_get_bool(autostart), preference});
-        specs_.emplace(id, std::move(spec));
+        if (runtime == "native") specs_.emplace(id, std::move(spec));
+        else scripts_.emplace(id, MuonQuickJsServiceSpec{
+            id, spec.library_path, {}, spec.data_directory, std::move(spec.config)});
       }
       login_ = std::move(co_await CreateMuonServiceLoginPolicy(data_root_, definitions, std::move(startup)));
       const auto post = [this](std::function<void()> task) { Post(std::move(task)); };
@@ -148,12 +183,29 @@ class ServiceProcess final {
           [](const std::string& id, muon_log_level, const std::string& message) {
             std::cerr << id << ": " << message << '\n';
           }});
+      quickjs_ = std::make_unique<MuonQuickJsServiceHost>(MuonQuickJsServicePlatform{
+          post,
+          [this](std::chrono::milliseconds delay, std::function<void()> task) {
+            auto cancellation = std::make_shared<cardio::cancellation_source>();
+            ++runtime_jobs_;
+            cardio::fire_and_forget(Timer(delay, cancellation, std::move(task)));
+            return std::function<void()>([cancellation] { cancellation->cancel(); });
+          },
+          [](const std::string& id, muon_log_level, const std::string& message) {
+            std::cerr << id << ": " << message << '\n';
+          },
+          [this](const std::string& id, uint64_t generation, const std::string& reason) {
+            controller_->RuntimeExited(id, generation, reason);
+          }, {64 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(2)}, std::chrono::seconds(10)});
       controller_ = std::make_unique<MuonServiceController>(definitions, MuonServiceBackend{
           [this](const MuonServiceSnapshot& state, auto complete) {
-            native_->Start(specs_.at(state.id), state.generation, std::move(complete));
+            if (scripts_.contains(state.id))
+              cardio::fire_and_forget(StartScript(state, std::move(complete)));
+            else native_->Start(specs_.at(state.id), state.generation, std::move(complete));
           },
           [this](const MuonServiceSnapshot& state, auto complete) {
-            native_->Stop(state.id, state.generation, std::move(complete));
+            if (scripts_.contains(state.id)) quickjs_->Stop(state.id, state.generation, std::move(complete));
+            else native_->Stop(state.id, state.generation, std::move(complete));
           },
           [this](const std::string& id, bool enabled, auto complete) {
             cardio::fire_and_forget(SavePolicy(id, enabled, std::move(complete)));
@@ -163,7 +215,9 @@ class ServiceProcess final {
             if (event.kind == MuonServiceEventKind::Changed)
               std::cout << SerializeMuonServiceSnapshot(event.snapshot) << std::endl;
           }, post});
-      broker_ = std::make_unique<MuonServiceBroker>(*controller_, native_->Execution());
+      broker_ = std::make_unique<MuonServiceBroker>(*controller_, RouteMuonServiceExecutions(
+          {native_->Execution(), quickjs_->Execution()},
+          [this](const std::string& id) { return scripts_.contains(id) ? size_t{1} : size_t{0}; }));
       protocol_ = std::make_unique<MuonServiceProtocol>(*controller_,
           [this](const std::string& owner, const std::string& json) { Send(owner, json); },
           MuonServiceUiPolicy{[this] { return login_->UiEnabled(); },
@@ -206,6 +260,38 @@ class ServiceProcess final {
   int ExitCode() const { return exit_code_; }
 
  private:
+  cardio::promise<void> Timer(std::chrono::milliseconds duration,
+      std::shared_ptr<cardio::cancellation_source> cancellation, std::function<void()> task) {
+    try {
+      co_await cardio::promises::delay(static_cast<uint64_t>(duration.count()), cancellation->get_cancellation());
+    } catch (const cardio::canceled_exception&) {}
+    // Even a zero timer or inline cancellation resumes on a later owner turn.
+    // Keep the process alive until the coroutine and its callback have drained.
+    Post([this, cancellation, task = std::move(task)] {
+      if (!cancellation->get_cancellation().is_cancellation_requested()) task();
+      --runtime_jobs_;
+      MaybeFinish();
+    });
+  }
+
+  cardio::promise<void> StartScript(MuonServiceSnapshot state,
+      std::function<void(const std::string&)> complete) {
+    ++runtime_jobs_;
+    auto spec = scripts_.at(state.id);
+    spec.startup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    auto timeout = cardio::cancellations::timeout(10000);
+    std::string error;
+    try {
+      spec.source = co_await ReadTextFile(spec.filename, timeout.get_cancellation());
+      timeout.cancel();
+      quickjs_->Start(spec, state.generation, complete);
+    } catch (const std::exception& failure) { error = failure.what(); }
+    timeout.cancel();
+    if (!error.empty()) complete(error);
+    --runtime_jobs_;
+    MaybeFinish();
+  }
+
   cardio::promise<void> ConfigureStartup(std::string startup,
       std::function<void(const std::string&)> complete) {
     ++policy_jobs_;
@@ -439,7 +525,7 @@ class ServiceProcess final {
     if (!initialized_ || finishing_ || policy_jobs_ != 0) return;
     if (!controller_->IsShuttingDown()) {
       if (ever_connected_ && !bootstrap_open_ && peers_.empty() &&
-          controller_->IsQuiescent() && native_->IsIdle())
+          controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && runtime_jobs_ == 0)
         controller_->Shutdown("No service references remain");
       else return;
     }
@@ -450,7 +536,7 @@ class ServiceProcess final {
       transport_stopping_ = true;
       transport_cancellation_.cancel();
     }
-    if (controller_->IsQuiescent() && native_->IsIdle() && posted_ == 0) {
+    if (controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && runtime_jobs_ == 0 && posted_ == 0) {
       std::vector<std::shared_ptr<Peer>> peers;
       for (const auto& [owner, peer] : peers_) {
         (void)owner;
@@ -467,6 +553,9 @@ class ServiceProcess final {
   std::string endpoint_;
   std::string data_root_;
   std::map<std::string, MuonNativeServiceSpec> specs_;
+  std::map<std::string, MuonQuickJsServiceSpec> scripts_;
+  std::unique_ptr<MuonQuickJsServiceHost> quickjs_;
+  size_t runtime_jobs_ = 0;
   std::unique_ptr<MuonServiceLoginPolicy> login_;
   size_t policy_jobs_ = 0;
   std::unique_ptr<MuonNativeServiceHost> native_;

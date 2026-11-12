@@ -1,4 +1,9 @@
 /** Browser and QuickJS-compatible service contracts, values, and RPC client. */
+export { bindServiceClient } from './service-binding.ts';
+export type {
+  BoundServiceClient,
+  ServiceReferenceConnection,
+} from './service-binding.ts';
 export {
   defineServiceInterface,
   parseServiceInterface,

@@ -39,7 +39,7 @@ it.each(['ES2022', 'DOM', 'Node'] as const)(
       await writeFile(
         join(directory, 'consumer.ts'),
         `
-      import { createServiceClient, defineServiceInterface, type ServiceCancellationSignal } from ${JSON.stringify(fileURLToPath(new URL('../dist/types/services.js', import.meta.url)))};
+      import { bindServiceClient, createServiceClient, defineServiceInterface, type ServiceCancellationSignal } from ${JSON.stringify(fileURLToPath(new URL('../dist/types/services.js', import.meta.url)))};
       const definition = defineServiceInterface({ schemaVersion: 1, methods: {
         ping: { parameters: [], returns: 'uint64', errors: [] }
       }, events: {} });
@@ -47,6 +47,17 @@ it.each(['ES2022', 'DOM', 'Node'] as const)(
       const signal: ServiceCancellationSignal = ${environment !== 'ES2022' ? 'new AbortController().signal' : '{ aborted: false, addEventListener: () => {}, removeEventListener: () => {} }'};
       const result: Promise<bigint> = client.call('ping', [], { signal });
       void result;
+      ${environment === 'DOM' ? `
+      import ${JSON.stringify(fileURLToPath(new URL('../../ui/muon.d.ts', import.meta.url)))};
+      declare const reference: MuonServiceHandle;
+      const bound = bindServiceClient(definition, reference);
+      const pageResult: Promise<bigint> = bound.call('ping', [], { signal: new AbortController().signal });
+      // @ts-expect-error ping has no arguments
+      void bound.call('ping', [1]);
+      // @ts-expect-error no undeclared method can be called
+      void bound.call('missing', []);
+      void pageResult;
+      ` : ''}
     `
       );
       const result = await (async () => {

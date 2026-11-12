@@ -24,6 +24,7 @@ for (const path of [
   'dist/types/index.d.ts',
   'dist/types/services.d.ts',
   'dist/types/service-connection.d.ts',
+  'dist/types/service-binding.d.ts',
   'dist/types/service-interface.d.ts',
   'dist/types/service-values.d.ts',
   'include/muon_plugin_api.h',

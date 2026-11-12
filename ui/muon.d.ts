@@ -71,13 +71,51 @@ declare global {
     readonly id: string;
     /** Decimal generation identity, preserved without conversion to a JS number. */
     readonly generation: string;
+    /** Validated runtime metadata; use the service SDK to inspect or bind typed calls. */
+    readonly interface: unknown;
     /**
-     * Releases only this reference, leaving other pages and resident policy intact.
+     * Invokes a declared method on this reference and generation.
+     * @param method - Declared method name.
+     * @param args - Arguments; 64-bit integers use bigint and bytes use Uint8Array.
+     * @param options - Optional cancellation for this invocation.
+     * @returns Decoded result; errors include a stable code property.
+     * @remarks Input callbacks expire when their method completes or is cancelled.
+     */
+    readonly call: (method: string, args: readonly unknown[], options?: {
+      readonly signal?: MuonServiceCancellationSignal;
+    }) => Promise<unknown>;
+    /**
+     * Receives typed event values sequentially without creating a lifetime reference.
+     * @param event - Declared event name.
+     * @param listener - Event handler; rejection closes this subscription.
+     * @returns A subscription that reports termination and can be closed explicitly.
+     */
+    readonly subscribe: (event: string, listener: (value: unknown) => void | Promise<void>) => Promise<MuonServiceSubscription>;
+    /**
+     * Cancels this handle's calls and subscriptions and releases its reference.
      * @returns Completion of reference release; repeated calls share this promise.
      * @remarks Page destruction also reclaims references through the native owner.
      * Releasing the final reference requests shutdown but does not await disposal.
      */
     readonly release: () => Promise<void>;
+  }
+
+  /** A FIFO event subscription tied to one acquired service handle. */
+  interface MuonServiceSubscription {
+    /** Always resolves; overflow and disconnection are reported as a failure value. */
+    readonly closed: Promise<{ readonly code: string; readonly message: string } | undefined>;
+    /** @returns Completion of unsubscribe; repeated calls share the same promise. */
+    readonly close: () => Promise<void>;
+  }
+
+  /** Cancellation source; browser AbortSignal instances are compatible. */
+  interface MuonServiceCancellationSignal {
+    /** Whether cancellation has already been requested. */
+    readonly aborted: boolean;
+    /** @param type - Abort event. @param listener - Cancellation callback. @param options - One-shot registration. */
+    readonly addEventListener: (type: 'abort', listener: () => void, options: { readonly once: boolean }) => void;
+    /** @param type - Abort event. @param listener - Previously registered callback. */
+    readonly removeEventListener: (type: 'abort', listener: () => void) => void;
   }
 
   /** A non-owning state observer, automatically removed when its page disappears. */

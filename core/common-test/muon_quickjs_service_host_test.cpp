@@ -109,6 +109,26 @@ int main() {
   host.Stop("second", 1, [&] { ++stopped; });
   pump();
   assert(stopped == 2 && host.IsIdle() && timers.empty());
+  const auto caught_interrupt = R"(
+    globalThis.__muonServiceInterface = {schemaVersion:1, methods:{
+      spin:{parameters:[],returns:'void',errors:[]}
+    },events:{}};
+    globalThis.__muonServiceRuntime = {
+      async start() {},
+      async invoke() {
+        try { await (async () => { for (;;) {} })(); }
+        catch { return {status:'ok', value:null}; }
+      },
+      cancel() {},
+      async stop() {}
+    };
+  )";
+  host.Start({"caught", "caught.mjs", caught_interrupt, "/private", {}}, 1,
+      [&](const std::string& error) { assert(error.empty()); });
+  pump();
+  host.Execution().invoke("caught", 1, "spin", {}, {}, collect);
+  pump();
+  assert(!results.back().value && failures.back() == "caught" && host.IsIdle());
   auto startup_error = std::string{};
   host.Start({"broken", "broken.mjs", "throw new Error('bad module')", "/private", {}}, 2,
       [&](const std::string& error) { startup_error = error; });
@@ -147,7 +167,7 @@ int main() {
   timers.clear();
   for (const auto& [id, expire] : deadlines) { (void)id; expire(); }
   pump();
-  assert(stopped == 3 && host.IsIdle() && failures == (std::vector<std::string>{"first", "stop-timeout"}));
+  assert(stopped == 3 && host.IsIdle() && failures == (std::vector<std::string>{"first", "caught", "stop-timeout"}));
   const auto invalid_result = R"(
     globalThis.__muonServiceInterface = {schemaVersion:1,methods:{
       invalid:{parameters:[],returns:'string',errors:[]}

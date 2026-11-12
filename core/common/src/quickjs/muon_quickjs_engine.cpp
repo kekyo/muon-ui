@@ -135,6 +135,18 @@ JSValue MuonQuickJsEngine::Evaluate(const std::string& source,
 
 JSValue MuonQuickJsEngine::Call(JSValueConst function, JSValueConst receiver,
                                const std::vector<JSValue>& arguments) {
+  Execution scope(*impl_);
+  const auto result = CallObserved(function, receiver, arguments);
+  if (result.interrupted) {
+    JS_FreeValue(impl_->context, result.value);
+    throw std::runtime_error("QuickJS execution interrupted");
+  }
+  return result.value;
+}
+
+MuonQuickJsCallResult MuonQuickJsEngine::CallObserved(
+    JSValueConst function, JSValueConst receiver,
+    const std::vector<JSValue>& arguments) {
   if (arguments.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
     throw std::invalid_argument("Too many QuickJS call arguments");
   Execution scope(*impl_);
@@ -144,11 +156,7 @@ JSValue MuonQuickJsEngine::Call(JSValueConst function, JSValueConst receiver,
   const auto result = JS_Call(impl_->context, function, receiver,
       static_cast<int>(borrowed.size()), borrowed.data());
   if (JS_IsException(result)) throw std::runtime_error(Exception(impl_->context));
-  if (impl_->turn_interrupted) {
-    JS_FreeValue(impl_->context, result);
-    throw std::runtime_error("QuickJS execution interrupted");
-  }
-  return result;
+  return {result, impl_->turn_interrupted};
 }
 
 bool MuonQuickJsEngine::RunJobs(size_t maximum_jobs) {

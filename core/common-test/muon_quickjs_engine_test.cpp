@@ -143,6 +143,53 @@ int main() {
   }
   {
     MuonQuickJsEngine engine(limits);
+    const auto protocol = engine.Evaluate(R"(
+      async (operation, value) => {
+        try {
+          return {ok: true, value: await (async () => {
+            if (operation === 'spin') for (;;) {}
+            return value;
+          })()};
+        } catch (error) { return {ok: false, message: error.message}; }
+      }
+    )", "protocol.js", JS_EVAL_TYPE_GLOBAL);
+    const auto spin = JS_NewString(engine.Context(), "spin");
+    const auto interrupted = engine.CallObserved(protocol, JS_UNDEFINED, {spin});
+    assert(interrupted.interrupted);
+    assert(!engine.RunJobs(16));
+    assert(JS_PromiseState(engine.Context(), interrupted.value) == JS_PROMISE_FULFILLED);
+    const auto response = JS_PromiseResult(engine.Context(), interrupted.value);
+    const auto ok = JS_GetPropertyStr(engine.Context(), response, "ok");
+    assert(JS_ToBool(engine.Context(), ok) == 0);
+    JS_FreeValue(engine.Context(), ok);
+    assert(Text(engine.Context(), JS_GetPropertyStr(engine.Context(), response, "message"))
+        .find("interrupted") != std::string::npos);
+    JS_FreeValue(engine.Context(), response);
+    JS_FreeValue(engine.Context(), interrupted.value);
+
+    const auto echo = JS_NewString(engine.Context(), "echo");
+    const auto text = JS_NewString(engine.Context(), "still-running");
+    const auto recovered = engine.CallObserved(protocol, JS_UNDEFINED, {echo, text});
+    assert(!recovered.interrupted);
+    assert(!engine.RunJobs(16));
+    assert(JS_PromiseState(engine.Context(), recovered.value) == JS_PROMISE_FULFILLED);
+    const auto value = JS_PromiseResult(engine.Context(), recovered.value);
+    assert(Text(engine.Context(), JS_GetPropertyStr(engine.Context(), value, "value")) ==
+        "still-running");
+    JS_FreeValue(engine.Context(), value);
+    JS_FreeValue(engine.Context(), recovered.value);
+    JS_FreeValue(engine.Context(), text);
+    JS_FreeValue(engine.Context(), echo);
+
+    bool failed = false;
+    try { JS_FreeValue(engine.Context(), engine.Call(protocol, JS_UNDEFINED, {spin})); }
+    catch (const std::runtime_error&) { failed = true; }
+    assert(failed); // Catching an interrupt does not weaken production Call.
+    JS_FreeValue(engine.Context(), spin);
+    JS_FreeValue(engine.Context(), protocol);
+  }
+  {
+    MuonQuickJsEngine engine(limits);
     // Destruction also frees an unfinished chain of jobs without running more
     // application code during teardown.
     JS_FreeValue(engine.Context(), engine.Evaluate(

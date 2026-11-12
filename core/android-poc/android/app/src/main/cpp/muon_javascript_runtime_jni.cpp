@@ -2863,8 +2863,24 @@ static bool handle_protocol_message(MuonJavaScriptHost* host,
   }
   auto argument =
       JS_NewStringLen(host->context, message.data(), message.size());
-  auto result =
-      call_javascript(host->context, handler, JS_UNDEFINED, {argument});
+  JSValue result;
+  try {
+    // This trusted async wrapper turns request exceptions into protocol error
+    // responses. Preserve its promise after interruption so bounded job turns
+    // can deliver that response; ordinary author calls remain fail-closed.
+    const auto observed =
+        host->engine->CallObserved(handler, JS_UNDEFINED, {argument});
+    result = observed.value;
+    const auto state = JS_PromiseState(host->context, result);
+    if (observed.interrupted && state != JS_PROMISE_PENDING &&
+        state != JS_PROMISE_FULFILLED && state != JS_PROMISE_REJECTED) {
+      JS_FreeValue(host->context, result);
+      result = JS_ThrowInternalError(
+          host->context, "Interrupted protocol handler returned no promise");
+    }
+  } catch (const std::exception& error) {
+    result = JS_ThrowInternalError(host->context, "%s", error.what());
+  }
   JS_FreeValue(host->context, argument);
   JS_FreeValue(host->context, handler);
   if (JS_IsException(result)) {

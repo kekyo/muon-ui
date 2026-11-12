@@ -19,6 +19,12 @@ struct MuonQuickJsLimits {
   std::chrono::milliseconds execution_time; /**< Deadline for one call or job batch. */
 };
 
+/** A bounded call result whose interruption remains visible to its owner. */
+struct MuonQuickJsCallResult {
+  JSValue value; /**< Owned result; release with JS_FreeValue before engine destruction. */
+  bool interrupted; /**< True when this call reached its execution limit or stop predicate. */
+};
+
 /** Private engine ownership and execution deadline. */
 struct MuonQuickJsEngineImpl;
 
@@ -66,6 +72,20 @@ class MuonQuickJsEngine final {
    */
   JSValue Call(JSValueConst function, JSValueConst receiver,
                const std::vector<JSValue>& arguments);
+  /**
+   * Calls a trusted protocol wrapper while preserving its error-response promise.
+   * @param function Borrowed wrapper that owns request error normalization.
+   * @param receiver Borrowed this value, or JS_UNDEFINED.
+   * @param arguments Borrowed argument values, retained by the caller.
+   * @returns Owned result plus the observed interruption, even when JavaScript
+   *     represents that interruption through a returned promise.
+   * @throws std::runtime_error For synchronous JavaScript exceptions.
+   * @remarks The execution deadline remains enforced. The caller must handle
+   *     interrupted requests and progress promises with bounded RunJobs turns.
+   *     Author service calls must use Call, which treats interruption as failure.
+   */
+  MuonQuickJsCallResult CallObserved(JSValueConst function, JSValueConst receiver,
+                                    const std::vector<JSValue>& arguments);
   /**
    * Runs a bounded number of pending promise jobs under one execution deadline.
    * @param maximum_jobs Positive job count; remaining work yields to the platform.

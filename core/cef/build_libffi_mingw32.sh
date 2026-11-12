@@ -39,7 +39,11 @@ DEPS_DIR="${SCRIPT_DIR}/.deps"
 ARCHIVE="${DEPS_DIR}/${LIBFFI_PACKAGE}"
 SOURCE_DIR="${DEPS_DIR}/src/libffi-${LIBFFI_VERSION}-${TARGET_NAME}"
 PREFIX="${DEPS_DIR}/libffi-${TARGET_NAME}"
-STAMP="${PREFIX}/.built-${LIBFFI_VERSION}"
+# libffi implements its deprecated Java raw ABI by calling its own deprecated
+# entry points. Keep those upstream compatibility objects unchanged; muon does
+# not call the raw ABI. Limit this diagnostic policy to the dependency build.
+LIBFFI_CFLAGS="${CFLAGS:--g -O2} -Wno-deprecated-declarations"
+STAMP="${PREFIX}/.built-${LIBFFI_VERSION}-java-compat"
 
 mkdir -p "${DEPS_DIR}" "${DEPS_DIR}/src"
 
@@ -57,6 +61,7 @@ tar -xzf "${ARCHIVE}" -C "${SOURCE_DIR}" --strip-components=1
 
 pushd "${SOURCE_DIR}" >/dev/null
 ./configure \
+  CFLAGS="${LIBFFI_CFLAGS}" \
   --host="${HOST_TRIPLET}" \
   --prefix="${PREFIX}" \
   --disable-shared \

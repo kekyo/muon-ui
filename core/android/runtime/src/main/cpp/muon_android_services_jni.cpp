@@ -70,13 +70,16 @@ struct MuonAndroidServices {
   jmethodID start_method;
   jmethodID stopped_method;
   jmethodID event_method;
+  jmethodID save_method;
   std::unique_ptr<cardio::dispatcher_host_android_auto> dispatcher;
   std::unique_ptr<MuonNativeServiceHost> host;
   std::unique_ptr<MuonServiceController> controller;
   std::map<std::string, MuonNativeServiceSpec> specs;
   std::map<std::pair<std::string, uint64_t>, std::function<void(const std::string&)>> starts;
   std::map<uint64_t, std::function<void()>> tasks;
+  std::map<uint64_t, std::function<void(const std::string&)>> saves;
   uint64_t next_task = 1;
+  uint64_t next_save = 1;
 
   void Post(std::function<void()> task) {
     const auto id = next_task++;
@@ -103,6 +106,9 @@ struct MuonAndroidServices {
     }
     std::string json = "{\"kind\":" + Quote(kind) + ",\"snapshot\":" +
         SnapshotJson(event.snapshot) + ",\"error\":" + Quote(event.error);
+    if (event.kind == MuonServiceEventKind::AutostartResult)
+      json += ",\"operationId\":" + Quote(std::to_string(event.operation_id)) +
+          ",\"success\":" + (event.success ? "true" : "false");
     if (event.reference) {
       json += ",\"owner\":" + Quote(event.reference->owner_id) +
           ",\"reference\":" + ReferenceJson(*event.reference);
@@ -129,7 +135,8 @@ static MuonAndroidServices* Runtime(jlong handle) {
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
     JNIEnv* env, jclass, jobject owner, jobjectArray ids, jobjectArray libraries,
-    jobjectArray directories, jbooleanArray autostarts, jobjectArray configurations) {
+    jobjectArray directories, jbooleanArray autostarts, jintArray overrides,
+    jobjectArray configurations) {
   auto runtime = std::make_unique<MuonAndroidServices>();
   runtime->env = env;
   runtime->owner = env->NewGlobalRef(owner);
@@ -138,6 +145,7 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
   runtime->start_method = env->GetMethodID(type, "startComponent", "(Ljava/lang/String;J)V");
   runtime->stopped_method = env->GetMethodID(type, "stopComponent", "(Ljava/lang/String;J)V");
   runtime->event_method = env->GetMethodID(type, "onEvent", "(Ljava/lang/String;)V");
+  runtime->save_method = env->GetMethodID(type, "saveAutostart", "(Ljava/lang/String;ZJ)V");
   env->DeleteLocalRef(type);
   runtime->dispatcher = std::make_unique<cardio::dispatcher_host_android_auto>();
   auto* state = runtime.get();
@@ -172,7 +180,10 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
     env->DeleteLocalRef(pairs);
     jboolean autostart = false;
     env->GetBooleanArrayRegion(autostarts, index, 1, &autostart);
-    definitions.push_back({spec.id, autostart == JNI_TRUE, std::nullopt});
+    jint user = -1;
+    env->GetIntArrayRegion(overrides, index, 1, &user);
+    definitions.push_back({spec.id, autostart == JNI_TRUE,
+        user < 0 ? std::nullopt : std::optional<bool>{user != 0}});
     runtime->specs.emplace(spec.id, std::move(spec));
   }
   runtime->controller = std::make_unique<MuonServiceController>(definitions, MuonServiceBackend{
@@ -186,8 +197,13 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
           complete();
         });
       },
-      [](const std::string&, bool, std::function<void(const std::string&)> complete) {
-        complete("Persisting service autostart is not implemented.");
+      [state](const std::string& id, bool enabled, std::function<void(const std::string&)> complete) {
+        const auto task = state->next_save++;
+        state->saves.emplace(task, std::move(complete));
+        const auto name = state->env->NewStringUTF(id.c_str());
+        state->env->CallVoidMethod(state->owner, state->save_method, name,
+            enabled ? JNI_TRUE : JNI_FALSE, static_cast<jlong>(task));
+        state->env->DeleteLocalRef(name);
       },
       [state](const MuonServiceEvent& event) { state->Notify(event); },
       [state](std::function<void()> task) { state->Post(std::move(task)); }});
@@ -207,6 +223,24 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeRunTask(JNIEnv*, jclass, jlong ha
 extern "C" JNIEXPORT void JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeActivate(JNIEnv*, jclass, jlong handle) {
   Runtime(handle)->controller->Activate();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_dev_muon_runtime_MuonServiceProcess_nativeSetAutostart(
+    JNIEnv* env, jclass, jlong handle, jstring id, jboolean enabled) {
+  const auto operation = Runtime(handle)->controller->SetAutostart(ReadString(env, id), enabled == JNI_TRUE);
+  return operation == 0 ? nullptr : env->NewStringUTF(std::to_string(operation).c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_muon_runtime_MuonServiceProcess_nativeSaved(
+    JNIEnv* env, jclass, jlong handle, jlong task, jstring error) {
+  auto* state = Runtime(handle);
+  const auto found = state->saves.find(static_cast<uint64_t>(task));
+  if (found == state->saves.end()) return;
+  auto complete = std::move(found->second);
+  state->saves.erase(found);
+  complete(ReadString(env, error));
 }
 
 extern "C" JNIEXPORT jstring JNICALL

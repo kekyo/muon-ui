@@ -25,6 +25,8 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.json.JSONObject;
 import org.junit.Test;
+import org.junit.Before;
+import org.junit.After;
 import org.junit.runner.RunWith;
 
 /** Uses no service Binder or lifetime reference in the observed application. */
@@ -32,6 +34,11 @@ import org.junit.runner.RunWith;
 public final class NativeServiceProcessTest {
     private static final String APPLICATION = "dev.muon.servicefixture";
     private final UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
+
+    @Before @After public void resetPreferences() throws Exception {
+        device.executeShellCommand("am force-stop " + APPLICATION);
+        device.executeShellCommand("run-as " + APPLICATION + " rm -rf files/service-autostart");
+    }
 
     private JSONObject startDriver() throws Exception {
         return startDriver("normal", "ready");
@@ -42,7 +49,7 @@ public final class NativeServiceProcessTest {
                 + "/dev.muon.runtime.MuonServiceDriverActivity --es mode " + mode);
         assertFalse("The native service driver must launch: " + launch, launch.contains("Error"));
         UiObject2 status = device.wait(Until.findObject(By.pkg(APPLICATION)
-                .desc(Pattern.compile("service-driver-(ready|rejected|error)"))), 60000);
+                .desc(Pattern.compile("service-driver-(ready|rejected|preference-ready|error)"))), 60000);
         assertNotNull("The UI must acquire both independent services", status);
         assertEquals(status.getText(), "service-driver-" + expected, status.getContentDescription());
         return new JSONObject(status.getText());
@@ -85,6 +92,99 @@ public final class NativeServiceProcessTest {
         socket.connect(new InetSocketAddress("127.0.0.1", id.equals("alpha") ? 49171 : 49172), 60000);
         socket.setSoTimeout(60000);
         return socket;
+    }
+
+    private JSONObject preferenceState(String action) throws Exception {
+        UiObject2 status = device.wait(Until.findObject(By.desc("service-driver-" + action)), 60000);
+        assertNotNull("Preference operation must complete: " + action, status);
+        return new JSONObject(status.getText());
+    }
+
+    @Test public void preservesOtherOwnersWhileTurningAutostartOffAndRestoresOffAfterRestart() throws Exception {
+        startDriver("preferences", "preference-ready");
+        try (Socket alpha = connect("alpha")) {
+            JSONObject before = challenge(alpha);
+            device.findObject(By.desc("foreign-watch")).click();
+            preferenceState("foreign-rejected");
+            device.findObject(By.desc("autostart-off")).click();
+            JSONObject off = preferenceState("autostart-off");
+            assertFalse(off.getBoolean("autostart"));
+            assertFalse(off.getBoolean("resident"));
+            assertEquals(2, off.getInt("clientReferences"));
+            device.findObject(By.desc("release-first")).click();
+            assertEquals(1, preferenceState("release-first").getInt("clientReferences"));
+            assertEquals(before.getString("generation"), challenge(alpha).getString("generation"));
+            device.findObject(By.desc("release-second")).click();
+            preferenceState("release-second");
+            assertEquals("Watching must not retain native work", -1, alpha.getInputStream().read());
+            assertNotNull(device.wait(Until.findObject(By.desc("service-watch-stopped")), 60000));
+        }
+        // This cold restart deliberately stops both processes to exercise disk
+        // restoration, unlike the separate UI-only death test above.
+        device.executeShellCommand("am force-stop " + APPLICATION);
+        JSONObject restored = startDriver("inspect-preferences", "preference-ready");
+        assertEquals("stopped", restored.getString("state"));
+        assertFalse(restored.getBoolean("autostart"));
+        assertEquals(0, restored.getInt("clientReferences"));
+        device.findObject(By.desc("autostart-on")).click();
+        preferenceState("autostart-on");
+        assertNotNull(device.wait(Until.findObject(By.desc("service-watch-running")), 60000));
+        try (Socket alpha = connect("alpha")) { challenge(alpha); }
+    }
+
+    @Test public void observesAndroidComponentStopWithoutRestartingTheResidentService() throws Exception {
+        startDriver("preferences", "preference-ready");
+        try (Socket alpha = connect("alpha")) {
+            challenge(alpha);
+            device.findObject(By.desc("os-stop")).click();
+            assertEquals(-1, alpha.getInputStream().read());
+            UiObject2 failure = device.wait(Until.findObject(By.desc("service-watch-failed")), 60000);
+            assertNotNull("Watch must observe the OS-required stop", failure);
+            JSONObject state = new JSONObject(failure.getText());
+            assertTrue(state.getBoolean("autostart"));
+            assertTrue(state.getBoolean("resident"));
+            assertEquals(0, state.getInt("clientReferences"));
+            assertTrue(state.getString("error").contains("destroyed"));
+        }
+    }
+
+    @Test public void changesAutostartAndClosesAPendingWatchThroughThePublicPageApi() throws Exception {
+        device.executeShellCommand("am start -W -n " + APPLICATION + "/dev.muon.runtime.MuonAppActivity");
+        pageReady();
+        try (Socket alpha = connect("alpha")) {
+            challenge(alpha);
+            device.findObject(By.text("Disable service autostart")).click();
+            assertNotNull(device.wait(Until.findObject(By.text("page-autostart-off")), 60000));
+            UiObject2 changed = device.wait(Until.findObject(By.text(Pattern.compile(
+                    "page-watch .*\\\"autostart\\\":false.*"))), 60000);
+            assertNotNull("The public watcher must observe the committed preference", changed);
+            JSONObject state = new JSONObject(changed.getText().substring("page-watch ".length()));
+            assertEquals(1, state.getInt("clientReferences"));
+            assertEquals("running", state.getString("state"));
+            device.findObject(By.text("Close state watch")).click();
+            assertNotNull(device.wait(Until.findObject(By.text("page-watch-closed")), 60000));
+            device.findObject(By.text("Release page")).click();
+            assertNotNull(device.wait(Until.findObject(By.text("Page released")), 60000));
+            assertEquals(-1, alpha.getInputStream().read());
+        }
+    }
+
+    @Test public void preservesResidentWorkWhenAutostartPersistenceFails() throws Exception {
+        startDriver("preferences", "preference-ready");
+        device.executeShellCommand("run-as " + APPLICATION + " mkdir -p files/service-autostart");
+        device.executeShellCommand("run-as " + APPLICATION + " chmod 500 files/service-autostart");
+        try (Socket alpha = connect("alpha")) {
+            JSONObject before = challenge(alpha);
+            device.findObject(By.desc("autostart-off")).click();
+            JSONObject unchanged = preferenceState("save-failed");
+            assertTrue(unchanged.getBoolean("autostart"));
+            assertTrue(unchanged.getBoolean("resident"));
+            assertEquals(2, unchanged.getInt("clientReferences"));
+            assertFalse(unchanged.getString("saveError").isEmpty());
+            assertEquals(before.getString("generation"), challenge(alpha).getString("generation"));
+        } finally {
+            device.executeShellCommand("run-as " + APPLICATION + " chmod 700 files/service-autostart");
+        }
     }
 
     private JSONObject challenge(Socket socket) throws Exception {

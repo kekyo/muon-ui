@@ -69,7 +69,8 @@ final class MuonServiceClient implements AutoCloseable {
         int id = nextRequest++;
         pending.put(id, completion);
         try {
-            JSONObject command = new JSONObject(arguments.toString()).put("operation", operation);
+            JSONObject command = new JSONObject().put("operation", operation)
+                    .put("arguments", new JSONObject(arguments.toString()));
             Message message = message(id, command);
             if (remote != null) remote.send(message);
             else {

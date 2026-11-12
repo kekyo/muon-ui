@@ -118,6 +118,8 @@ static const std::vector<std::string> kPlatformFunctionPaths = {
     "muon.services.acquire",
     "muon.services.release",
     "muon.services.getState",
+    "muon.services.setAutostart",
+    "muon.services.watchState",
     "muon.environments.getConfigValues",
 #if defined(MUON_ANDROID_TEST_HOST)
     "prototype.fail",
@@ -1466,7 +1468,8 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   }
   auto service_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateBuiltinPolicy(state,
-      {"muon.services.acquire", "muon.services.release", "muon.services.getState"},
+      {"muon.services.acquire", "muon.services.release", "muon.services.getState",
+       "muon.services.setAutostart", "muon.services.watchState"},
       &service_policy, error_message)) {
     return false;
   }

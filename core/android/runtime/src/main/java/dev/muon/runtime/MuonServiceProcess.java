@@ -45,6 +45,26 @@ final class MuonServiceProcess {
         Client(Messenger reply) { this.reply = reply; }
     }
 
+    private static final class SaveRequest {
+        final Client client;
+        final int request;
+        SaveRequest(Client client, int request) { this.client = client; this.request = request; }
+    }
+
+    private static final class Watch {
+        final Client client;
+        final String serviceId;
+        String deliveredState;
+        JSONObject latest;
+        Integer pending;
+        Watch(Client client, String serviceId, JSONObject initial) throws JSONException {
+            this.client = client;
+            this.serviceId = serviceId;
+            latest = initial;
+            deliveredState = initial.toString();
+        }
+    }
+
     private final Context context;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, JSONObject> definitions = new TreeMap<>();
@@ -52,7 +72,14 @@ final class MuonServiceProcess {
     private final Map<IBinder, Client> clients = new HashMap<>();
     private final Map<String, Client> owners = new HashMap<>();
     private final Messenger messenger = new Messenger(new Handler(Looper.getMainLooper(), this::receive));
-    private final long nativeHandle;
+    private final MuonServicePreferences preferences;
+    private final ArrayList<Runnable> initializing = new ArrayList<>();
+    private final Map<String, SaveRequest> saves = new HashMap<>();
+    private final Map<String, Watch> watches = new HashMap<>();
+    private long nextWatch = 1;
+    private long nativeHandle;
+    private boolean initialized;
+    private String initializationError;
 
     static MuonServiceProcess get(Context context) {
         if (Looper.myLooper() != Looper.getMainLooper())
@@ -63,6 +90,7 @@ final class MuonServiceProcess {
 
     private MuonServiceProcess(Context context) {
         this.context = context;
+        preferences = new MuonServicePreferences(new File(context.getFilesDir(), "service-autostart"));
         try {
             JSONObject config = new JSONObject(MuonAppConfig.readAsset(context, "muon/config.json"));
             JSONObject services = config.optJSONObject("services");
@@ -112,7 +140,15 @@ final class MuonServiceProcess {
                 }
                 configurations[index++] = pairs.toArray(new String[0]);
             }
-            nativeHandle = nativeCreate(this, ids, libraries, directories, autostarts, configurations);
+            preferences.load(ids, (overrides, error) -> {
+                initializationError = error;
+                if (error == null) nativeHandle = nativeCreate(this, ids, libraries, directories,
+                        autostarts, overrides, configurations);
+                initialized = true;
+                ArrayList<Runnable> pending = new ArrayList<>(initializing);
+                initializing.clear();
+                for (Runnable action : pending) action.run();
+            });
         } catch (JSONException error) {
             throw new IllegalStateException("Invalid packaged services", error);
         }
@@ -150,7 +186,9 @@ final class MuonServiceProcess {
         if (client == null) return;
         owners.remove(client.owner);
         binder.unlinkToDeath(client.death, 0);
-        nativeReleaseOwner(nativeHandle, client.owner);
+        watches.values().removeIf(watch -> watch.client == client);
+        saves.values().removeIf(save -> save.client == client);
+        if (nativeHandle != 0) nativeReleaseOwner(nativeHandle, client.owner);
     }
 
     private boolean receive(Message message) {
@@ -165,10 +203,27 @@ final class MuonServiceProcess {
                 return true;
             }
             client = client(message.replyTo);
-            if ("open".equals(operation)) {
-                nativeActivate(nativeHandle);
-                return true;
-            }
+            Client owner = client;
+            Runnable action = () -> {
+                // Initialization cannot turn accepted startup/configuration
+                // intent into a page-owned action when that page disappears.
+                if (operation.equals("open") || operation.equals("setAutostart")
+                        || owners.get(owner.owner) == owner)
+                    handle(owner, request, operation, command);
+            };
+            if (initialized) action.run();
+            else initializing.add(action);
+        } catch (JSONException | RuntimeException | RemoteException error) {
+            if (client != null) reply(client, request, null, error.toString());
+        }
+        return true;
+    }
+
+    private void handle(Client client, int request, String operation, JSONObject envelope) {
+        try {
+            if (initializationError != null) throw new IllegalStateException(initializationError);
+            if ("open".equals(operation)) { nativeActivate(nativeHandle); return; }
+            JSONObject command = envelope.getJSONObject("arguments");
             String id = command.getString("serviceId");
             definition(id);
             if ("acquire".equals(operation)) {
@@ -183,13 +238,64 @@ final class MuonServiceProcess {
                 String state = nativeSnapshot(nativeHandle, id);
                 if (state == null) throw new IllegalStateException("Unknown service");
                 reply(client, request, new JSONObject(state), null);
+            } else if ("setAutostart".equals(operation)) {
+                Object enabled = command.get("enabled");
+                if (!(enabled instanceof Boolean)) throw new IllegalArgumentException("Autostart must be boolean");
+                String setting = nativeSetAutostart(nativeHandle, id, (Boolean)enabled);
+                if (setting == null) throw new IllegalStateException("Autostart change was rejected");
+                if (owners.get(client.owner) == client)
+                    saves.put(setting, new SaveRequest(client, request));
+            } else if ("watchState".equals(operation)) {
+                watch(client, request, id, command);
             } else {
                 throw new IllegalArgumentException("Unsupported service operation: " + operation);
             }
-        } catch (JSONException | RuntimeException | RemoteException error) {
-            if (client != null) reply(client, request, null, error.toString());
+        } catch (JSONException | RuntimeException error) {
+            reply(client, request, null, error.toString());
         }
-        return true;
+    }
+
+    private void watch(Client client, int request, String id, JSONObject command) throws JSONException {
+        Object action = command.get("operation");
+        if (!(action instanceof String)) throw new IllegalArgumentException("Service watch operation must be a string");
+        String operation = (String)action;
+        if (operation.equals("acquire")) {
+            if (command.has("token")) throw new IllegalArgumentException("New watches cannot supply a token");
+            if (nextWatch == 0) throw new IllegalStateException("Service watch identities exhausted");
+            // Long.toUnsignedString is unavailable on the API 24 baseline.
+            String token = new java.math.BigInteger(Long.toHexString(nextWatch++), 16).toString();
+            JSONObject state = new JSONObject(nativeSnapshot(nativeHandle, id));
+            watches.put(token, new Watch(client, id, state));
+            reply(client, request, new JSONObject().put("token", token).put("state", state), null);
+            return;
+        }
+        Object identity = command.get("token");
+        if (!(identity instanceof String)) throw new IllegalArgumentException("Service watch token must be a string");
+        String token = (String)identity;
+        Watch watch = watches.get(token);
+        if (watch == null || watch.client != client || !watch.serviceId.equals(id))
+            throw new IllegalArgumentException("Unknown service watch for this owner");
+        if (operation.equals("release")) {
+            watches.remove(token);
+            if (watch.pending != null) reply(client, watch.pending, new JSONObject().put("state", JSONObject.NULL), null);
+            reply(client, request, new JSONObject(), null);
+        } else if (operation.equals("next")) {
+            if (watch.pending != null) throw new IllegalStateException("A service watch read is already pending");
+            watch.pending = request;
+            // A Changed event may still be queued; read the authoritative state.
+            watch.latest = new JSONObject(nativeSnapshot(nativeHandle, id));
+            deliverWatch(watch);
+        } else throw new IllegalArgumentException("Unknown service watch operation");
+    }
+
+    private void deliverWatch(Watch watch) throws JSONException {
+        String state = watch.latest.toString();
+        // The public revision tracks committed settings, not runtime/C changes.
+        if (watch.pending == null || state.equals(watch.deliveredState)) return;
+        int request = watch.pending;
+        watch.pending = null;
+        watch.deliveredState = state;
+        reply(watch.client, request, new JSONObject().put("state", watch.latest), null);
     }
 
     private void reply(Client client, int request, JSONObject value, String error) {
@@ -205,6 +311,10 @@ final class MuonServiceProcess {
 
     // Called by JNI on the owner Looper. No native callback is invoked inline.
     private void postTask(long task) { handler.post(() -> nativeRunTask(nativeHandle, task)); }
+
+    private void saveAutostart(String id, boolean enabled, long task) {
+        preferences.save(id, enabled, (ignored, error) -> nativeSaved(nativeHandle, task, error));
+    }
 
     private void startComponent(String id, long generation) {
         try {
@@ -245,6 +355,23 @@ final class MuonServiceProcess {
         try {
             JSONObject event = new JSONObject(json);
             String kind = event.getString("kind");
+            if ("changed".equals(kind)) {
+                String id = event.getJSONObject("snapshot").getString("id");
+                // Coalesce on the current snapshot, never a stale queued event.
+                JSONObject state = new JSONObject(nativeSnapshot(nativeHandle, id));
+                for (Watch watch : new ArrayList<>(watches.values())) {
+                    if (!watch.serviceId.equals(id)) continue;
+                    watch.latest = state;
+                    deliverWatch(watch);
+                }
+                return;
+            }
+            if ("autostartResult".equals(kind)) {
+                SaveRequest save = saves.remove(event.getString("operationId"));
+                if (save != null) reply(save.client, save.request, new JSONObject(),
+                        event.getBoolean("success") ? null : event.getString("error"));
+                return;
+            }
             if (!"acquired".equals(kind) && !"acquireFailed".equals(kind)) return;
             Client client = owners.get(event.getString("owner"));
             if (client == null) return;
@@ -256,9 +383,11 @@ final class MuonServiceProcess {
     }
 
     private static native long nativeCreate(MuonServiceProcess owner, String[] ids,
-            String[] libraries, String[] directories, boolean[] autostarts, String[][] configurations);
+            String[] libraries, String[] directories, boolean[] autostarts, int[] overrides, String[][] configurations);
     private static native void nativeRunTask(long handle, long task);
     private static native void nativeActivate(long handle);
+    private static native String nativeSetAutostart(long handle, String id, boolean enabled);
+    private static native void nativeSaved(long handle, long task, String error);
     private static native String nativeAcquire(long handle, String id, String owner);
     private static native boolean nativeRelease(long handle, String id, String owner, String reference, String generation);
     private static native void nativeReleaseOwner(long handle, String owner);

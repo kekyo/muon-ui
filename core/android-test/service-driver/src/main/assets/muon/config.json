@@ -8,7 +8,9 @@
       "muon.environments.getProcessId",
       "muon.services.acquire",
       "muon.services.release",
-      "muon.services.getState"
+      "muon.services.getState",
+      "muon.services.setAutostart",
+      "muon.services.watchState"
     ]
   },
   "services": {

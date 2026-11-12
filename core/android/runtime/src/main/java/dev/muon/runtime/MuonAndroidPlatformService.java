@@ -201,13 +201,16 @@ final class MuonAndroidPlatformService implements AutoCloseable {
                 throw new IllegalArgumentException("Service arguments must be a JSON object");
             JSONObject command = (JSONObject)value;
             String operation = path.substring("muon.services.".length());
-            if (!operation.equals("acquire") && !operation.equals("release") && !operation.equals("getState"))
+            if (!operation.equals("acquire") && !operation.equals("release") && !operation.equals("getState")
+                    && !operation.equals("setAutostart") && !operation.equals("watchState"))
                 throw new IllegalArgumentException("Unknown service operation");
             java.util.Iterator<String> keys = command.keys();
             while (keys.hasNext()) {
                 String key = keys.next();
                 if (!key.equals("serviceId") && !(operation.equals("release")
-                        && (key.equals("refId") || key.equals("generation"))))
+                        && (key.equals("refId") || key.equals("generation")))
+                        && !(operation.equals("setAutostart") && key.equals("enabled"))
+                        && !(operation.equals("watchState") && (key.equals("operation") || key.equals("token"))))
                     throw new IllegalArgumentException("Unknown service argument: " + key);
             }
             serviceClient.invoke(operation, command, new MuonServiceClient.Completion() {

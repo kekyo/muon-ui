@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve, win32 } from "node:path";
 import { promisify } from "node:util";
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import {
   connectWindowsE2eAgent,
   resolveWindowsE2eEnvironment,
@@ -16,9 +16,10 @@ import {
 
 const execute = promisify(execFile);
 
-it("hosts native services independently on both Windows architectures", async () => {
+beforeAll(async () => {
   // Build before reserving the machine: missing host support must fail even
-  // when no Windows test session is available.
+  // when no Windows test session is available. Compiling both architectures
+  // has its own preparation budget and must not consume the runtime deadline.
   await execute(
     "make",
     ["-C", "../service-host", "windows-amd64", "windows-i686"],
@@ -26,6 +27,9 @@ it("hosts native services independently on both Windows architectures", async ()
       maxBuffer: 4 * 1024 * 1024,
     },
   );
+}, 600000);
+
+it("hosts native services independently on both Windows architectures", async () => {
   const environment = resolveWindowsE2eEnvironment(process.env);
   const connection = await connectWindowsE2eAgent(environment);
   if (connection.status !== "connected") throw new Error(connection.reason);

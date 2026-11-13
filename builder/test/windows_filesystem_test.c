@@ -226,8 +226,14 @@ static int copy_to_self(const char *root) {
 // Generate these in-process to avoid testing CreateProcess's command-line limit.
 static int limits(const char *root) {
   char *source = muon_path_join(root, "preserve.txt");
+  char component[71];
+  memset(component, 'a', sizeof(component) - 1);
+  component[sizeof(component) - 1] = '\0';
+  char *first_parent = muon_path_join(root, component);
   char *path = malloc(32770);
-  if (source == NULL || path == NULL) { free(source); free(path); return 1; }
+  if (source == NULL || first_parent == NULL || path == NULL) {
+    free(source); free(first_parent); free(path); return 1;
+  }
   int result = 1;
   if (muon_write_text_file(source, "preserved") != 0) goto done;
   for (int extended = 0; extended <= 1; ++extended) {
@@ -236,9 +242,15 @@ static int limits(const char *root) {
       size_t start = strlen(path);
       for (size_t i = start; i < length; ++i) path[i] = (i - start) % 71 == 0 ? '\\' : 'a';
       path[length] = '\0';
-      if (muon_ensure_directory(path) == 0 || muon_path_exists(path) ||
-          muon_copy_file_with_source_mode(source, path) == 0 ||
-          muon_atomic_replace(source, path) == 0 || expect_contents(source, "preserved") != 0) goto done;
+      if (muon_ensure_directory(path) == 0 || muon_path_exists(path)) goto done;
+      if (muon_copy_file_with_source_mode(source, path) == 0) goto done;
+      // Reject the complete destination before creating any valid parent prefix.
+      if (muon_path_exists(first_parent)) {
+        fputs("Rejected copy created parent directories\n", stderr);
+        goto done;
+      }
+      if (muon_atomic_replace(source, path) == 0 ||
+          expect_contents(source, "preserved") != 0) goto done;
     }
   }
   size_t start = strlen(root) + 1;
@@ -255,6 +267,7 @@ static int limits(const char *root) {
   result = 0;
 done:
   free(source);
+  free(first_parent);
   free(path);
   return result == 0 ? 0 : fail("path/component limits");
 }

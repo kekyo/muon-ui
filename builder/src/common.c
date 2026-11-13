@@ -805,23 +805,28 @@ static int muon_copy_file_internal(
     unsigned long long total_size,
     MuonPrepareProgressCallback progress_callback, void *progress_user_data,
     MuonPrepareProgressPhase phase, const char *status) {
-  char *parent = muon_parent_directory(destination);
-  if (parent == NULL) {
-    return -1;
-  }
-  if (muon_ensure_directory(parent) != 0) {
-    free(parent);
-    return -1;
-  }
-  free(parent);
 #ifdef _WIN32
   muon_windows_path native_source = {0};
   muon_windows_path native_destination = {0};
+  // Validate both complete paths before creating a valid prefix of an invalid
+  // destination, which could otherwise leave a deep directory tree behind.
   if (muon_windows_io_path(source, MUON_WINDOWS_PATH_FILE, &native_source) != 0) return -1;
   if (muon_windows_io_path(destination, MUON_WINDOWS_PATH_FILE, &native_destination) != 0) {
     muon_windows_path_destroy(&native_source);
     return -1;
   }
+#endif
+  char *parent = muon_parent_directory(destination);
+  if (parent == NULL || muon_ensure_directory(parent) != 0) {
+    free(parent);
+#ifdef _WIN32
+    muon_windows_path_destroy(&native_source);
+    muon_windows_path_destroy(&native_destination);
+#endif
+    return -1;
+  }
+  free(parent);
+#ifdef _WIN32
   WindowsCopyProgress progress = {progress_callback, progress_user_data, phase, status};
   // Native copying rejects aliases of the same file before truncating it and
   // retains the existing overwrite and link-following behavior (flags = 0).

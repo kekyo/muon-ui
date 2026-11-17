@@ -10,6 +10,7 @@ import type { MuonResolvedService } from "../common/service-config.ts";
 import { mergeMuonServicePlugins } from "../common/service-plugins.ts";
 import { stageMuonNativePlugins } from "../common/native-plugins.ts";
 import { stageMuonNodeService } from "./node-service.ts";
+import type { MuonServiceInputObserver } from "../common/service-inputs.ts";
 
 /** Normalized runtime settings stored beside a desktop application. */
 export interface MuonDesktopServiceSettings {
@@ -46,6 +47,7 @@ export type MuonDesktopServiceEntry = MuonDesktopServiceSettings &
  * @param target - Desktop ABI to select.
  * @param output - Application distribution directory.
  * @param runtimeDirectory - Prepared runtime, when separate from the service snapshot.
+ * @param onInput - Optional development observer for installed runtime dependencies.
  * @returns Registry filename, or undefined when no services are declared.
  * @remarks Services share one loader namespace. Conflicting library filenames
  * are rejected; identical factories/dependencies are copied only once.
@@ -55,6 +57,7 @@ export const stageMuonDesktopServices = async (
   target: MuonDesktopTarget,
   output: string,
   runtimeDirectory: string = output,
+  onInput?: MuonServiceInputObserver,
 ): Promise<string | undefined> => {
   if (definitions.length === 0) return undefined;
   const files = new Map<string, { name: string; bytes: Buffer }>();
@@ -76,6 +79,7 @@ export const stageMuonDesktopServices = async (
         definition.project,
         definition.build,
         join(output, project),
+        onInput,
       );
       const runtimeFile = (path: string): string =>
         "./" +

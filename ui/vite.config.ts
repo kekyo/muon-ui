@@ -84,6 +84,7 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
           /^node:/,
           "adm-zip",
           "commander",
+          "chokidar",
           "funcity",
           "sharp",
           "tar-vern",

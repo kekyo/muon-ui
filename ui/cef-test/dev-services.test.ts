@@ -25,6 +25,7 @@ import { runMuonPrepare } from "../cef/prepare.ts";
 import { startMuonDevelopmentServices } from "../cef/development-services.ts";
 import { buildMuonQuickJsService } from "../common/service-build.ts";
 import { startMuonViteBrowserBridge } from "../cef/vite-internals.ts";
+import * as serviceWatch from "../cef/development-service-watch.ts";
 
 // Runtime downloading is orthogonal to service preparation. The launched driver
 // uses the real service host and the common page API to report its result.
@@ -48,6 +49,81 @@ afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });
   vi.mocked(runMuonPrepare).mockReset();
+});
+
+it("closes service input monitors when Vite exits during their initial scan", async () => {
+  const root = await mkdtemp(resolve("../.build/dev-service-watch-close-"));
+  directories.push(root);
+  const stagePath = join(root, ".muon/linux-amd64");
+  await mkdir(stagePath, { recursive: true });
+  await writeFile(
+    join(root, "index.html"),
+    "<title>Close during startup</title>",
+  );
+  vi.mocked(runMuonPrepare).mockResolvedValue({
+    stagePath,
+    muonPath: stagePath,
+    cefPath: stagePath,
+    cacheHit: true,
+  });
+  let scanned!: () => void;
+  const scanning = new Promise<void>((resolve) => {
+    scanned = resolve;
+  });
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let monitorClosed = false;
+  let monitor: serviceWatch.MuonDevelopmentServiceWatcher | undefined;
+  const createWatcher = serviceWatch.createMuonDevelopmentServiceWatcher;
+  vi.spyOn(
+    serviceWatch,
+    "createMuonDevelopmentServiceWatcher",
+  ).mockImplementationOnce(async (...args) => {
+    const watcher = await createWatcher(...args);
+    monitor = watcher;
+    scanned();
+    await gate;
+    return {
+      ...watcher,
+      close: async () => {
+        await watcher.close();
+        monitorClosed = true;
+      },
+    };
+  });
+  const server = await createServer({
+    root,
+    configFile: false,
+    logLevel: "silent",
+    server: { port: 0 },
+  });
+  try {
+    await startMuonViteBrowserBridge({
+      server,
+      pluginOptions: { exitWithServer: false },
+      refreshRuntimePluginConfig: async () => ({ mode: "simple" }),
+      platform: "linux",
+      architecture: "x64",
+      environment: process.env,
+    });
+    await server.listen();
+    await scanning;
+    const closed = once(server.httpServer!, "close");
+    const closing = server.close();
+    await closed;
+    finish();
+    await closing;
+    expect(monitorClosed).toBe(true);
+    expect(await readdir(join(root, ".muon/development/linux-amd64"))).toEqual(
+      [],
+    );
+  } finally {
+    finish();
+    await server.close();
+    await monitor?.close();
+  }
 });
 
 it.each([

@@ -14,6 +14,7 @@ import {
 import { selectMuonPluginFunctionPaths } from "./capability.ts";
 import { readMuonPluginAccessOptions } from "./plugin-access.ts";
 import { resolveMuonNativePlugins } from "./native-plugins.ts";
+import type { MuonServiceInputObserver } from "./service-inputs.ts";
 
 /** One explicit native capability, independent of every page's permissions. */
 export interface MuonServicePlugin {
@@ -30,6 +31,7 @@ export interface MuonServiceBuildOptions {
   /** Package root used to resolve the authoring SDK and NPM plugins. */ readonly root: string;
   /** Environment supplied to explicitly requested source builds. */ readonly environment: NodeJS.ProcessEnv;
   /** Android SDK selected by the application. */ readonly androidSdkPath?: string;
+  /** Optional development observer, including inputs that fail validation. */ readonly onInput?: MuonServiceInputObserver;
 }
 
 const object = (value: unknown, label: string): Record<string, unknown> => {

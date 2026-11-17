@@ -56,6 +56,8 @@ class MuonServiceClient final {
    * @returns After all owned transport operations settle; safe to call repeatedly.
    */
   cardio::promise<void> Close();
+  /** @returns True after disconnect or disposal; pending and future calls fail. */
+  bool IsClosed() const;
 
  private:
   std::shared_ptr<MuonServiceClientImpl> impl_;

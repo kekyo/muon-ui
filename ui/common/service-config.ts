@@ -4,6 +4,7 @@
 // https://github.com/kekyo/muon-ui
 
 import { resolve } from "node:path";
+import { observeMuonServiceArtifact } from "./service-inputs.ts";
 import {
   buildMuonNativeService,
   buildMuonQuickJsService,
@@ -301,7 +302,9 @@ export const resolveMuonServices = async (
                   : resolve(directory, text(value.sysroot, `${label}.sysroot`)),
                 options ?? { root: directory, environment: process.env },
               );
+        options?.onInput?.({ path, kind: "file" });
         const artifact = await readServiceArtifact(path, targets);
+        observeMuonServiceArtifact(artifact, targets, options?.onInput);
         result.push({ ...settings, runtime: "native", artifact });
       } catch (error) {
         throw new Error(
@@ -312,6 +315,10 @@ export const resolveMuonServices = async (
       if (value.artifact !== undefined)
         throw new Error(`${label}.artifact requires the native runtime.`);
       try {
+        options?.onInput?.({
+          path: resolve(directory, text(value.project, `${label}.project`)),
+          kind: "tree",
+        });
         const project = (await resolveMuonNodeProject(
           { node: { project: text(value.project, `${label}.project`) } },
           directory,
@@ -319,6 +326,7 @@ export const resolveMuonServices = async (
         const build = await buildMuonNodeService(
           project,
           text(value.entry, `${label}.entry`),
+          options?.onInput,
         );
         result.push({ ...settings, runtime: "node", project, build });
       } catch (error) {
@@ -337,6 +345,7 @@ export const resolveMuonServices = async (
         bundle: await buildMuonQuickJsService(
           entry,
           getMuonServicePluginModules(nativePlugins),
+          options?.onInput,
         ),
         plugins: nativePlugins,
       });

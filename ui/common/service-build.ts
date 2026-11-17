@@ -10,6 +10,11 @@ import { dirname, join } from "node:path";
 import { runScriptOnceToText } from "funcity";
 import type { buildService, MuonPluginTarget } from "muon-plugin-sdk";
 import type { MuonServiceBuildOptions } from "./service-plugins.ts";
+import {
+  createMuonServiceInputPlugin,
+  observeMuonNativeSource,
+  type MuonServiceInputObserver,
+} from "./service-inputs.ts";
 
 /**
  * Builds an explicitly selected native factory with the application's SDK.
@@ -29,6 +34,7 @@ export const buildMuonNativeService = async (
   sysroot: string | undefined,
   options: MuonServiceBuildOptions,
 ): Promise<string> => {
+  options.onInput?.({ path: configPath, kind: "file" });
   const require = createRequire(join(options.root, "package.json"));
   let authoring: { buildService: typeof buildService };
   try {
@@ -49,6 +55,13 @@ export const buildMuonNativeService = async (
     id,
     identity,
   );
+  await observeMuonNativeSource(
+    configPath,
+    options.root,
+    targets,
+    outputDirectory,
+    options.onInput,
+  );
   for (const target of targets)
     await authoring.buildService({
       configPath,
@@ -67,6 +80,7 @@ export const buildMuonNativeService = async (
  * Bundles one declared TS/JS service with its portable runtime adapter.
  * @param entry - Absolute author entry exporting a service definition.
  * @param modules - Explicitly granted host module specifiers.
+ * @param onInput - Optional observer for source inputs, including failed builds.
  * @returns Self-contained ESM source, evaluated only by the service host.
  * @remarks Requires Vite 8 and the author's muon-plugin-sdk installation.
  * Node builtins and external chunks are rejected for the QuickJS runtime.
@@ -74,6 +88,7 @@ export const buildMuonNativeService = async (
 export const buildMuonQuickJsService = async (
   entry: string,
   modules: readonly string[],
+  onInput?: MuonServiceInputObserver,
 ): Promise<string> => {
   const vite = await import("vite");
   if (Number(vite.version.split(".")[0]) < 8)
@@ -102,6 +117,7 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
     publicDir: false,
     logLevel: "warn",
     plugins: [
+      createMuonServiceInputPlugin(entry, onInput),
       {
         name: "muon-quickjs-service",
         enforce: "pre",

@@ -135,6 +135,15 @@ cardio::promise<std::string> MuonServiceSession::Call(
   if (impl_->stopping) throw std::runtime_error("Service UI session is stopping");
   if (owner.empty()) throw std::invalid_argument("Service page owner is missing");
   auto found = impl_->pages.find(owner);
+  if (found != impl_->pages.end() && found->second->IsClosed() &&
+      (operation == "getUiAutostart" || operation == "setUiAutostart" || operation == "configureStartup")) {
+    // Process-wide UI policy calls own no runtime handles. Their next explicit
+    // request can use a replacement host, while page clients remain invalidated.
+    auto previous = std::move(found->second);
+    impl_->pages.erase(found);
+    cardio::fire_and_forget(Release(impl_, std::move(previous)));
+    found = impl_->pages.end();
+  }
   if (found == impl_->pages.end()) {
     auto client = std::make_shared<MuonServiceClient>([impl = impl_](cardio::cancellation cancellation) {
       return Connect(impl, cancellation);

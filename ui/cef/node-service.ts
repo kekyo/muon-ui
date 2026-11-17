@@ -24,6 +24,10 @@ import {
   assertMuonNodeProjectStagingIsSafe,
   type ResolvedMuonNodeProject,
 } from "./node-project.ts";
+import {
+  createMuonServiceInputPlugin,
+  type MuonServiceInputObserver,
+} from "../common/service-inputs.ts";
 
 /** Compiled project modules and installed runtime dependencies of a service. */
 export interface MuonNodeServiceBuild {
@@ -57,11 +61,13 @@ const packageName = (id: string): string =>
  * Compiles a Node service with Vite while retaining Node's npm and asset semantics.
  * @param project - Validated service project and engine requirement.
  * @param entry - Source entry resolved relative to that project.
+ * @param onInput - Optional development observer for module and project inputs.
  * @returns Portable ES modules and external package names.
  */
 export const buildMuonNodeService = async (
   project: ResolvedMuonNodeProject,
   entry: string,
+  onInput?: MuonServiceInputObserver,
 ): Promise<MuonNodeServiceBuild> => {
   const source = await realpath(resolve(project.sourcePath, entry));
   if (!isInside(project.sourcePath, source))
@@ -75,6 +81,7 @@ export const buildMuonNodeService = async (
     root: project.sourcePath,
     publicDir: false,
     logLevel: "warn",
+    plugins: [createMuonServiceInputPlugin(source, onInput)],
     build: {
       write: false,
       ssr: source,
@@ -165,6 +172,7 @@ const copyProjectFiles = async (
 const findInstalledPackage = async (
   name: string,
   from: string,
+  onInput: MuonServiceInputObserver | undefined,
 ): Promise<string | undefined> => {
   if (
     !/^(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+$/u.test(name) ||
@@ -175,6 +183,7 @@ const findInstalledPackage = async (
     name,
   ) ?? []) {
     const candidate = join(path, name);
+    onInput?.({ path: candidate, kind: "tree" });
     try {
       if ((await stat(join(candidate, "package.json"))).isFile())
         return await realpath(candidate);
@@ -194,6 +203,7 @@ const findInstalledPackage = async (
  * @param project - Validated project containing runtime assets.
  * @param build - Compiled modules and their external npm imports.
  * @param destination - Fresh service directory in a development snapshot or distribution.
+ * @param onInput - Optional development observer for installed runtime packages.
  * @returns Completion after every runtime input is independent of the source tree.
  * @remarks Installed dependency versions are preserved. This never runs npm install
  * or package lifecycle scripts; missing required dependencies fail preparation.
@@ -202,6 +212,7 @@ export const stageMuonNodeService = async (
   project: ResolvedMuonNodeProject,
   build: MuonNodeServiceBuild,
   destination: string,
+  onInput?: MuonServiceInputObserver,
 ): Promise<void> => {
   await assertMuonNodeProjectStagingIsSafe(project, destination);
   await copyProjectFiles(project.sourcePath, destination);
@@ -233,7 +244,7 @@ export const stageMuonNodeService = async (
       ...extra,
     ]);
     for (const name of names) {
-      const installed = await findInstalledPackage(name, source);
+      const installed = await findInstalledPackage(name, source, onInput);
       if (installed === undefined) {
         if (
           !required.includes(name) &&
@@ -245,6 +256,7 @@ export const stageMuonNodeService = async (
           `Node service dependency ${name} is not installed for ${source}. Run npm install in the project.`,
         );
       }
+      onInput?.({ path: installed, kind: "tree" });
       // Resolve against the copied ancestry before adding a nested version. This
       // retains npm's version selection and terminates circular dependency graphs.
       let available = false;

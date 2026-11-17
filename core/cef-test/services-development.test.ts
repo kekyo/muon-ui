@@ -138,7 +138,14 @@ export default defineService({
   await fetch((location.protocol === 'asset:' ? ${JSON.stringify(origin)} : '') + '/ready?error=' + encodeURIComponent(error));
 </script>`;
       await writeFile(join(root, "assets/main/index.html"), html);
-      await writeFile(join(root, "index.html"), html);
+      await writeFile(
+        join(root, "index.html"),
+        html + '<script type="module" src="/ui.ts"></script>',
+      );
+      await writeFile(
+        join(root, "ui.ts"),
+        "globalThis.uiVersion = 'before'; await fetch('/hmr?version=before'); if (import.meta.hot) import.meta.hot.accept();",
+      );
       await writeFile(
         join(root, "muon.json"),
         JSON.stringify({
@@ -234,6 +241,16 @@ export default defineService({
             {
               name: "development-service-readiness",
               configureServer: (server) => {
+                server.middlewares.use("/hmr", (request, response) => {
+                  response.end("ok");
+                  events.emit(
+                    "hmr",
+                    new URL(
+                      request.url ?? "/",
+                      "http://localhost",
+                    ).searchParams.get("version"),
+                  );
+                });
                 server.middlewares.use("/ready", (request, response) => {
                   response.end("ok");
                   events.emit(
@@ -338,6 +355,70 @@ export default defineService({
           ]);
           expect(error, diagnostic).toBe("");
         }
+      }
+      if (command === "vite") {
+        const hmr = once(events, "hmr", { signal: AbortSignal.timeout(60000) });
+        await writeFile(
+          join(root, "ui.ts"),
+          "globalThis.uiVersion = 'after'; await fetch('/hmr?version=after'); if (import.meta.hot) import.meta.hot.accept();",
+        );
+        expect((await hmr)[0]).toBe("after");
+        const beforeUpdate = await client!.callTool({
+          name: "browser_evaluate",
+          arguments: {
+            function:
+              "async () => { const handle = await window.muon.services.acquire('node'); try { return { pid: await handle.call('pid', []), ui: globalThis.uiVersion }; } finally { await handle.release(); } }",
+          },
+        });
+        expect(beforeUpdate.isError, JSON.stringify(beforeUpdate)).not.toBe(
+          true,
+        );
+        const beforeText = (
+          beforeUpdate.content as { type: string; text?: string }[]
+        )
+          .filter((item) => item.type === "text")
+          .map((item) => item.text ?? "")
+          .join("\n");
+        expect(
+          JSON.parse(
+            /### Result\n([\s\S]*?)(?:\n### |$)/u.exec(beforeText)?.[1] ??
+              "null",
+          ),
+        ).toEqual({ pid: servicePid, ui: "after" });
+        const updated = once(events, "ready", {
+          signal: AbortSignal.timeout(60000),
+        });
+        await writeFile(
+          join(root, "worker/src/prefix.txt"),
+          "Updated Node.js ",
+        );
+        expect((await updated)[0], diagnostic).toBe("");
+        const afterUpdate = await client!.callTool({
+          name: "browser_evaluate",
+          arguments: {
+            function:
+              "async () => ({ results: await serviceReady, uiAutostart: await window.muon.environments.getAutostart() })",
+          },
+        });
+        expect(afterUpdate.isError, JSON.stringify(afterUpdate)).not.toBe(true);
+        const afterText = (
+          afterUpdate.content as { type: string; text?: string }[]
+        )
+          .filter((item) => item.type === "text")
+          .map((item) => item.text ?? "")
+          .join("\n");
+        const current = JSON.parse(
+          /### Result\n([\s\S]*?)(?:\n### |$)/u.exec(afterText)?.[1] ?? "null",
+        );
+        expect(current.results.replies).toEqual([
+          "native reply",
+          "QuickJS reply",
+          "Updated Node.js reply",
+        ]);
+        expect(current.uiAutostart).toBe(true);
+        expect(current.results.childPid).not.toBe(servicePid);
+        expect(() => process.kill(servicePid!, 0)).toThrow();
+        servicePid = current.results.childPid;
       }
       await client!.callTool({
         name: "browser_evaluate",

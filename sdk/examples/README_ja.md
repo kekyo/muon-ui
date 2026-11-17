@@ -2,13 +2,13 @@
 
 このディレクトリをmuon-uiのリポジトリ外へコピーして使用できます。`application`で`npm install`を実行し、`npx muon-plugin doctor --target linux-amd64`で必要な環境を確認してください。公開前のSDKとmuon-uiを試す場合は、両パッケージのtgzを`npm install -D /path/to/muon-plugin-sdk.tgz /path/to/muon-ui.tgz`で指定します。
 
-| ディレクトリ    | 示す使い方                                                                             |
-| --------------- | -------------------------------------------------------------------------------------- |
-| `local`         | アプリ専用のC++20・cardioプラグイン。標準Makeとpkg-configを使用します。                |
-| `vendor-plugin` | 別ディレクトリのライブラリをCMakeで取り込むC99プラグイン。                             |
-| `vendor-source` | 外部ライブラリの代わりに使う、小さな独立Cライブラリの教材。muonやSDKに依存しません。   |
-| `application`   | 上記二つをローカルソースとして参照し、ボタンを押すと両プラグインを呼び出すViteアプリ。 |
-| `npm-package`   | `local`の成果物をNPM配布するpackage.json。                                             |
+| ディレクトリ    | 示す使い方                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `local`         | アプリ専用のC++20・cardioプラグイン。標準Makeとpkg-configを使用します。                                                 |
+| `vendor-plugin` | 別ディレクトリのライブラリをCMakeで取り込むC99プラグイン。                                                              |
+| `vendor-source` | 外部ライブラリの代わりに使う、小さな独立Cライブラリの教材。muonやSDKに依存しません。                                    |
+| `application`   | 上記二つをローカルソースとして参照し、ボタンを押すと両プラグインを呼び出すViteアプリ。                                  |
+| `npm-package`   | `local`の成果物をNPM配布するpackage.json。                                                                              |
 | `services`      | C99のecho、QuickJSのecho・イベントとnativeプラグイン呼び出し、Node.jsのファイル読み書きを行うサービス、およびTS型宣言。 |
 
 サービスの例は[サービスのガイド](https://github.com/kekyo/muon-ui/blob/main/docs/ja/services.md)と組み合わせて使用します。`native-echo.c`は`init --kind service --language c`で作った`service.c`へコピーし、TSファイルはサービスの`entry`へ指定します。`quickjs-native.ts`には通常の`init --name counter`で作ったプラグインの成果物と、`muon.counter.increment`への許可が必要です。

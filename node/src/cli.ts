@@ -7,6 +7,7 @@ import { createConnection, Socket } from 'node:net';
 import type { Readable, Writable } from 'node:stream';
 
 import { createMuonNodeBridge } from './index.js';
+import { createMuonNodeServiceBridge } from './service-bridge.ts';
 
 interface SidecarConnection {
   input: Readable;
@@ -153,7 +154,11 @@ const runSidecar = async (): Promise<void> => {
   const expectedToken = requireEnvironment('MUON_NODE_TOKEN');
   delete process.env.MUON_NODE_TOKEN;
   const connection = await openSidecarConnection();
-  const bridge = createMuonNodeBridge({
+  const createBridge =
+    process.argv[2] === '--service'
+      ? createMuonNodeServiceBridge
+      : createMuonNodeBridge;
+  const bridge = createBridge({
     input: connection.input,
     output: connection.output,
     expectedToken,

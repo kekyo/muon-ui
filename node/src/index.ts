@@ -21,19 +21,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve as resolveImport } from 'import-meta-resolve';
 import semverSatisfies from 'semver/functions/satisfies.js';
 import semverValidRange from 'semver/ranges/valid.js';
+import { createMuonNodeFrameDecoder, encodeMuonNodeFrame } from './framing.ts';
 
 declare const __MUON_NODE_SUPPORTED_ENGINE_RANGE__: string;
 
 const protocolName = 'node/1';
 const supportedNodeRange = __MUON_NODE_SUPPORTED_ENGINE_RANGE__;
-const maximumFramePayloadLength = 16 * 1024 * 1024;
 const signed64Minimum = -(2n ** 63n);
 const signed64Maximum = 2n ** 63n - 1n;
 const unsigned64Maximum = 2n ** 64n - 1n;
 const reservedModuleExportNames = new Set(['$release', 'then']);
-const utf8Decoder = new TextDecoder('utf-8', {
-  fatal: true,
-});
 
 /**
  * Options used to host the muon Node protocol.
@@ -253,19 +250,6 @@ const requireArray = (
     throw createBridgeError(code, `${description} must be an array.`);
   }
   return value;
-};
-
-const encodeFrame = (message: OutgoingWireMessage): Buffer => {
-  const payload = Buffer.from(JSON.stringify(message), 'utf8');
-  if (payload.length > maximumFramePayloadLength) {
-    throw createBridgeError(
-      'ERR_MUON_NODE_FRAME_TOO_LARGE',
-      'The encoded protocol frame is too large.'
-    );
-  }
-  const header = Buffer.allocUnsafe(4);
-  header.writeUInt32BE(payload.length);
-  return Buffer.concat([header, payload]);
 };
 
 const decodeIntegerTag = (
@@ -704,17 +688,27 @@ const validateHostedNodeEngine = (): void => {
   }
 };
 
-const initializeProject = async (
+/**
+ * Authenticates a child transport and resolves its independent project.
+ * @param params - Protocol, token, and projectRoot from the initial request.
+ * @param expectedToken - Inherited authentication secret, absent only in tests.
+ * @param changeWorkingDirectory - Whether this process belongs to the project.
+ * @param expectedProtocol - Page or service protocol selected by the parent.
+ * @returns Canonical project root and module-resolution base.
+ * @throws Error for authentication, engine, or project failures.
+ */
+export const initializeMuonNodeProject = async (
   params: Readonly<Record<string, unknown>>,
   expectedToken: string | undefined,
-  changeWorkingDirectory: boolean
+  changeWorkingDirectory: boolean,
+  expectedProtocol: string
 ): Promise<ProjectState> => {
   const requestedProtocol = requireString(
     params.protocol,
     'ERR_MUON_NODE_PROTOCOL',
     'initialize protocol'
   );
-  if (requestedProtocol !== protocolName) {
+  if (requestedProtocol !== expectedProtocol) {
     throw createBridgeError(
       'ERR_MUON_NODE_PROTOCOL',
       `Unsupported muon Node protocol ${requestedProtocol}.`
@@ -834,7 +828,14 @@ const importNamespaceWithoutThenableAssimilation = async (
   };
 };
 
-const importProjectModule = async (
+/**
+ * Loads a project module without assimilating its exported then function.
+ * @param project - Authenticated project returned by initialization.
+ * @param specifier - Project-relative entry or a project dependency.
+ * @returns Namespace and resolved file without page-specific export wrappers.
+ * @throws Error for invalid specifiers or failed module loading.
+ */
+export const importMuonNodeProjectModule = async (
   project: ProjectState,
   specifier: string
 ): Promise<ImportedModule> => {
@@ -1079,7 +1080,6 @@ const parseCallbackResult = (value: unknown): WireCallbackResult => {
 export const createMuonNodeBridge = (
   options: MuonNodeBridgeOptions
 ): MuonNodeBridge => {
-  let pendingInput = Buffer.alloc(0);
   let project: ProjectState | undefined = undefined;
   let nextModuleId = 1;
   let nextCallbackId = 1;
@@ -1113,7 +1113,7 @@ export const createMuonNodeBridge = (
   };
 
   const writeMessage = async (message: OutgoingWireMessage): Promise<void> => {
-    const frame = encodeFrame(message);
+    const frame = encodeMuonNodeFrame(message);
     await new Promise<void>((resolvePromise, rejectPromise) => {
       options.output.write(frame, (error: Error | null | undefined) => {
         if (error !== undefined && error !== null) {
@@ -1244,7 +1244,10 @@ export const createMuonNodeBridge = (
       'ERR_MUON_NODE_MODULE_SPECIFIER',
       'Module specifier'
     );
-    const imported = await importProjectModule(currentProject, specifier);
+    const imported = await importMuonNodeProjectModule(
+      currentProject,
+      specifier
+    );
     const collected = await collectModuleExports(imported);
     for (const reservedName of reservedModuleExportNames) {
       if (collected.exports.has(reservedName)) {
@@ -1359,10 +1362,11 @@ export const createMuonNodeBridge = (
             'The muon Node bridge is already initialized.'
           );
         }
-        project = await initializeProject(
+        project = await initializeMuonNodeProject(
           request.params,
           options.expectedToken,
-          options.changeWorkingDirectory
+          options.changeWorkingDirectory,
+          protocolName
         );
         return {
           value: {
@@ -1495,48 +1499,11 @@ export const createMuonNodeBridge = (
     );
   };
 
-  const parseInputFrames = (): void => {
-    while (pendingInput.length >= 4) {
-      const payloadLength = pendingInput.readUInt32BE(0);
-      if (payloadLength > maximumFramePayloadLength) {
-        throw createBridgeError(
-          'ERR_MUON_NODE_FRAME_TOO_LARGE',
-          'The incoming protocol frame is too large.'
-        );
-      }
-      const frameLength = payloadLength + 4;
-      if (pendingInput.length < frameLength) {
-        return;
-      }
-
-      const payload = pendingInput.subarray(4, frameLength);
-      pendingInput = pendingInput.subarray(frameLength);
-      let source: string;
-      try {
-        source = utf8Decoder.decode(payload);
-      } catch {
-        throw createBridgeError(
-          'ERR_MUON_NODE_PROTOCOL',
-          'The protocol frame payload is not valid UTF-8.'
-        );
-      }
-      let decoded: unknown;
-      try {
-        decoded = JSON.parse(source) as unknown;
-      } catch (error) {
-        throw createBridgeError(
-          'ERR_MUON_NODE_PROTOCOL',
-          `The protocol frame is not valid JSON: ${getErrorMessage(error)}`
-        );
-      }
-
-      if (isRecord(decoded) && decoded.kind === 'callbackResult') {
-        handleCallbackResult(parseCallbackResult(decoded));
-      } else {
-        requests.push(parseRequest(decoded));
-      }
-    }
-  };
+  const decoder = createMuonNodeFrameDecoder((decoded) => {
+    if (isRecord(decoded) && decoded.kind === 'callbackResult')
+      handleCallbackResult(parseCallbackResult(decoded));
+    else requests.push(parseRequest(decoded));
+  });
 
   const handleFatalError = (error: unknown): void => {
     if (closing) {
@@ -1619,42 +1586,20 @@ export const createMuonNodeBridge = (
     }
   };
 
-  const consumeInput = (chunk: unknown): void => {
-    const bytes =
-      typeof chunk === 'string'
-        ? Buffer.from(chunk)
-        : Buffer.isBuffer(chunk)
-          ? chunk
-          : chunk instanceof Uint8Array
-            ? Buffer.from(chunk)
-            : undefined;
-    if (bytes === undefined) {
-      throw createBridgeError(
-        'ERR_MUON_NODE_PROTOCOL',
-        'The protocol input emitted a non-binary chunk.'
-      );
-    }
-    pendingInput = Buffer.concat([pendingInput, bytes]);
-    parseInputFrames();
-    scheduleRequests();
-  };
-
   const handleInputData = (chunk: unknown): void => {
     try {
-      consumeInput(chunk);
+      decoder.write(chunk);
+      scheduleRequests();
     } catch (error) {
       handleFatalError(error);
     }
   };
 
   const handleInputEnd = (): void => {
-    if (pendingInput.length !== 0) {
-      handleFatalError(
-        createBridgeError(
-          'ERR_MUON_NODE_PROTOCOL',
-          'The protocol input ended with an incomplete frame.'
-        )
-      );
+    try {
+      decoder.finish();
+    } catch (error) {
+      handleFatalError(error);
       return;
     }
     closing = true;

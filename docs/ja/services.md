@@ -1,12 +1,18 @@
 # バックグラウンドサービス
 
-muonのサービスは画面を閉じた後も必要な処理を続けるための実行単位です。Linux・WindowsのCEF版とAndroid版で、C/C++のサービスとQuickJSによるJS/TSのサービスを利用できます。QuickJSからは、アプリが許可したC/C++プラグインを呼び出せます。Node.jsをサービスとして実行する方式は未対応です。
+muonのサービスは画面を閉じた後も必要な処理を続けるための実行単位です。Linux・WindowsのCEF版ではnative、QuickJS、Node.jsから実装方式を選べます。Android版ではnativeとQuickJSを利用できます。
+
+| `runtime` | 実装と利用できる機能 | 対応バックエンド |
+| --- | --- | --- |
+| `native` | C/C++と公開サービスSDK | CEF・Android |
+| `quickjs` | JS/TSと、アプリが明示的に許可したnativeプラグイン | CEF・Android |
+| `node` | JS/TS、Node.jsの組み込みAPI、npm依存 | CEF |
 
 サービスは`muon.json`に名前を付けて登録します。同じアプリに複数登録でき、画面から名前で取得してメソッドを呼び出します。サービスの終了だけで画面が閉じることはありません。
 
 ## 最初のTSサービス
 
-既存のmuonアプリにSDKを追加します。QuickJSサービスのビルドにはVite 8以降が必要です。
+既存のmuonアプリにSDKを追加します。QuickJS・Node.jsサービスのビルドにはVite 8以降が必要です。
 
 ```bash
 npm install -D muon-plugin-sdk
@@ -52,7 +58,7 @@ export default defineService({
 npx muon build --target linux-amd64
 ```
 
-Windows向けは`windows-amd64`または`windows-i686`、Android向けは`android`を指定し、Androidでは生成APKをインストールします。現在の`muon run`と`vite dev`はサービス定義を組み立てません。サービスを変更した後は、アプリを再ビルドして生成物から実行してください。
+Windows向けは`windows-amd64`または`windows-i686`、Android向けは`android`を指定し、Androidでは生成APKをインストールします。CEFの開発中は`npx muon run`または`npx vite`から同じサービス定義を実行できます。Viteではサービスの変更も反映します。詳しくは[開発中の起動と更新](#開発中の起動と更新)を参照してください。
 
 画面では参照を取得してから呼び出し、使い終わったら解放します。
 
@@ -107,7 +113,7 @@ await watcher.close();
 
 整数の`int64`と`uint64`には`bigint`、`bytes`には`Uint8Array`を使用します。文字列、真偽値、32bit整数、浮動小数と、これらの型の配列も扱えます。型定義と合わない値は拒否されます。メソッド固有のエラーコードは`errors`に列挙し、JS/TSの実装では`code`と`message`を持つエラーをthrowします。
 
-メソッドは`call(method, args, { signal })`でキャンセルできます。QuickJSのメソッドには最初の引数として呼び出し情報が渡り、その`signal`から取り消しを確認できます。キャンセルに対応するI/O処理を実装し、停止時には確保した資源を解放してください。
+メソッドは`call(method, args, { signal })`でキャンセルできます。JS/TSのメソッドには最初の引数として呼び出し情報が渡り、その`signal`から取り消しを確認できます。キャンセルに対応するI/O処理を実装し、停止時には確保した資源を解放してください。
 
 引数の関数は、親メソッドが完了するまでのコールバックです。親メソッドの完了後やキャンセル後に保持して使うことはできません。継続的な通知にはイベントを使います。サービス側は`start`に渡る`context.emit(name, value)`で通知し、画面側は`handle.subscribe(name, listener)`で購読します。
 
@@ -149,6 +155,63 @@ npx muon-plugin build native/echo/muon-plugin.build.json --target linux-amd64 --
 
 OS固有の処理は各ターゲットで実装する必要があります。サービスAPI自体はCEFやJNIに依存せず、同じC99・C++20のソースを利用できます。SDK内の`examples/services/native-echo.c`はメソッドを公開する例です。ビルド済みnative成果物を使うアプリの組み立てには、nativeコンパイラは不要です。
 
+アプリからソースもビルドする場合は、`artifact`の代わりに`source`へSDKのビルド設定を指定します。
+
+```json
+{
+  "services": {
+    "echo": {
+      "runtime": "native",
+      "source": "native/echo/muon-plugin.build.json"
+    }
+  }
+}
+```
+
+`source`と`artifact`は同時に指定できません。`source`を使う場合は、必要に応じてクロスコンパイル用の`sysroot`も指定できます。これらのパスは`muon.json`のディレクトリを基準に解決します。SDKと対象ターゲットのビルド環境を用意してください。ビルド方式と依存ライブラリの宣言は[SDKガイド](muon-plugin-sdk.md#makecmake独自ビルド)を参照してください。
+
+## Node.jsで実装する
+
+Node.jsサービスはQuickJSと同じ`defineService()`と画面用APIを使います。サービスごとにNode.js子プロセスを持ち、画面が終了しても参照の規約に従って処理を継続します。
+
+サービスのプロジェクトには`package.json`を置き、利用するnpmパッケージをインストールします。例えば`services/worker/package.json`を次のように作成できます。
+
+```json
+{
+  "name": "worker",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12" }
+}
+```
+
+```bash
+npm install --prefix services/worker muon-plugin-sdk
+```
+
+SDK内の`examples/services/node-files.ts`と`node-greeting.txt`をこのプロジェクトへコピーし、次の設定を`muon.json`へ追加します。このサンプルはNode.jsのファイルAPIでアセットを読み、`greet`メソッドを公開します。
+
+```json
+{
+  "services": {
+    "worker": {
+      "runtime": "node",
+      "project": "services/worker",
+      "entry": "node-files.ts",
+      "autostart": true
+    }
+  }
+}
+```
+
+`project`は`muon.json`のディレクトリを基準に、`entry`はそのプロジェクトを基準に解決します。エントリーとローカルのソースはプロジェクト内に置きます。`autostart`と文字列の`config`は他の実装方式と共通です。Node.jsには`artifact`、`source`、`plugins`を指定しません。Androidを含むビルドで`runtime: "node"`を指定すると、該当サービスを示してビルドに失敗します。
+
+TSはESモジュールへ変換され、相対ディレクトリ構成とアセットを保ったまま配布されます。`import.meta.url`を基準にしたファイル読み込みを使えます。実行時のnpm依存と間接依存も配置されるため、対象OSで使用できる依存物を事前にインストールしてください。必要なパッケージがない場合は準備に失敗します。muonのビルド処理から`npm install`やパッケージのスクリプトを実行することはありません。
+
+Node.jsの実行ファイルはmuonが準備します。サービスだけを使う場合に画面用の`node.project`設定は不要です。画面用Node.jsと各サービスの`engines.node`、muonの対応範囲をすべて満たすランタイムを使用し、条件が両立しない場合はプロジェクトと条件を示して準備を失敗させます。
+
+通常の停止では、実行中のメソッドとコールバックの後片付け、サービスの非同期`stop()`の完了を待ちます。サンプルは`start`に渡される`context.dataDirectory`へ最後の名前を保存します。このディレクトリはサービス専用の永続データ領域です。起動・停止の期限は各10秒で、期限超過、子プロセスの異常終了、通信断は失敗として報告されます。
+
 ## QuickJSからnativeコードを呼ぶ
 
 QuickJSサービスの`plugins`へ、利用するプラグインと関数の許可を明示します。プラグインは[公開SDK](muon-plugin-sdk.md)で作成する通常のC/C++プラグインです。
@@ -181,6 +244,18 @@ QuickJSサービスの`plugins`へ、利用するプラグインと関数の許�
 DOM、`window.muon`、Node.jsの組み込みモジュール、`fetch`、`setInterval`は提供しません。ファイルやネットワークのI/Oには明示的に許可したnativeプラグインを使用します。ビルダーはサービスと依存モジュールを単一JSへまとめ、未許可の外部モジュールや別アセットへの依存を拒否します。
 
 現在の上限は、JSバンドル8 MiB、JSヒープ64 MiB、スタック1 MiB、1回のJS実行2秒、起動・停止各10秒です。非同期I/Oの待ち時間と、CPUを占有するJS実行時間は区別します。上限超過や実行エラーはサービスの失敗として報告します。nativeコードの停止不能やプロセスの異常終了は、同じプロセスで動く他サービスにも影響します。
+
+## 開発中の起動と更新
+
+CEFでは配布ビルドと同じ`services`設定を使い、`npx muon run`でローカルの画面とサービスを起動できます。muonのViteプラグインを使うプロジェクトでは`npx vite`で画面とサービスを起動します。サービスの準備に失敗した場合はエラーを表示し、画面の起動も失敗させます。
+
+Viteはサービスのソース、アセット、設定、npm依存、nativeのビルド入力や成果物の変更を監視します。新しい構成を準備できたらサービス全体を再起動し、ページを再読み込みします。ページの初期化処理でサービスを取得し直してください。変更対象以外のサービスも再起動し、古いハンドルは無効になります。`muon run`にはこの変更監視はありません。
+
+HMRはページ全体を再読み込みせずに、変更したモジュールを更新するViteの機能です。画面だけのHMRではサービスホストを再起動しません。ただし、ページの破棄で非常駐サービスの最後の参照がなくなれば、通常どおり停止します。画面を閉じても常駐サービスがあれば開発コマンドは待機を続けます。`muon.browser.shutdown()`、Viteの終了、開発コマンドの中断はサービスを含む開発環境全体を終了します。
+
+ビルド失敗中は旧サービスが動き続け、次の編集で更新を再試行します。起動や停止に失敗した場合も診断を表示し、修正後の編集で再試行できます。この場合は旧ハンドルを再利用できません。連続した編集は順に処理し、更新や終了で使用しなくなったプロセスと配置を回収します。
+
+開発用のプロファイルとサービスのデータは配布アプリから分離します。サービスやUIの再起動では自動起動設定を維持しますが、開発コマンドを終了するとそのセッションの設定とデータを削除します。開発中にOSのログイン起動を登録することはありません。Androidではnative・QuickJSのビルドを利用でき、端末への開発起動やViteのライブプレビューには対応していません。
 
 ## PCでの画面とログイン起動
 

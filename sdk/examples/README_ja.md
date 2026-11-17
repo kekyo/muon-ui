@@ -9,9 +9,11 @@
 | `vendor-source` | 外部ライブラリの代わりに使う、小さな独立Cライブラリの教材。muonやSDKに依存しません。   |
 | `application`   | 上記二つをローカルソースとして参照し、ボタンを押すと両プラグインを呼び出すViteアプリ。 |
 | `npm-package`   | `local`の成果物をNPM配布するpackage.json。                                             |
-| `services`      | C99のechoサービス、QuickJSのecho・イベント、QuickJSからcounterを呼ぶTSコードと型宣言。 |
+| `services`      | C99のecho、QuickJSのecho・イベントとnativeプラグイン呼び出し、Node.jsのファイル読み書きを行うサービス、およびTS型宣言。 |
 
 サービスの例は[サービスのガイド](https://github.com/kekyo/muon-ui/blob/main/docs/ja/services.md)と組み合わせて使用します。`native-echo.c`は`init --kind service --language c`で作った`service.c`へコピーし、TSファイルはサービスの`entry`へ指定します。`quickjs-native.ts`には通常の`init --name counter`で作ったプラグインの成果物と、`muon.counter.increment`への許可が必要です。
+
+`node-files.ts`はCEF向けのNode.jsサービスです。`package.json`を持つサービスのプロジェクトへ`node-greeting.txt`と一緒にコピーし、`runtime: "node"`、`project`、`entry`を指定します。`greet`の応答にはアセットの内容を使い、非同期の終了処理でサービス専用のデータ領域へ最後の名前を保存します。
 
 `application`で`npm run dev`を実行すると、開発用アプリを起動します。Linux向けの生成は`npm run build`、Windows向けは`npx muon build --target windows-amd64`、Android向けは`npx muon build --target android`です。各プラットフォームのアプリ用環境も用意してください。
 

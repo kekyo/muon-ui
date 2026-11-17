@@ -1,12 +1,18 @@
 # Background services
 
-Muon services run work that can continue after a window closes. The CEF backend on Linux and Windows and the Android backend support C/C++ services and JS/TS services hosted by QuickJS. QuickJS services can call explicitly allowed C/C++ plugins. Running Node.js as a service is not supported in this release.
+Muon services run work that can continue after a window closes. The CEF backend on Linux and Windows supports native, QuickJS, and Node.js implementations. Android supports native and QuickJS implementations.
+
+| `runtime` | Implementation and available features | Backends |
+| --- | --- | --- |
+| `native` | C/C++ with the public service SDK | CEF, Android |
+| `quickjs` | JS/TS and explicitly allowed native plugins | CEF, Android |
+| `node` | JS/TS, Node.js builtins, and npm dependencies | CEF |
 
 Declare named services in `muon.json`. An application can have several services, and pages acquire them by name before calling methods. Ending a service does not close an open UI.
 
 ## Your first TS service
 
-Add the SDK to an existing Muon application. Building QuickJS services requires Vite 8 or later.
+Add the SDK to an existing Muon application. Building QuickJS and Node.js services requires Vite 8 or later.
 
 ```bash
 npm install -D muon-plugin-sdk
@@ -52,7 +58,7 @@ Build the application with its services, then run the generated launcher:
 npx muon build --target linux-amd64
 ```
 
-Select `windows-amd64` or `windows-i686` for Windows, or `android` to produce an APK to install. Currently, `muon run` and `vite dev` do not assemble service declarations. After changing a service, rebuild the application and run the generated artifact.
+Select `windows-amd64` or `windows-i686` for Windows, or `android` to produce an APK to install. During CEF development, `npx muon run` and `npx vite` run the same service declarations. Vite also applies service changes. See [Development startup and updates](#development-startup-and-updates).
 
 Acquire a reference in the page, call the service, and release it when finished.
 
@@ -107,7 +113,7 @@ To share static types with a page, put a `defineServiceInterface()` declaration 
 
 Use `bigint` for `int64` and `uint64`, and `Uint8Array` for `bytes`. Strings, booleans, 32-bit integers, floating-point numbers, and arrays of these types are also supported. Values must match the declared schema. Declare method-specific error codes in `errors`; JS/TS implementations throw errors with `code` and `message`.
 
-`call(method, args, { signal })` supports cancellation. QuickJS methods receive invocation context as their first argument and can observe its `signal`. Implement cancellation for pending I/O and release resources during shutdown.
+`call(method, args, { signal })` supports cancellation. JS/TS methods receive invocation context as their first argument and can observe its `signal`. Implement cancellation for pending I/O and release resources during shutdown.
 
 Function arguments are callbacks scoped to the parent method. They expire when the method completes or is cancelled. Use events for ongoing notifications: services call `context.emit(name, value)` on their start context, and pages call `handle.subscribe(name, listener)`.
 
@@ -149,6 +155,63 @@ Build the same source for the required targets and register the resulting `muon-
 
 Implement OS-specific work for each target. The service API itself does not depend on CEF or JNI and accepts common C99/C++20 sources. The SDK includes `examples/services/native-echo.c` as an RPC example. Assembling an application from prebuilt native artifacts does not require a native compiler.
 
+To build the source with the application, select an SDK build configuration through `source` instead of `artifact`:
+
+```json
+{
+  "services": {
+    "echo": {
+      "runtime": "native",
+      "source": "native/echo/muon-plugin.build.json"
+    }
+  }
+}
+```
+
+`source` and `artifact` are mutually exclusive. When using `source`, optionally specify `sysroot` for cross-compilation. These paths resolve relative to the directory containing `muon.json`. Install the SDK and the target toolchain. See the [SDK guide](muon-plugin-sdk.md#make-cmake-and-custom-builds) for build systems and dependency declarations.
+
+## Implementing a Node.js service
+
+Node.js services use the same `defineService()` and page APIs as QuickJS. Each service has its own Node.js child process and continues after the UI closes according to the reference rules.
+
+Create a `package.json` in the service project and install its npm dependencies. For example, create `services/worker/package.json`:
+
+```json
+{
+  "name": "worker",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12" }
+}
+```
+
+```bash
+npm install --prefix services/worker muon-plugin-sdk
+```
+
+Copy the SDK's `examples/services/node-files.ts` and `node-greeting.txt` into this project, then add the following to `muon.json`. This example reads an asset with the Node.js file API and exposes a `greet` method.
+
+```json
+{
+  "services": {
+    "worker": {
+      "runtime": "node",
+      "project": "services/worker",
+      "entry": "node-files.ts",
+      "autostart": true
+    }
+  }
+}
+```
+
+`project` resolves relative to the directory containing `muon.json`; `entry` resolves relative to that project. Keep the entry and local sources inside the project. `autostart` and the string values in `config` work as for the other runtimes. Do not specify `artifact`, `source`, or `plugins` for Node.js. A build including Android rejects `runtime: "node"` and identifies the affected service.
+
+TS is compiled to ES modules, preserving relative directory structure and assets in the distribution. File access relative to `import.meta.url` is supported. Runtime npm dependencies and their transitive dependencies are also included, so install dependencies compatible with the target OS beforehand. Preparation fails if required packages are missing. Muon's build does not run `npm install` or package scripts.
+
+Muon prepares the Node.js executable. An application using only Node.js services does not need the page-level `node.project` setting. The runtime must satisfy the page project's `engines.node`, every service project's range, and Muon's supported range. Incompatible requirements fail preparation with the affected projects and ranges.
+
+Normal shutdown waits for pending methods and callbacks to clean up and for the service's asynchronous `stop()` to finish. The example saves the last name in `context.dataDirectory`, provided to `start`. This directory stores persistent data for the service. Startup and shutdown each have a 10-second deadline. Deadline expiry, child-process crashes, and disconnection are reported as failures.
+
 ## Calling native code from QuickJS
 
 Declare each plugin and allowed function under the QuickJS service's `plugins`. These are ordinary C/C++ plugins built with the [public SDK](muon-plugin-sdk.md).
@@ -181,6 +244,18 @@ Each service has a separate JS environment. Alongside standard JavaScript, it pr
 The host does not supply DOM, `window.muon`, Node builtins, `fetch`, or `setInterval`. Use explicitly granted native plugins for filesystem and network I/O. The builder produces a single JS bundle and rejects undeclared external modules and separate assets.
 
 Current limits are 8 MiB per JS bundle, 64 MiB per JS heap, a 1 MiB stack, 2 seconds per JS execution turn, and 10 seconds each for startup and shutdown. Waiting for asynchronous I/O differs from CPU execution time. Runtime errors and exceeded limits are reported as service failures. Unresponsive native cleanup or a process crash can affect other services in the same process.
+
+## Development startup and updates
+
+For CEF, `npx muon run` starts local page assets and services using the same `services` configuration as a distribution build. Projects using Muon's Vite plugin can start the page and services with `npx vite`. A service preparation error also fails UI startup.
+
+Vite watches service sources, assets, configuration, npm dependencies, and native build inputs or artifacts. Once the new configuration is ready, it restarts all services and reloads the page. Acquire services again during page initialization. Unchanged services also restart, and old handles become invalid. `muon run` does not watch for these changes.
+
+HMR is Vite's mechanism for updating changed modules without reloading the entire page. UI-only HMR does not restart the service host. However, destroying a page still stops a nonresident service when its last reference disappears. Closing the UI leaves the development command waiting while resident services remain. `muon.browser.shutdown()`, stopping Vite, or interrupting the development command ends the whole development environment, including its services.
+
+The old services continue running if a build fails, and the next edit retries the update. Startup and shutdown failures also produce diagnostics and can be retried after editing. In those cases, old handles cannot be reused. Consecutive edits are processed sequentially; updates and shutdown reclaim processes and staged files that are no longer used.
+
+Development profiles and service data are separate from the distributed application. Service and UI restarts preserve autostart preferences, but ending the development command deletes that session's settings and data. Development does not register OS login startup. Android supports native and QuickJS builds; device development startup and Vite live preview are not supported.
 
 ## Desktop windows and login startup
 

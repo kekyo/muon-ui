@@ -6,6 +6,14 @@
 import { resolve } from "node:path";
 import { buildMuonQuickJsService } from "./service-build.ts";
 import {
+  buildMuonNodeService,
+  type MuonNodeServiceBuild,
+} from "../cef/node-service.ts";
+import {
+  resolveMuonNodeProject,
+  type ResolvedMuonNodeProject,
+} from "../cef/node-project.ts";
+import {
   resolveMuonServicePlugins,
   getMuonServicePluginModules,
   type MuonServiceBuildOptions,
@@ -59,9 +67,18 @@ export interface MuonResolvedQuickJsService extends MuonServiceSettings {
   /** Explicit native capabilities; never inherited from a page. */ readonly plugins: readonly MuonServicePlugin[];
 }
 
+/** Node project compiled for an independent service child process. */
+export interface MuonResolvedNodeService extends MuonServiceSettings {
+  /** Executes the shared service SDK in Node.js. */ readonly runtime: "node";
+  /** Service project and its runtime engine constraint. */ readonly project: ResolvedMuonNodeProject;
+  /** Compiled entry, modules and external npm dependencies. */ readonly build: MuonNodeServiceBuild;
+}
+
 /** One independently configured native or JavaScript service. */
 export type MuonResolvedService =
-  MuonResolvedNativeService | MuonResolvedQuickJsService;
+  | MuonResolvedNativeService
+  | MuonResolvedQuickJsService
+  | MuonResolvedNodeService;
 
 const foregroundTypes = new Set([
   "camera",
@@ -191,6 +208,7 @@ export const resolveMuonServices = async (
         "runtime",
         "artifact",
         "entry",
+        "project",
         "autostart",
         "config",
         "android",
@@ -198,10 +216,23 @@ export const resolveMuonServices = async (
       ],
       label,
     );
-    if (value.runtime !== "native" && value.runtime !== "quickjs")
+    if (
+      value.runtime !== "native" &&
+      value.runtime !== "quickjs" &&
+      value.runtime !== "node"
+    )
       throw new Error(
-        `${label}.runtime must be native or quickjs; this build does not support ${String(value.runtime)} services.`,
+        `${label}.runtime must be native, quickjs or node; this build does not support ${String(value.runtime)} services.`,
       );
+    const androidTarget = targets.find((target) =>
+      target.startsWith("android-"),
+    );
+    if (value.runtime === "node" && androidTarget !== undefined)
+      throw new Error(
+        `${label}: node services are not supported for ${androidTarget}; use native or quickjs.`,
+      );
+    if (value.runtime !== "node" && value.project !== undefined)
+      throw new Error(`${label}.project requires the node runtime.`);
     if (value.autostart !== undefined && typeof value.autostart !== "boolean")
       throw new Error(`${label}.autostart must be boolean.`);
     const config = Object.fromEntries(
@@ -242,12 +273,30 @@ export const resolveMuonServices = async (
     };
     if (value.runtime === "native") {
       if (value.entry !== undefined)
-        throw new Error(`${label}.entry requires the quickjs runtime.`);
+        throw new Error(`${label}.entry requires the quickjs or node runtime.`);
       const artifact = await readServiceArtifact(
         resolve(directory, text(value.artifact, `${label}.artifact`)),
         targets,
       );
       result.push({ ...settings, runtime: "native", artifact });
+    } else if (value.runtime === "node") {
+      if (value.artifact !== undefined)
+        throw new Error(`${label}.artifact requires the native runtime.`);
+      try {
+        const project = (await resolveMuonNodeProject(
+          { node: { project: text(value.project, `${label}.project`) } },
+          directory,
+        ))!;
+        const build = await buildMuonNodeService(
+          project,
+          text(value.entry, `${label}.entry`),
+        );
+        result.push({ ...settings, runtime: "node", project, build });
+      } catch (error) {
+        throw new Error(
+          `${label}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     } else {
       if (value.artifact !== undefined)
         throw new Error(`${label}.artifact requires the native runtime.`);

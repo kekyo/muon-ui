@@ -51,13 +51,15 @@ afterEach(async () => {
 });
 
 it.each([
-  ["run", 0],
-  ["vite", 0],
-  ["run", 7],
-  ["vite", 7],
+  ["run", 0, "quickjs"],
+  ["vite", 0, "quickjs"],
+  ["run", 7, "quickjs"],
+  ["vite", 7, "quickjs"],
+  ["run", 0, "node"],
+  ["vite", 0, "node"],
 ] as const)(
-  "executes a config-relative QuickJS service prepared by %s and cleans up after UI exit %s",
-  async (command, exitCode) => {
+  "executes a config-relative service prepared by %s and cleans up after UI exit %s (runtime=%s)",
+  async (command, exitCode, runtime) => {
     await mkdir("../.build", { recursive: true });
     const root = await mkdtemp(resolve("../.build/dev-services-"));
     directories.push(root);
@@ -65,6 +67,14 @@ it.each([
     const settings = join(root, "settings");
     await mkdir(stagePath, { recursive: true });
     await mkdir(settings);
+    await writeFile(
+      join(settings, "package.json"),
+      JSON.stringify({
+        name: "service-project",
+        type: "module",
+        engines: { node: ">=22.12" },
+      }),
+    );
     await mkdir(join(root, "assets"));
     await writeFile(
       join(root, "index.html"),
@@ -83,6 +93,16 @@ export default defineService({
   })
 });\n`,
     );
+    if (runtime === "node") {
+      await cp(
+        resolve("../sdk/examples/services/node-files.ts"),
+        join(settings, "worker.ts"),
+      );
+      await cp(
+        resolve("../sdk/examples/services/node-greeting.txt"),
+        join(settings, "node-greeting.txt"),
+      );
+    }
     const configPath =
       command === "run" ? join(settings, "muon.json") : join(root, "muon.json");
     await writeFile(
@@ -90,8 +110,14 @@ export default defineService({
       JSON.stringify({
         services: {
           worker: {
-            runtime: "quickjs",
-            entry: command === "run" ? "./worker.ts" : "./settings/worker.ts",
+            runtime,
+            ...(runtime === "node"
+              ? { project: command === "run" ? "." : "./settings" }
+              : {}),
+            entry:
+              command === "run" || runtime === "node"
+                ? "./worker.ts"
+                : "./settings/worker.ts",
             config: { prefix: "Hello " },
             autostart: exitCode !== 0,
           },
@@ -108,6 +134,19 @@ export default defineService({
         resolve("../core/service-host/.build", name),
         join(stagePath, name),
       );
+    if (runtime === "node") {
+      await mkdir(join(stagePath, "runtimes/node/bin"), { recursive: true });
+      await cp(process.execPath, join(stagePath, "runtimes/node/bin/node"));
+      await mkdir(join(stagePath, "plugins"));
+      await cp(
+        resolve("../node/dist/node-bridge.mjs"),
+        join(stagePath, "plugins/node-bridge.mjs"),
+      );
+      await cp(
+        resolve("../core/cef/.run/test-linux-amd64-release/plugins/node.so"),
+        join(stagePath, "plugins/node.so"),
+      );
+    }
     vi.mocked(runMuonPrepare).mockResolvedValue({
       stagePath,
       muonPath: stagePath,
@@ -175,6 +214,10 @@ export default defineService({
       status: "ok",
       value: "Hello service",
     });
+    if (runtime === "node")
+      expect(
+        vi.mocked(runMuonPrepare).mock.calls[0]![0].nodeRuntimeRequirement,
+      ).toMatchObject({ required: true, engineRange: ">=22.12" });
     expect(
       await readdir(join(root, ".muon", "development", "linux-amd64")),
     ).toEqual([]);

@@ -95,6 +95,7 @@ export const startMuonDevelopmentServices = async (
       definitions,
       target,
       snapshot,
+      runtimePath,
     );
     if (registry === undefined)
       return {

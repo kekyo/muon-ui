@@ -28,7 +28,7 @@ import muon from "muon-ui/vite";
 const runtime = resolve("../cef/.run/test-linux-amd64-release");
 
 it.each(["run", "vite"] as const)(
-  "calls native and QuickJS services from a CEF development UI via %s",
+  "calls native, QuickJS and Node services from a CEF development UI via %s",
   async (command) => {
     await mkdir("../../.build", { recursive: true });
     const root = await mkdtemp(resolve("../../.build/cef-development-"));
@@ -88,21 +88,48 @@ it.each(["run", "vite"] as const)(
         targets: { "linux-amd64": { library, language: "c", cardio: false } },
       });
       await mkdir(join(root, "assets/main"), { recursive: true });
+      await mkdir(join(root, "worker/src"), { recursive: true });
+      await writeFile(
+        join(root, "worker/package.json"),
+        JSON.stringify({
+          name: "development-worker",
+          type: "module",
+          engines: { node: ">=22.12" },
+        }),
+      );
+      await writeFile(join(root, "worker/src/prefix.txt"), "Node.js ");
+      await writeFile(
+        join(root, "worker/src/entry.ts"),
+        `import { readFile } from "node:fs/promises";
+import { defineService, defineServiceInterface } from "muon-plugin-sdk/services";
+export default defineService({
+  interface: defineServiceInterface({ schemaVersion: 1, methods: {
+    echo: { parameters: ["string"], returns: "string", errors: [] },
+    pid: { parameters: [], returns: "int32", errors: [] }
+  }, events: {} }),
+  start: () => ({ methods: {
+    echo: async (_call, value: string) => await readFile(new URL("./prefix.txt", import.meta.url), "utf8") + value,
+    pid: () => process.pid
+  }, stop: async () => {} })
+});`,
+      );
       const html = `<!doctype html><title>Development services</title><link rel="icon" href="data:,"><h1>Development services</h1><pre id="result">Starting</pre>
 <script type="module">
   globalThis.serviceReady = (async () => {
     const native = await window.muon.services.acquire('native');
     const quickjs = await window.muon.services.acquire('quickjs');
+    const service = await window.muon.services.acquire('node');
     const node = await window.muon.node.createNode();
     try {
       const path = await node.importModule('node:path');
       if (await path.basename('/a/page-node.txt') !== 'page-node.txt') throw new Error('Page Node regression');
     } finally { await node.release(); }
     const result = {
-      replies: [await native.call('echo', ['native reply']), await quickjs.call('echo', ['QuickJS reply'])],
-      generations: [String(native.generation), String(quickjs.generation)]
+      replies: [await native.call('echo', ['native reply']), await quickjs.call('echo', ['QuickJS reply']), await service.call('echo', ['reply'])],
+      generations: [String(native.generation), String(quickjs.generation), String(service.generation)],
+      childPid: await service.call('pid', [])
     };
-    await native.release(); await quickjs.release();
+    await native.release(); await quickjs.release(); await service.release();
     document.querySelector('#result').textContent = JSON.stringify(result);
     return result;
   })();
@@ -117,6 +144,12 @@ it.each(["run", "vite"] as const)(
         JSON.stringify({
           node: { project: resolve("fixtures/node-project") },
           services: {
+            node: {
+              runtime: "node",
+              project: "./worker",
+              entry: "./src/entry.ts",
+              autostart: true,
+            },
             native: { runtime: "native", artifact, autostart: true },
             quickjs: {
               runtime: "quickjs",
@@ -233,6 +266,7 @@ it.each(["run", "vite"] as const)(
       ]);
       expect(error, diagnostic).toBe("");
       let generations: string[] | undefined;
+      let servicePid: number | undefined;
       for (const recycled of [false, true]) {
         const mcp = await createMcp({
           browser: { cdpEndpoint: `http://127.0.0.1:${cdpAddress.port}` },
@@ -264,10 +298,16 @@ it.each(["run", "vite"] as const)(
         expect(actual.results.replies).toEqual([
           "native reply",
           "QuickJS reply",
+          "Node.js reply",
         ]);
         expect(actual.uiAutostart).toBe(recycled);
-        if (recycled) expect(actual.results.generations).toEqual(generations);
-        else generations = actual.results.generations;
+        if (recycled) {
+          expect(actual.results.generations).toEqual(generations);
+          expect(actual.results.childPid).toBe(servicePid);
+        } else {
+          generations = actual.results.generations;
+          servicePid = actual.results.childPid;
+        }
         await expect(
           access(join(root, "production-profile")),
         ).rejects.toThrow();
@@ -309,6 +349,8 @@ it.each(["run", "vite"] as const)(
       await finished;
       await vite?.close();
       if (child) expect(child.exitCode, diagnostic).toBe(0);
+      expect(servicePid).toBeGreaterThan(0);
+      expect(() => process.kill(servicePid!, 0)).toThrow();
       expect(
         await readdir(join(root, ".muon", "development", "linux-amd64")),
       ).toEqual([]);

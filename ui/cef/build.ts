@@ -81,11 +81,12 @@ import {
   createPackagedMuonNodeConfig,
   createMuonNodeRuntimeRequirement,
   resolveMuonNodeProject,
+  resolveMuonNodeServiceProjects,
   stageMuonNodeHostArtifacts,
   stageMuonNodeProject,
   type MuonNodeRuntimeRequirement,
   type ResolvedMuonNodeProject,
-} from "./node-project.js";
+} from "./node-project.ts";
 
 import type {
   InternalMuonBuildOptions,
@@ -194,13 +195,19 @@ export const buildDesktopMuonApp = async (
   const runtimePluginConfig = options.runtimePluginConfig ?? {
     mode: "simple",
   };
+  const nodeProjects = [
+    ...(nodeProject === undefined ? [] : [nodeProject]),
+    ...services.flatMap((service) =>
+      service.runtime === "node" ? [service.project] : [],
+    ),
+  ];
   const nodeRuntimeRequirement = createMuonNodeRuntimeRequirement(
-    nodeProject,
+    nodeProjects,
     true,
   );
   for (const target of targets) {
     await assertMuonNodeProjectStagingIsSafe(
-      nodeProject,
+      nodeProjects,
       join(
         outputRoot,
         getMuonTargetDescriptor(target).distributionDirectoryName,
@@ -241,7 +248,7 @@ export const buildDesktopMuonApp = async (
     resolvedBuildConfig,
   );
   await assertMuonNodeProjectAssetSourceIsSafe(
-    nodeProject,
+    nodeProjects,
     assetInput.sourcePath,
   );
   const windowsResource = await resolveMuonWindowsResource({
@@ -475,6 +482,23 @@ export const resolveMuonNodeProjectForBuildConfig = async (
   );
 };
 
+/**
+ * Resolves Node service projects before Vite or packaging changes any output.
+ * @param root - Application root used to locate the configuration.
+ * @param configPath - Explicit configuration or undefined for default lookup.
+ * @returns Service project directories and their runtime constraints.
+ */
+export const resolveMuonNodeServiceProjectsForBuildConfig = async (
+  root: string,
+  configPath: string | undefined,
+): Promise<readonly ResolvedMuonNodeProject[]> => {
+  const buildConfig = await readBuildConfig(root, configPath);
+  return await resolveMuonNodeServiceProjects(
+    buildConfig.config,
+    buildConfig.directory,
+  );
+};
+
 const applyRuntimePluginConfig = (
   sourceConfig: JsonObject,
   runtimePluginConfig: MuonRuntimePluginConfig | undefined,
@@ -616,14 +640,14 @@ const buildMuonTarget = async (input: {
     await copyFile(sourceRuntimeHelperPath, runtimeHelperPath);
     await chmod(runtimeHelperPath, executableMode);
   }
-  if (input.nodeProject !== undefined) {
+  if (input.nodeRuntimeRequirement !== undefined) {
     await stageMuonNodeHostArtifacts(
       sourceRuntimePath,
       outputPath,
       descriptor.os,
     );
-    await stageMuonNodeProject(input.nodeProject, outputPath);
   }
+  await stageMuonNodeProject(input.nodeProject, outputPath);
   await copyDistributionFiles(input.distributionFiles, outputPath);
   if (notificationRegistration !== undefined) {
     await copyFile(appIconPath, join(outputPath, "notification-icon.png"));

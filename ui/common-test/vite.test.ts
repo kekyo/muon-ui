@@ -2564,45 +2564,48 @@ describe("muon Vite plugin", () => {
     ).rejects.toThrow("muon capability import is not allowed");
   });
 
-  it("rejects a Node project inside outDir before a direct Vite build deletes it", async () => {
-    const root = await createTemporaryDirectory("muon-vite-node-outdir-");
-    const packageDirectory = await createFakePackageDirectory(root);
-    const backendDirectory = join(root, "web-dist", "backend");
-    const markerPath = await writeNodeProjectSource(
-      backendDirectory,
-      "vite-outdir-source",
-    );
-    await writeBasicViteProject(root);
-    await writeFile(
-      join(root, "package.json"),
-      `${JSON.stringify({ name: "vite-outdir-app", type: "module" })}\n`,
-    );
-    await writeFile(
-      join(root, "muon.json"),
-      `${JSON.stringify({ node: { project: backendDirectory } }, null, 2)}\n`,
-    );
+  it.each([false, true])(
+    "rejects a Node project inside outDir before a direct Vite build deletes it (service=%s)",
+    async (service) => {
+      const root = await createTemporaryDirectory("muon-vite-node-outdir-");
+      const packageDirectory = await createFakePackageDirectory(root);
+      const backendDirectory = join(root, "web-dist", "backend");
+      const markerPath = await writeNodeProjectSource(
+        backendDirectory,
+        "vite-outdir-source",
+      );
+      await writeBasicViteProject(root);
+      await writeFile(
+        join(root, "package.json"),
+        `${JSON.stringify({ name: "vite-outdir-app", type: "module" })}\n`,
+      );
+      await writeFile(
+        join(root, "muon.json"),
+        `${JSON.stringify(service ? { services: { worker: { runtime: "node", project: backendDirectory, entry: "./entry.ts" } } } : { node: { project: backendDirectory } }, null, 2)}\n`,
+      );
 
-    await expect(
-      viteBuild({
-        root,
-        logLevel: "silent",
-        build: {
-          outDir: "web-dist",
-        },
-        plugins: [
-          muon({
-            build: {
-              packageDirectory,
-              targets: ["linux-amd64"],
-            },
-          }),
-        ],
-      }),
-    ).rejects.toThrow("muon Node project");
-    await expect(readFile(markerPath, "utf8")).resolves.toBe(
-      "preserve source\n",
-    );
-  });
+      await expect(
+        viteBuild({
+          root,
+          logLevel: "silent",
+          build: {
+            outDir: "web-dist",
+          },
+          plugins: [
+            muon({
+              build: {
+                packageDirectory,
+                targets: ["linux-amd64"],
+              },
+            }),
+          ],
+        }),
+      ).rejects.toThrow("muon Node project");
+      await expect(readFile(markerPath, "utf8")).resolves.toBe(
+        "preserve source\n",
+      );
+    },
+  );
 
   it.each([
     ["is the Vite publicDir", "."],

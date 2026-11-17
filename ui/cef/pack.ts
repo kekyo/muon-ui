@@ -74,7 +74,8 @@ import {
 import {
   assertMuonNodeProjectPackCleanupIsSafe,
   resolveMuonNodeProject,
-} from "./node-project.js";
+  resolveMuonNodeServiceProjects,
+} from "./node-project.ts";
 import type { MuonProgressCallback } from "../common/progress.js";
 import { isJsonObject } from "../common/build-config.js";
 
@@ -1464,13 +1465,20 @@ export const packDesktopMuonApp = async (
     windowsResourceConfig.config,
     windowsResourceConfig.directory,
   );
-  await assertMuonNodeProjectPackCleanupIsSafe(nodeProject, packageBuildRoot);
+  const nodeProjects = [
+    ...(nodeProject === undefined ? [] : [nodeProject]),
+    ...(await resolveMuonNodeServiceProjects(
+      windowsResourceConfig.config,
+      windowsResourceConfig.directory,
+    )),
+  ];
+  await assertMuonNodeProjectPackCleanupIsSafe(nodeProjects, packageBuildRoot);
   await assertMuonNodeProjectPackCleanupIsSafe(
-    nodeProject,
+    nodeProjects,
     join(artifactsRoot, "deb"),
   );
   await assertMuonNodeProjectPackCleanupIsSafe(
-    nodeProject,
+    nodeProjects,
     join(artifactsRoot, "nsis"),
   );
   const windowsResource = await resolveMuonWindowsResource({

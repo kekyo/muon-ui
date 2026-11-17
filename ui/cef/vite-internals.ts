@@ -30,7 +30,7 @@ import {
   createMuonNodeRuntimeRequirement,
   resolveMuonNodeProject,
   stageMuonNodeProject,
-} from "./node-project.js";
+} from "./node-project.ts";
 
 export interface MuonLaunchScriptOptions {
   muonExecutablePath: string;
@@ -586,7 +586,13 @@ export const startMuonViteBrowserBridge = async ({
             ? server.config.root
             : dirname(projectConfig.path),
         );
-        await assertMuonNodeProjectStagingIsSafe(nodeProject, stagePath);
+        const nodeProjects = [
+          ...(nodeProject === undefined ? [] : [nodeProject]),
+          ...services.flatMap((service) =>
+            service.runtime === "node" ? [service.project] : [],
+          ),
+        ];
+        await assertMuonNodeProjectStagingIsSafe(nodeProjects, stagePath);
         const runtimePluginConfig = await refreshRuntimePluginConfig();
         const preparedRuntime = await runMuonPrepare({
           muonPath,
@@ -595,7 +601,7 @@ export const startMuonViteBrowserBridge = async ({
           target,
           cacheDir: environment.MUON_CACHE_DIR,
           nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(
-            nodeProject,
+            nodeProjects,
             true,
           ),
           force: false,
@@ -611,7 +617,7 @@ export const startMuonViteBrowserBridge = async ({
           nodeProject,
           preparedRuntime.stagePath,
         );
-        if (nodeProjectPath !== undefined) {
+        if (nodeProjects.length > 0) {
           await assertMuonNodeHostArtifacts(
             preparedRuntime.stagePath,
             platform,

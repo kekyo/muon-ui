@@ -28,8 +28,9 @@ import type { MuonPluginTarget } from "muon-plugin-sdk";
 import {
   buildMuonApp,
   resolveMuonNodeProjectForBuildConfig,
+  resolveMuonNodeServiceProjectsForBuildConfig,
   type MuonBuildOptions,
-} from "./build.js";
+} from "./build.ts";
 import {
   createMuonCapabilityModuleResolver,
   type MuonCapabilityModuleResolver,
@@ -693,8 +694,13 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       resolvedConfig = config;
       await refreshPluginAccess(config);
       let nodeProject: ResolvedMuonNodeProject | undefined = undefined;
+      let serviceProjects: readonly ResolvedMuonNodeProject[] = [];
       try {
         nodeProject = await resolveMuonNodeProjectForBuildConfig(
+          config.root,
+          resolveMuonConfigPathForViteCommand(config, options),
+        );
+        serviceProjects = await resolveMuonNodeServiceProjectsForBuildConfig(
           config.root,
           resolveMuonConfigPathForViteCommand(config, options),
         );
@@ -708,6 +714,10 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       }
       nodeVirtualModuleEnabled =
         resolvedPluginAccess?.mode === "validate" && nodeProject !== undefined;
+      const nodeProjects = [
+        ...(nodeProject === undefined ? [] : [nodeProject]),
+        ...serviceProjects,
+      ];
       if (
         process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] !== "1"
       ) {
@@ -716,13 +726,13 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
             ? config.build.outDir
             : resolve(config.root, config.build.outDir);
           await assertMuonNodeProjectViteBuildIsSafe(
-            nodeProject,
+            nodeProjects,
             outputDirectory,
             config.publicDir,
           );
         } else {
           await assertMuonNodeProjectVitePublicDirectoryIsSafe(
-            nodeProject,
+            nodeProjects,
             config.publicDir,
           );
         }

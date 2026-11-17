@@ -4,11 +4,12 @@
 // https://github.com/kekyo/muon-ui
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import type { MuonDesktopTarget } from "./targets.ts";
 import type { MuonResolvedService } from "../common/service-config.ts";
 import { mergeMuonServicePlugins } from "../common/service-plugins.ts";
 import { stageMuonNativePlugins } from "../common/native-plugins.ts";
+import { stageMuonNodeService } from "./node-service.ts";
 
 /** Normalized runtime settings stored beside a desktop application. */
 export interface MuonDesktopServiceSettings {
@@ -26,6 +27,13 @@ export type MuonDesktopServiceEntry = MuonDesktopServiceSettings &
         /** Registry-relative shared library. */ readonly library: string;
       }
     | {
+        /** Independent Node.js child adapter. */ readonly runtime: "node";
+        /** Registry-relative service project directory. */ readonly project: string;
+        /** Project-relative compiled entry module. */ readonly entry: string;
+        /** Registry-relative prepared Node executable. */ readonly executable: string;
+        /** Registry-relative service bridge. */ readonly bridge: string;
+      }
+    | {
         /** JavaScript engine adapter. */ readonly runtime: "quickjs";
         /** Registry-relative bundled source. */ readonly script: string;
         /** Concrete native capabilities of this service. */ readonly plugins: readonly string[];
@@ -37,6 +45,7 @@ export type MuonDesktopServiceEntry = MuonDesktopServiceSettings &
  * @param definitions - Validated application declarations.
  * @param target - Desktop ABI to select.
  * @param output - Application distribution directory.
+ * @param runtimeDirectory - Prepared runtime, when separate from the service snapshot.
  * @returns Registry filename, or undefined when no services are declared.
  * @remarks Services share one loader namespace. Conflicting library filenames
  * are rejected; identical factories/dependencies are copied only once.
@@ -45,6 +54,7 @@ export const stageMuonDesktopServices = async (
   definitions: readonly MuonResolvedService[],
   target: MuonDesktopTarget,
   output: string,
+  runtimeDirectory: string = output,
 ): Promise<string | undefined> => {
   if (definitions.length === 0) return undefined;
   const files = new Map<string, { name: string; bytes: Buffer }>();
@@ -60,6 +70,30 @@ export const stageMuonDesktopServices = async (
   ]);
   const scripts = new Map<string, string>();
   for (const definition of definitions) {
+    if (definition.runtime === "node") {
+      const project = "./services/node/" + definition.id;
+      await stageMuonNodeService(
+        definition.project,
+        definition.build,
+        join(output, project),
+      );
+      const runtimeFile = (path: string): string =>
+        "./" +
+        relative(output, join(runtimeDirectory, path)).replaceAll("\\", "/");
+      services[definition.id] = {
+        runtime: "node",
+        project,
+        entry: definition.build.entry,
+        executable: runtimeFile(
+          "runtimes/node/bin/" +
+            (target.startsWith("windows-") ? "node.exe" : "node"),
+        ),
+        bridge: runtimeFile("plugins/node-bridge.mjs"),
+        autostart: definition.autostart,
+        config: definition.config,
+      };
+      continue;
+    }
     if (definition.runtime === "quickjs") {
       const script = "./services/quickjs/" + definition.id + ".mjs";
       scripts.set(script, definition.bundle);

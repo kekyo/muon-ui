@@ -40,7 +40,7 @@ export interface MuonNodeRuntimeRequirement {
   readonly required: boolean;
   /** Whether `package.json` explicitly contains `engines.node`. */
   readonly engineRangeSpecified: boolean;
-  /** Original `package.json` `engines.node` text, or `*` when omitted. */
+  /** Original engines range for one project, or the intersection for multiple projects. */
   readonly engineRange: string;
   /**
    * Normalized comparator sets accepted by both the project and muon bridge.
@@ -66,6 +66,9 @@ export interface ResolvedMuonNodeProject {
    */
   readonly comparatorSets: readonly (readonly string[])[];
 }
+
+type NodeProjects =
+  ResolvedMuonNodeProject | readonly ResolvedMuonNodeProject[] | undefined;
 
 const normalizeComparatorSet = (
   comparators: SemverRange["set"][number],
@@ -163,24 +166,71 @@ const readNodeEngineRequirement = async (
 };
 
 /**
- * Creates the native runtime constraint for a resolved Node project.
+ * Creates one native runtime constraint for the page and service projects.
  *
- * @param project Resolved Node project, or `undefined` when Node is disabled.
+ * @param project Resolved Node project or projects, or `undefined` when disabled.
  * @param required Whether absence of a matching runtime is fatal.
  * @returns The launcher/runtime requirement, or `undefined` for a non-Node app.
  */
 export const createMuonNodeRuntimeRequirement = (
-  project: ResolvedMuonNodeProject | undefined,
+  project: NodeProjects,
   required: boolean,
-): MuonNodeRuntimeRequirement | undefined =>
-  project === undefined
-    ? undefined
-    : {
-        required,
-        engineRangeSpecified: project.engineRangeSpecified,
-        engineRange: project.engineRange,
-        comparatorSets: project.comparatorSets,
-      };
+): MuonNodeRuntimeRequirement | undefined => {
+  const projects: readonly ResolvedMuonNodeProject[] =
+    project === undefined ? [] : "sourcePath" in project ? [project] : project;
+  if (projects.length === 0) return undefined;
+  let sets = projects[0]!.comparatorSets;
+  for (const current of projects.slice(1)) {
+    const merged: string[][] = [];
+    for (const left of sets)
+      for (const right of current.comparatorSets) {
+        if (comparatorSetsIntersect(left, right))
+          merged.push([...new Set([...left, ...right])]);
+      }
+    sets = [...new Map(merged.map((set) => [set.join(" "), set])).values()];
+    if (!sets.length)
+      throw new Error(
+        `Muon Node projects require incompatible engines.node ranges: ${projects.map((item) => `${item.sourcePath}: ${item.engineRange}`).join("; ")}`,
+      );
+  }
+  return {
+    required,
+    engineRangeSpecified: projects.some((item) => item.engineRangeSpecified),
+    engineRange:
+      projects.length === 1
+        ? projects[0]!.engineRange
+        : sets.map((set) => set.join(" ") || "*").join(" || "),
+    comparatorSets: sets,
+  };
+};
+
+/**
+ * Resolves service project directories without compiling their source files.
+ * @param config - Muon configuration, including the optional services map.
+ * @param directory - Directory containing that configuration.
+ * @returns Projects that must be protected from asset exposure or cleanup.
+ */
+export const resolveMuonNodeServiceProjects = async (
+  config: Readonly<JsonObject> | undefined,
+  directory: string,
+): Promise<readonly ResolvedMuonNodeProject[]> => {
+  if (!isJsonObject(config?.services)) return [];
+  const projects: ResolvedMuonNodeProject[] = [];
+  for (const [id, value] of Object.entries(config.services)) {
+    if (!isJsonObject(value) || value.runtime !== "node") continue;
+    try {
+      projects.push(
+        (await resolveMuonNodeProject(
+          { node: { project: value.project } },
+          directory,
+        ))!,
+      );
+    } catch (error) {
+      throw new Error(`services.${id}: ${getErrorMessage(error)}`);
+    }
+  }
+  return projects;
+};
 
 /**
  * Resolves and validates an optional Node project from muon configuration.
@@ -268,7 +318,7 @@ export const createPackagedMuonNodeConfig = (
  * @returns A promise that resolves when the paths are disjoint.
  */
 export const assertMuonNodeProjectStagingIsSafe = (
-  project: ResolvedMuonNodeProject | undefined,
+  project: NodeProjects,
   runtimeDirectory: string,
 ): Promise<void> =>
   assertMuonNodeProjectPathIsDisjoint(
@@ -285,7 +335,7 @@ export const assertMuonNodeProjectStagingIsSafe = (
  * @returns A promise that resolves when the paths are disjoint.
  */
 export const assertMuonNodeProjectAssetSourceIsSafe = (
-  project: ResolvedMuonNodeProject | undefined,
+  project: NodeProjects,
   assetSourcePath: string,
 ): Promise<void> =>
   assertMuonNodeProjectPathIsDisjoint(project, assetSourcePath, "asset source");
@@ -301,7 +351,7 @@ export const assertMuonNodeProjectAssetSourceIsSafe = (
  * Vite paths.
  */
 export const assertMuonNodeProjectViteBuildIsSafe = async (
-  project: ResolvedMuonNodeProject | undefined,
+  project: NodeProjects,
   outputDirectory: string,
   publicDirectory: string,
 ): Promise<void> => {
@@ -326,7 +376,7 @@ export const assertMuonNodeProjectViteBuildIsSafe = async (
  * are disjoint.
  */
 export const assertMuonNodeProjectVitePublicDirectoryIsSafe = async (
-  project: ResolvedMuonNodeProject | undefined,
+  project: NodeProjects,
   publicDirectory: string,
 ): Promise<void> => {
   if (publicDirectory !== "") {
@@ -346,7 +396,7 @@ export const assertMuonNodeProjectVitePublicDirectoryIsSafe = async (
  * @returns A promise that resolves when the paths are disjoint.
  */
 export const assertMuonNodeProjectPackCleanupIsSafe = (
-  project: ResolvedMuonNodeProject | undefined,
+  project: NodeProjects,
   cleanupDirectory: string,
 ): Promise<void> =>
   assertMuonNodeProjectPathIsDisjoint(
@@ -482,11 +532,20 @@ const resolveCanonicalPotentialPath = async (path: string): Promise<string> => {
 };
 
 const assertMuonNodeProjectPathIsDisjoint = async (
-  project: ResolvedMuonNodeProject | undefined,
+  project: NodeProjects,
   comparedPath: string,
   comparedPathLabel: string,
 ): Promise<void> => {
   if (project === undefined) {
+    return;
+  }
+  if (!("sourcePath" in project)) {
+    for (const current of project)
+      await assertMuonNodeProjectPathIsDisjoint(
+        current,
+        comparedPath,
+        comparedPathLabel,
+      );
     return;
   }
   const [sourcePath, canonicalComparedPath] = await Promise.all([

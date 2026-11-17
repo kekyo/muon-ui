@@ -29,6 +29,7 @@ export default defineService({
     events: { progress: 'string' },
   }),
   start: (context) => {
+    console.log('Node service author output');
     let status = 'pending';
     const work = (async () => {
       const response = await fetch(context.config.origin + '/work');

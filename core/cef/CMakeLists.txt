@@ -828,6 +828,8 @@ string(JSON MUON_QUICKJS_VERSION GET "${MUON_QUICKJS_PROFILE}" version)
 muon_add_quickjs(muon_service_quickjs
   "${MUON_COMMON_ROOT}/.deps/quickjs/quickjs-${MUON_QUICKJS_VERSION}")
 add_executable(muon_service_host
+  ../service-host/muon_node_service_host.cpp
+  ../../node/native/node_process.cpp
   ../service-host/muon_service_host_${MUON_SERVICE_PLATFORM}.cpp
   ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
   ../service-host/muon_service_login.cpp
@@ -855,6 +857,7 @@ add_executable(muon_service_host
   ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp)
 target_compile_features(muon_service_host PRIVATE cxx_std_20)
 target_include_directories(muon_service_host PRIVATE
+  ../../node/native
   src
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
   "${MUON_COMMON_ROOT}/../../sdk/include")
@@ -863,9 +866,9 @@ set_target_properties(muon_service_host PROPERTIES
   OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
 if(WIN32)
   target_link_libraries(muon_service_desktop PRIVATE muon_windows_path advapi32 shell32 ole32 uuid)
-  target_link_libraries(muon_service_host PRIVATE muon_windows_path advapi32 user32 ole32)
+  target_link_libraries(muon_service_host PRIVATE muon_windows_path muon_windows_job_process advapi32 user32 ole32 bcrypt)
   target_compile_definitions(muon_service_desktop PRIVATE _WIN32_WINNT=0x0601)
-  target_compile_definitions(muon_service_host PRIVATE _WIN32_WINNT=0x0601)
+  target_compile_definitions(muon_service_host PRIVATE _WIN32_WINNT=0x0601 NOMINMAX)
   target_link_options(muon_service_host PRIVATE -municode)
 endif()
 MUON_APPLY_SANITIZERS(muon_service_host)
@@ -1103,6 +1106,7 @@ set(MUON_NODE_PLUGIN_LIBRARY_NAME
   "node${CMAKE_SHARED_MODULE_SUFFIX}")
 add_library(muon_node_plugin MODULE
   "${MUON_NODE_PLUGIN_SOURCE}"
+  "${MUON_NODE_ROOT}/native/node_process.cpp"
   ${MUON_COMMON_ROOT}/../../sdk/include/muon_plugin_api.h
   )
 set_target_properties(muon_node_plugin PROPERTIES

@@ -93,6 +93,11 @@ it.each(["run", "vite"] as const)(
   globalThis.serviceReady = (async () => {
     const native = await window.muon.services.acquire('native');
     const quickjs = await window.muon.services.acquire('quickjs');
+    const node = await window.muon.node.createNode();
+    try {
+      const path = await node.importModule('node:path');
+      if (await path.basename('/a/page-node.txt') !== 'page-node.txt') throw new Error('Page Node regression');
+    } finally { await node.release(); }
     const result = {
       replies: [await native.call('echo', ['native reply']), await quickjs.call('echo', ['QuickJS reply'])],
       generations: [String(native.generation), String(quickjs.generation)]
@@ -110,6 +115,7 @@ it.each(["run", "vite"] as const)(
       await writeFile(
         join(root, "muon.json"),
         JSON.stringify({
+          node: { project: resolve("fixtures/node-project") },
           services: {
             native: { runtime: "native", artifact, autostart: true },
             quickjs: {

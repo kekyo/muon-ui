@@ -33,6 +33,7 @@ import {
   type WindowsTestProcess,
 } from "./plugin-e2e/windows-agent.ts";
 import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.ts";
+import { runServiceConsumerDevelopment } from "./service-consumer-development.ts";
 
 const target = process.env.MUON_SERVICE_CONSUMER_TARGET ?? "linux-amd64";
 
@@ -90,7 +91,7 @@ const runWindowsConsumer = async (
     "service-consumers",
     basename(root),
   );
-  const runtime = win32.join(remoteRoot, "distribution");
+  const runtime = win32.join(remoteRoot, "distribution with spaces 日本");
   let child: WindowsTestProcess | undefined;
   let relay:
     Awaited<ReturnType<typeof agent.processes.launchManaged>> | undefined;
@@ -254,6 +255,15 @@ const runWindowsConsumer = async (
     );
     expect(first.text).toBe("日本\0🙂");
     expect(first.next).toBe(42);
+    const firstNode = await evaluate(
+      `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
+    );
+    expect(firstNode.greeting).toBe("Hello packaged");
+    expect(firstNode.identity).toMatch(
+      new RegExp(
+        `^\\d+:${target === "windows-i686" ? "ia32" : "x64"}:1\\.2\\.3$`,
+      ),
+    );
     expect(
       await evaluate(
         `let done;const event=new Promise(resolve=>done=resolve);const subscription=await script.subscribe('progress',done);await script.call('notify',['packaged event']);const value=await event;await subscription.close();return value;`,
@@ -283,14 +293,26 @@ const runWindowsConsumer = async (
       next: 100,
       autostart: false,
     });
+    const reopenedNode = await evaluate(
+      `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged again'])};`,
+    );
+    expect(reopenedNode).toEqual({
+      ...firstNode,
+      greeting: "Hello packaged again",
+    });
     await evaluate("await extension.release();return true;");
     await closeUi(true);
     await launch();
     expect(
       await evaluate("return (await api.getState('extension')).autostart;"),
     ).toBe(false);
+    expect(
+      await evaluate(
+        `const handle=await api.acquire('node');try{return await handle.call('saved',[])}finally{await handle.release()}`,
+      ),
+    ).toBe("packaged again");
     await evaluate(
-      "await api.setAutostart('native',false);await api.setAutostart('script',false);return true;",
+      "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
     );
     await closeUi(true);
   } catch (error) {
@@ -300,7 +322,7 @@ const runWindowsConsumer = async (
     if (client) {
       try {
         await evaluate(
-          "for(const id of ['native','script','extension'])await api.setAutostart(id,false);await browser.shutdown(0);return true;",
+          "for(const id of ['native','script','extension','node'])await api.setAutostart(id,false);await browser.shutdown(0);return true;",
         );
       } catch {}
     }
@@ -363,7 +385,7 @@ it.skipIf(
   !process.env.MUON_SERVICE_CONSUMER_UI ||
     !process.env.MUON_SERVICE_CONSUMER_SDK,
 )(
-  "builds native and QuickJS services using only published packages and retains them across UI sessions",
+  "builds native, QuickJS and Node services using only published packages and retains them across UI sessions",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-service-consumer-"));
     const app = join(root, "app");
@@ -414,7 +436,7 @@ it.skipIf(
       resolve(process.env.MUON_SERVICE_CONSUMER_UI!),
       resolve(process.env.MUON_SERVICE_CONSUMER_SDK!),
       ...(await Promise.all(
-        ["vite", "typescript", "prettier-max", "resolved-killer"].map(
+        ["vite", "typescript", "prettier-max", "resolved-killer", "semver"].map(
           async (name) => name + "@" + (await version(name)),
         ),
       )),
@@ -464,6 +486,49 @@ it.skipIf(
       });
     for (const name of ["quickjs-echo.ts", "quickjs-native.ts", "counter.d.ts"])
       await copyFile(join(sdk, "examples/services", name), join(app, name));
+    await mkdir(join(app, "worker"));
+    for (const name of ["node-files.ts", "node-greeting.txt"])
+      await copyFile(
+        join(sdk, "examples/services", name),
+        join(app, "worker", name),
+      );
+    await writeFile(
+      join(app, "worker/package.json"),
+      JSON.stringify({
+        name: "consumer-worker",
+        type: "module",
+        engines: { node: ">=20" },
+        dependencies: {
+          "muon-plugin-sdk": JSON.parse(
+            await readFile(join(sdk, "package.json"), "utf8"),
+          ).version,
+          semver: await version("semver"),
+        },
+      }),
+    );
+    await writeFile(
+      join(app, "worker/entry.ts"),
+      `
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import semver from 'semver';
+import { defineService, defineServiceInterface } from 'muon-plugin-sdk/services';
+import original from './node-files.ts';
+export default defineService({
+  interface: defineServiceInterface({ ...original.interface, methods: {
+    ...original.interface.methods,
+    identity: { parameters: [], returns: 'string', errors: [] },
+    saved: { parameters: [], returns: 'string', errors: [] },
+  }}),
+  start: async context => {
+    const running = await original.start(context);
+    return { ...running, methods: { ...running.methods,
+      identity: () => process.pid + ':' + process.arch + ':' + semver.valid('1.2.3'),
+      saved: async () => await readFile(join(context.dataDirectory, 'last-name.txt'), 'utf8'),
+    }};
+  },
+});`,
+    );
     await writeFile(
       join(app, "resident.ts"),
       `
@@ -487,7 +552,7 @@ it.skipIf(
     );
     await writeFile(
       join(app, "vite.config.ts"),
-      `import {defineConfig} from 'vite'; import muon from 'muon-ui/vite'; import prettierMax from 'prettier-max'; export default defineConfig({plugins:[prettierMax(),muon({open:false})],build:{target:'es2022'}});`,
+      `import {defineConfig} from 'vite'; import muon from 'muon-ui/vite'; import prettierMax from 'prettier-max'; export default defineConfig({plugins:[prettierMax(),muon()],build:{target:'es2022'}});`,
     );
     await writeFile(
       join(app, "tsconfig.json"),
@@ -521,6 +586,12 @@ it.skipIf(
             autostart: true,
           },
           script: { runtime: "quickjs", entry: "resident.ts", autostart: true },
+          node: {
+            runtime: "node",
+            project: "worker",
+            entry: "entry.ts",
+            autostart: true,
+          },
           extension: {
             runtime: "quickjs",
             entry: "quickjs-native.ts",
@@ -551,6 +622,7 @@ it.skipIf(
       }),
     );
     const guards = join(root, "no-native-build");
+    await runServiceConsumerDevelopment(app, root, target, address.port);
     await mkdir(guards);
     for (const name of [
       "gcc",
@@ -598,7 +670,7 @@ it.skipIf(
       ),
     ).targets[0];
     // Move the complete distribution and remove every source, package and SDK.
-    const distribution = join(root, "distribution");
+    const distribution = join(root, "distribution with spaces 日本");
     await cp(dirname(built.launcherPath), distribution, { recursive: true });
     const launcher = join(distribution, built.launcherPath.split("/").at(-1));
     await rm(app, { recursive: true });
@@ -712,6 +784,11 @@ it.skipIf(
       );
       expect(first.text).toBe("日本\0🙂");
       expect(first.next).toBe(42);
+      const firstNode = await evaluate(
+        `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
+      );
+      expect(firstNode.greeting).toBe("Hello packaged");
+      expect(firstNode.identity).toMatch(/^\d+:x64:1\.2\.3$/u);
       expect(
         await evaluate(
           `let done;const event=new Promise(resolve=>done=resolve);const subscription=await script.subscribe('progress',done);await script.call('notify',['packaged event']);const value=await event;await subscription.close();return value;`,
@@ -742,6 +819,13 @@ it.skipIf(
         next: 100,
         autostart: false,
       });
+      const reopenedNode = await evaluate(
+        `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged again'])};`,
+      );
+      expect(reopenedNode).toEqual({
+        ...firstNode,
+        greeting: "Hello packaged again",
+      });
       await evaluate(`await extension.release();return true;`);
       await Promise.allSettled([
         evaluate("await browser.shutdown(0);return true;"),
@@ -753,8 +837,13 @@ it.skipIf(
       expect(
         await evaluate(`return (await api.getState('extension')).autostart;`),
       ).toBe(false);
+      expect(
+        await evaluate(
+          `const handle=await api.acquire('node');try{return await handle.call('saved',[])}finally{await handle.release()}`,
+        ),
+      ).toBe("packaged again");
       await evaluate(
-        "await api.setAutostart('native',false);await api.setAutostart('script',false);return true;",
+        "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
       );
       await Promise.allSettled([
         evaluate("await browser.shutdown(0);return true;"),
@@ -768,7 +857,7 @@ it.skipIf(
       if (client && child?.exitCode === null) {
         try {
           await evaluate(
-            "for(const id of ['native','script','extension'])await api.setAutostart(id,false);await browser.shutdown(0);return true;",
+            "for(const id of ['native','script','extension','node'])await api.setAutostart(id,false);await browser.shutdown(0);return true;",
           );
         } catch {}
       }

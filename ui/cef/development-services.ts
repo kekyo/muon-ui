@@ -233,7 +233,14 @@ export const startMuonDevelopmentServices = async (
       } finally {
         if (socketDirectory !== undefined)
           await rm(socketDirectory, { recursive: true, force: true });
-        await rm(directory, { recursive: true, force: true });
+        // Windows can retain the shared CEF log briefly after the UI exits.
+        // Retry transient filesystem failures; persistent failures still surface.
+        await rm(directory, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        });
       }
     })();
     await cleanup;

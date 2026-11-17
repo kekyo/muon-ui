@@ -51,6 +51,13 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
     try {
       const result = await process.waitForExit({ timeoutMs: 30000 });
       expect(result.root.exitCode, await process.stderrText()).toBe(0);
+    } catch (error) {
+      const [snapshot] = await Promise.allSettled([process.snapshot()]);
+      console.error(
+        "Windows filesystem process at failure:",
+        JSON.stringify(snapshot, null, 2),
+      );
+      throw error;
     } finally {
       await process.releaseAsync();
     }

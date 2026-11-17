@@ -10,6 +10,7 @@ import type { UserConfig } from "vite";
 import { buildMuonNotificationRenderer } from "../common/build-notification-renderer.mjs";
 import { buildMuonServerRenderer } from "../cef/build-server-renderer.ts";
 import { buildMuonServiceRenderer } from "../common/build-service-renderer.mts";
+import muonNodePackageJson from "../../node/package.json" with { type: "json" };
 
 const isValgrindRun = process.env.MUON_TEST_USE_VALGRIND === "1";
 // Local launcher startup may legitimately use its 120-second runtime staging
@@ -26,6 +27,9 @@ export default defineConfig(async (): Promise<UserConfig> => ({
     ),
     __MUON_NOTIFICATION_RENDERER_SOURCE__: JSON.stringify(
       await buildMuonNotificationRenderer(),
+    ),
+    __MUON_NODE_SUPPORTED_ENGINE_RANGE__: JSON.stringify(
+      muonNodePackageJson.engines.node,
     ),
   },
   plugins: [prettierMax(), screwUp()],

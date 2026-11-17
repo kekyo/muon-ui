@@ -76,15 +76,22 @@ const wait = async (predicate: () => boolean): Promise<void> => {
   throw new Error("Timed out waiting for condition");
 };
 
-const createCapturingLogger = (): { logger: Logger; warnings: string[] } => {
+const createCapturingLogger = (): {
+  logger: Logger;
+  warnings: string[];
+  firstWarning: Promise<void>;
+} => {
   const warnings: string[] = [];
   const logger = createViteLogger("silent");
   const originalWarn = logger.warn.bind(logger);
-  logger.warn = (message, options): void => {
-    warnings.push(message);
-    originalWarn(message, options);
-  };
-  return { logger, warnings };
+  const firstWarning = new Promise<void>((resolve) => {
+    logger.warn = (message, options): void => {
+      warnings.push(message);
+      originalWarn(message, options);
+      resolve();
+    };
+  });
+  return { logger, warnings, firstWarning };
 };
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
@@ -3199,10 +3206,11 @@ export default {
       const cefDirectory = await writeFakeCefDirectory();
       await writeBasicViteProject(root);
       await writeProjectMuonConfig(root);
-      await writeFakeFailingMuonSource(muonDirectory, "kill -TRAP $$");
+      // Avoid waiting for an OS crash reporter to finish writing a core dump.
+      await writeFakeFailingMuonSource(muonDirectory, "kill -TERM $$");
       process.env.MUON_CACHE_DIR =
         await createTemporaryDirectory("muon-vite-cache-");
-      const { logger, warnings } = createCapturingLogger();
+      const { logger, warnings, firstWarning } = createCapturingLogger();
       const originalExitCode = process.exitCode;
       process.exitCode = undefined;
 
@@ -3220,11 +3228,11 @@ export default {
           undefined,
           logger,
         );
-        await wait(() => warnings.length > 0);
+        await firstWarning;
 
-        expect(warnings.join("\n")).toContain("signal SIGTRAP");
+        expect(warnings.join("\n")).toContain("signal SIGTERM");
         expect(warnings.join("\n")).toContain(
-          "retained diagnostic: kill -TRAP $$",
+          "retained diagnostic: kill -TERM $$",
         );
         expect(server.httpServer?.listening).toBe(true);
         expect(process.exitCode).toBeUndefined();

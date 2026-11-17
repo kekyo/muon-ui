@@ -138,7 +138,9 @@ export const buildMuonNodeService = async (
           throw new Error(
             `Node service source must be inside its project: ${module}`,
           );
-      if (file.facadeModuleId === source) compiledEntry = "./" + file.fileName;
+      // Vite normalizes module IDs to forward slashes on Windows as well.
+      if (file.facadeModuleId && resolve(file.facadeModuleId) === source)
+        compiledEntry = "./" + file.fileName;
       for (const imported of file.imports)
         if (!emitted.has(imported) && packages.has(packageName(imported)))
           requiredPackages.add(packageName(imported));

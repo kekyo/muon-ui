@@ -3,9 +3,65 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { isBuiltin } from "node:module";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createRequire, isBuiltin } from "node:module";
 import { dirname, join } from "node:path";
 import { runScriptOnceToText } from "funcity";
+import type { buildService, MuonPluginTarget } from "muon-plugin-sdk";
+import type { MuonServiceBuildOptions } from "./service-plugins.ts";
+
+/**
+ * Builds an explicitly selected native factory with the application's SDK.
+ * @param id - Validated logical service identity.
+ * @param configPath - Absolute SDK source configuration path.
+ * @param targets - Native targets required by the application.
+ * @param sysroot - Explicit target sysroot, or undefined for the SDK default.
+ * @param options - Application-owned output root and build environment.
+ * @returns Absolute service artifact manifest path, ready for verification.
+ * @remarks Builds never overwrite the producer's directory or a running host's
+ * staged files. Changed factory configurations use a separate artifact directory.
+ */
+export const buildMuonNativeService = async (
+  id: string,
+  configPath: string,
+  targets: readonly MuonPluginTarget[],
+  sysroot: string | undefined,
+  options: MuonServiceBuildOptions,
+): Promise<string> => {
+  const require = createRequire(join(options.root, "package.json"));
+  let authoring: { buildService: typeof buildService };
+  try {
+    authoring = require("muon-plugin-sdk");
+  } catch (error) {
+    throw new Error(
+      `services.${id} requires the authoring SDK. Run npm install -D muon-plugin-sdk in ${options.root}. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const identity = createHash("sha256")
+    .update(configPath)
+    .update("\0")
+    .update(await readFile(configPath))
+    .digest("hex");
+  const outputDirectory = join(
+    options.root,
+    ".muon/service-build",
+    id,
+    identity,
+  );
+  for (const target of targets)
+    await authoring.buildService({
+      configPath,
+      outputDirectory,
+      target,
+      environment: options.environment,
+      ...(sysroot === undefined ? {} : { sysroot }),
+      ...(options.androidSdkPath === undefined
+        ? {}
+        : { androidSdkPath: options.androidSdkPath }),
+    });
+  return join(outputDirectory, "muon-plugin.json");
+};
 
 /**
  * Bundles one declared TS/JS service with its portable runtime adapter.

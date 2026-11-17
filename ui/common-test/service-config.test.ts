@@ -86,6 +86,8 @@ it.each([
   ["worker", { config: null }],
   ["worker", { config: { value: "with\0nul" } }],
   ["worker", { start: true }],
+  ["worker", { source: "./native/muon-plugin.build.json" }],
+  ["worker", { sysroot: "./sysroot" }],
 ] as const)("rejects invalid service definition %s %j", async (id, extra) => {
   await expect(
     resolveMuonServices(

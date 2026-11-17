@@ -39,7 +39,7 @@ beforeAll(async () => {
   ]);
 }, 600000);
 
-it.each(["native", "node"] as const)(
+it.each(["native", "source", "node"] as const)(
   "loads an SDK %s service from a relocated desktop distribution",
   async (runtime) => {
     const root = await mkdtemp(join(tmpdir(), "muon-service-package-"));
@@ -47,18 +47,35 @@ it.each(["native", "node"] as const)(
     try {
       const producer = join(root, "producer");
       let definition: Record<string, unknown>;
-      if (runtime === "native") {
+      if (runtime !== "node") {
         await createServiceProject({
           directory: producer,
           name: "worker",
           language: "c",
           buildSystem: "make",
         });
-        const artifact = await buildService({
-          configPath: join(producer, "muon-plugin.build.json"),
-          target: "linux-amd64",
-        });
-        definition = { runtime, artifact, autostart: true };
+        if (runtime === "source") {
+          await symlink(
+            resolve("../node_modules"),
+            join(root, "node_modules"),
+            "dir",
+          );
+          await cp(
+            resolve("../sdk/examples/services/native-echo.c"),
+            join(producer, "service.c"),
+          );
+          definition = {
+            runtime: "native",
+            source: "./producer/muon-plugin.build.json",
+            autostart: true,
+          };
+        } else {
+          const artifact = await buildService({
+            configPath: join(producer, "muon-plugin.build.json"),
+            target: "linux-amd64",
+          });
+          definition = { runtime, artifact, autostart: true };
+        }
       } else {
         await mkdir(producer);
         await writeFile(
@@ -106,6 +123,7 @@ it.each(["native", "node"] as const)(
       const relocated = join(root, "relocated");
       await rename(original, relocated);
       await rm(producer, { recursive: true, force: true });
+      await rm(join(root, ".muon"), { recursive: true, force: true });
       const endpoint = join(root, "control.sock");
       host = spawn(
         resolve("../core/service-host/.build/muon-service-host"),
@@ -148,7 +166,7 @@ it.each(["native", "node"] as const)(
       });
       const socket = createConnection(endpoint);
       await once(socket, "connect");
-      if (runtime === "node") {
+      if (runtime === "node" || runtime === "source") {
         let sequence = 0;
         const waiting = new Map<
           string,
@@ -178,9 +196,11 @@ it.each(["native", "node"] as const)(
           return JSON.stringify(await response);
         });
         const service = await api.acquire("worker");
-        expect(await service.call("greet", ["distribution"])).toBe(
-          "Hello distribution",
-        );
+        expect(
+          await service.call(runtime === "node" ? "greet" : "echo", [
+            "distribution",
+          ]),
+        ).toBe(runtime === "node" ? "Hello distribution" : "distribution");
         await service.release();
       }
       socket.write('{"requestId":"shutdown","op":"shutdown"}\n');

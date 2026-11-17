@@ -4,7 +4,10 @@
 // https://github.com/kekyo/muon-ui
 
 import { resolve } from "node:path";
-import { buildMuonQuickJsService } from "./service-build.ts";
+import {
+  buildMuonNativeService,
+  buildMuonQuickJsService,
+} from "./service-build.ts";
 import {
   buildMuonNodeService,
   type MuonNodeServiceBuild,
@@ -207,6 +210,8 @@ export const resolveMuonServices = async (
       [
         "runtime",
         "artifact",
+        "source",
+        "sysroot",
         "entry",
         "project",
         "autostart",
@@ -233,6 +238,13 @@ export const resolveMuonServices = async (
       );
     if (value.runtime !== "node" && value.project !== undefined)
       throw new Error(`${label}.project requires the node runtime.`);
+    if (value.runtime !== "native" && value.source !== undefined)
+      throw new Error(`${label}.source requires the native runtime.`);
+    if (
+      value.sysroot !== undefined &&
+      (value.runtime !== "native" || value.source === undefined)
+    )
+      throw new Error(`${label}.sysroot requires a native source build.`);
     if (value.autostart !== undefined && typeof value.autostart !== "boolean")
       throw new Error(`${label}.autostart must be boolean.`);
     const config = Object.fromEntries(
@@ -274,11 +286,28 @@ export const resolveMuonServices = async (
     if (value.runtime === "native") {
       if (value.entry !== undefined)
         throw new Error(`${label}.entry requires the quickjs or node runtime.`);
-      const artifact = await readServiceArtifact(
-        resolve(directory, text(value.artifact, `${label}.artifact`)),
-        targets,
-      );
-      result.push({ ...settings, runtime: "native", artifact });
+      if ((value.artifact === undefined) === (value.source === undefined))
+        throw new Error(`${label} requires exactly one artifact or source.`);
+      try {
+        const path =
+          value.source === undefined
+            ? resolve(directory, text(value.artifact, `${label}.artifact`))
+            : await buildMuonNativeService(
+                id,
+                resolve(directory, text(value.source, `${label}.source`)),
+                targets,
+                value.sysroot === undefined
+                  ? undefined
+                  : resolve(directory, text(value.sysroot, `${label}.sysroot`)),
+                options ?? { root: directory, environment: process.env },
+              );
+        const artifact = await readServiceArtifact(path, targets);
+        result.push({ ...settings, runtime: "native", artifact });
+      } catch (error) {
+        throw new Error(
+          `${label}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     } else if (value.runtime === "node") {
       if (value.artifact !== undefined)
         throw new Error(`${label}.artifact requires the native runtime.`);

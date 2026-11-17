@@ -2134,8 +2134,9 @@ static bool IsMuonNodeExecutablePathAbsolute(
   }
   try {
 #if defined(_WIN32)
+    // The configuration is UTF-8, independent of the Windows locale.
     return std::filesystem::path(
-               ConvertMuonNodeUtf8ToWide(executable))
+               std::u8string(executable, executable + std::strlen(executable)))
         .is_absolute();
 #else
     return std::filesystem::path(executable).is_absolute();

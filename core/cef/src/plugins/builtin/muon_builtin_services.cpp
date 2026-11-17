@@ -107,6 +107,7 @@ static std::string IdentityDigest(const std::string& identity) {
 
 static std::string StartupMetadata(const MuonConfig& config,
     const std::vector<std::filesystem::path>& paths, const std::string& identity, bool refresh) {
+  if (config.service_development) return {};
   MuonAutostartOptions options;
   std::string error;
   if (!CreateDefaultMuonAutostartOptions(&options, &error)) throw std::runtime_error(error);
@@ -140,6 +141,13 @@ static std::string StartupMetadata(const MuonConfig& config,
 
 std::shared_ptr<MuonServiceSession> CreateMuonBuiltinServiceSession(const MuonConfig& config,
     const std::vector<std::filesystem::path>& config_paths, bool refresh) {
+  if (!config.service_endpoint.empty()) {
+    // The development command owns startup and shutdown. A stale page must
+    // never spawn a replacement after that supervisor has ended its session.
+    return std::make_shared<MuonServiceSession>(MuonServiceProcessOptions{
+        "", muon_internal::FilesystemPathToUtf8(config.service_registry), config.service_endpoint,
+        muon_internal::FilesystemPathToUtf8(config.browser.profile / "services"), "", true});
+  }
   auto identity = config.app_id + "\n" + muon_internal::FilesystemPathToUtf8(config.browser.profile.lexically_normal());
   const auto startup = StartupMetadata(config, config_paths, identity, refresh);
 #if defined(_WIN32)

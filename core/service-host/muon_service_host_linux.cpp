@@ -115,9 +115,9 @@ class ServiceProcess final {
  public:
   ServiceProcess(cardio::dispatcher_group_glib& group,
                  cardio::dispatcher_host_glib& dispatcher,
-                 std::string endpoint, std::string data_root, bool bootstrap)
+                 std::string endpoint, std::string data_root, bool bootstrap, bool development)
       : group_(group), dispatcher_(dispatcher), endpoint_(std::move(endpoint)),
-        data_root_(std::move(data_root)), bootstrap_open_(bootstrap) {}
+        data_root_(std::move(data_root)), bootstrap_open_(bootstrap), development_(development) {}
 
   ~ServiceProcess() {
     protocol_.reset();
@@ -521,8 +521,9 @@ class ServiceProcess final {
 
   cardio::promise<void> WatchBootstrap() {
     try {
-      // The parent never writes payload. EOF also covers parent death before
-      // its first authenticated page connection, without a startup timeout.
+      // Normal UI bootstraps carry no payload. A development supervisor sends
+      // 'd' after its last UI exits, releasing the startup guard without giving
+      // up ownership. EOF then stops even resident services after parent death.
       Check(fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK) == 0, "set bootstrap flags");
       for (;;) {
         co_await cardio::from_fd(STDIN_FILENO, cardio::fd_event::read,
@@ -532,6 +533,12 @@ class ServiceProcess final {
         if (count == 0) break;
         if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         Check(count > 0, "read bootstrap");
+        if (development_) {
+          if (byte != 'd') throw std::invalid_argument("Invalid development session command");
+          bootstrap_open_ = false;
+          ever_connected_ = true;
+          MaybeFinish();
+        }
       }
     } catch (const cardio::canceled_exception&) {
     } catch (const std::exception& error) {
@@ -539,6 +546,7 @@ class ServiceProcess final {
     }
     bootstrap_open_ = false;
     ever_connected_ = true;
+    if (development_) controller_->Shutdown("Development session ended");
     --io_count_;
     MaybeFinish();
   }
@@ -604,6 +612,7 @@ class ServiceProcess final {
   bool transport_stopping_ = false;
   bool finishing_ = false;
   bool bootstrap_open_ = false;
+  bool development_ = false;
 };
 
 int main(int argc, char** argv) {
@@ -611,9 +620,11 @@ int main(int argc, char** argv) {
     std::map<std::string, std::string> arguments;
     for (int index = 1; index + 1 < argc; index += 2)
       arguments.emplace(argv[index], argv[index + 1]);
-    const auto bootstrap = arguments.contains("--bootstrap") && arguments.at("--bootstrap") == "stdin";
+    const auto bootstrap = arguments.contains("--bootstrap");
+    const auto development = bootstrap && arguments.at("--bootstrap") == "development";
     const auto count = 3 + static_cast<int>(bootstrap) + static_cast<int>(arguments.contains("--startup"));
-    if (argc != count * 2 + 1 || arguments.size() != static_cast<size_t>(count) || !arguments.contains("--config") ||
+    if (argc != count * 2 + 1 || arguments.size() != static_cast<size_t>(count) ||
+        (bootstrap && !development && arguments.at("--bootstrap") != "stdin") || !arguments.contains("--config") ||
         !arguments.contains("--endpoint") || !arguments.contains("--data-root"))
       throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint SOCKET --data-root DIR");
     for (const auto& [key, path] : arguments) {
@@ -637,7 +648,7 @@ int main(int argc, char** argv) {
     umask(0077);
     cardio::dispatcher_group_glib group;
     cardio::dispatcher_host_glib dispatcher(group);
-    ServiceProcess process(group, dispatcher, arguments.at("--endpoint"), arguments.at("--data-root"), bootstrap);
+    ServiceProcess process(group, dispatcher, arguments.at("--endpoint"), arguments.at("--data-root"), bootstrap, development);
     cardio::fire_and_forget(process.Run(arguments.at("--config"), signals,
         arguments.contains("--startup") ? arguments.at("--startup") : ""));
     dispatcher.park();

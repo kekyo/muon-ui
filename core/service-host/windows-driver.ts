@@ -124,7 +124,9 @@ try {
   const raceBusiness = createConnection({ host: "127.0.0.1", port: racePort });
   sockets.push(raceBusiness);
   await once(raceBusiness, "connect");
-  const raceResponses = createInterface({ input: raceBusiness })[Symbol.asyncIterator]();
+  const raceResponses = createInterface({ input: raceBusiness })[
+    Symbol.asyncIterator
+  ]();
   const businessClosed = once(raceBusiness, "close");
   for (let request = 0; request < 3; ++request) {
     const nonce = randomUUID();
@@ -146,6 +148,114 @@ try {
   raceSocket.write('{"requestId":"exit","op":"shutdown"}\n');
   assert.equal((await raceExit)[0], 0);
   console.log(JSON.stringify({ concurrentLaunch: true, passed: true }));
+
+  for (const resident of [false, true]) {
+    const endpoint = String.raw`\\.\pipe\muon-service-${randomUUID()}`;
+    const port = await availablePort();
+    const config = join(directory, "development.json");
+    await writeFile(
+      config,
+      JSON.stringify({
+        services: {
+          worker: {
+            library: "../probe-service.dll",
+            autostart: resident,
+            config: { port: String(port) },
+          },
+        },
+      }),
+    );
+    const host = spawn(
+      join(binaryDirectory, "muon-service-host.exe"),
+      [
+        "--config",
+        config,
+        "--endpoint",
+        endpoint,
+        "--data-root",
+        join(directory, "development-" + resident),
+        "--bootstrap",
+        "development",
+      ],
+      { stdio: "overlapped", windowsHide: true },
+    );
+    children.push(host);
+    const hostExit = once(host, "close");
+    let diagnostic = "";
+    host.stderr!.on("data", (bytes: Buffer) => {
+      diagnostic += bytes.toString();
+    });
+    const hostLines = createInterface({ input: host.stdout! })[
+      Symbol.asyncIterator
+    ]();
+    for (;;) {
+      const line = await hostLines.next();
+      assert(!line.done, diagnostic);
+      if (JSON.parse(line.value).ready) break;
+    }
+    const page = spawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+      import {createConnection} from 'node:net';
+      import {createInterface} from 'node:readline';
+      const socket=createConnection(process.argv[1]);
+      socket.on('connect',()=>socket.write(JSON.stringify({requestId:'page',op:'acquire',serviceId:'worker'})+'\\n'));
+      createInterface({input:socket}).on('line',line=>{if(JSON.parse(line).requestId==='page')process.stdout.write(line+'\\n')});
+    `,
+        endpoint,
+      ],
+      { windowsHide: true },
+    );
+    children.push(page);
+    const pageExit = once(page, "close");
+    const [line] = await once(createInterface({ input: page.stdout! }), "line");
+    const reference = JSON.parse(line).result;
+    assert.equal(reference.serviceId, "worker");
+    const business = createConnection({ host: "127.0.0.1", port });
+    sockets.push(business);
+    await once(business, "connect");
+    const response = once(createInterface({ input: business }), "line");
+    const nonce = randomUUID();
+    business.write(nonce + "\n");
+    assert.equal(JSON.parse((await response)[0]).nonce, nonce);
+    const businessClosed = once(business, "close");
+    page.kill("SIGKILL");
+    await pageExit;
+    host.stdin!.write("d");
+    if (resident) {
+      // The page is gone before this nonce exists, so PID survival alone
+      // cannot satisfy the observation of independent native work.
+      const afterClose = once(createInterface({ input: business }), "line");
+      const nextNonce = randomUUID();
+      business.write(nextNonce + "\n");
+      const actual = JSON.parse((await afterClose)[0]);
+      assert.equal(actual.nonce, nextNonce);
+      assert.equal(actual.generation, reference.generation);
+      const reconnected = createConnection(endpoint);
+      sockets.push(reconnected);
+      await once(reconnected, "connect");
+      const replies = createInterface({ input: reconnected })[
+        Symbol.asyncIterator
+      ]();
+      reconnected.write(
+        '{"requestId":"again","op":"acquire","serviceId":"worker"}\n',
+      );
+      for (;;) {
+        const reply = JSON.parse((await replies.next()).value!);
+        if (reply.requestId !== "again") continue;
+        assert.equal(reply.result.generation, reference.generation);
+        break;
+      }
+      // EOF must stop even a resident service with a live page reference.
+      host.stdin!.end();
+    }
+    assert.equal((await hostExit)[0], 0, diagnostic);
+    await businessClosed;
+    console.log(JSON.stringify({ development: true, resident, passed: true }));
+  }
 
   for (const mode of ["simple", "probe"]) {
     for (const shutdown of ["command", "session"]) {
@@ -264,7 +374,10 @@ try {
       assert.equal(pageReference.serviceId, "borrowed");
       let borrowedClosed: Promise<unknown> | undefined;
       if (mode === "probe") {
-        const borrowed = createConnection({ host: "127.0.0.1", port: ports[1]! });
+        const borrowed = createConnection({
+          host: "127.0.0.1",
+          port: ports[1]!,
+        });
         sockets.push(borrowed);
         await once(borrowed, "connect");
         borrowedClosed = once(borrowed, "close");

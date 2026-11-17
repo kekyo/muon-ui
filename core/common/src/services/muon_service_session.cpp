@@ -54,6 +54,7 @@ static cardio::promise<MuonServiceTransport> Connect(
   try { transport = co_await ConnectMuonServiceTransport(impl->options.endpoint, cancellation); }
   catch (const std::system_error& error) { if (!MissingEndpoint(error)) throw; }
   if (!transport) {
+    if (impl->options.connect_only) throw std::runtime_error("Development service host is unavailable");
     impl->launches.push_back(co_await LaunchMuonServiceProcess(impl->options, cancellation));
     transport = co_await ConnectMuonServiceTransport(impl->options.endpoint, cancellation);
   }

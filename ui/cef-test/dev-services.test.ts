@@ -1,0 +1,235 @@
+// muon - Multi-platform GUI application framework that uses CEF as its backend
+// Copyright (c) Kouji Matsui. (@kekyo@mi.kekyo.net)
+// Under MIT.
+// https://github.com/kekyo/muon-ui
+
+import { execFile } from "node:child_process";
+import { once } from "node:events";
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { build, createServer } from "vite";
+import { runMuonDev } from "../cef/dev.ts";
+import { runMuonPrepare } from "../cef/prepare.ts";
+import { startMuonDevelopmentServices } from "../cef/development-services.ts";
+import { buildMuonQuickJsService } from "../common/service-build.ts";
+import { startMuonViteBrowserBridge } from "../cef/vite-internals.ts";
+
+// Runtime downloading is orthogonal to service preparation. The launched driver
+// uses the real service host and the common page API to report its result.
+vi.mock(import("../cef/prepare.ts"), async (original) => ({
+  ...(await original()),
+  runMuonPrepare: vi.fn(),
+}));
+
+const directories: string[] = [];
+beforeAll(async () => {
+  await mkdir("../core/service-host/.build", { recursive: true });
+  await promisify(execFile)("flock", [
+    "../core/service-host/.build/driver-build.lock",
+    "make",
+    "-C",
+    "../core/service-host",
+    ".build/muon-service-host",
+  ]);
+}, 600000);
+afterEach(async () => {
+  for (const directory of directories.splice(0))
+    await rm(directory, { recursive: true, force: true });
+  vi.mocked(runMuonPrepare).mockReset();
+});
+
+it.each([
+  ["run", 0],
+  ["vite", 0],
+  ["run", 7],
+  ["vite", 7],
+] as const)(
+  "executes a config-relative QuickJS service prepared by %s and cleans up after UI exit %s",
+  async (command, exitCode) => {
+    await mkdir("../.build", { recursive: true });
+    const root = await mkdtemp(resolve("../.build/dev-services-"));
+    directories.push(root);
+    const stagePath = join(root, ".muon", "linux-amd64");
+    const settings = join(root, "settings");
+    await mkdir(stagePath, { recursive: true });
+    await mkdir(settings);
+    await mkdir(join(root, "assets"));
+    await writeFile(
+      join(root, "index.html"),
+      "<!doctype html><title>Services</title>",
+    );
+    await writeFile(
+      join(settings, "worker.ts"),
+      `import { defineService, defineServiceInterface } from "muon-plugin-sdk/services";
+export default defineService({
+  interface: defineServiceInterface({ schemaVersion: 1, methods: {
+    greet: { parameters: ["string"], returns: "string", errors: [] }
+  }, events: {} }),
+  start: (context) => ({
+    methods: { greet: (_call, name) => context.config.prefix + name },
+    stop: async () => {}
+  })
+});\n`,
+    );
+    const configPath =
+      command === "run" ? join(settings, "muon.json") : join(root, "muon.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        services: {
+          worker: {
+            runtime: "quickjs",
+            entry: command === "run" ? "./worker.ts" : "./settings/worker.ts",
+            config: { prefix: "Hello " },
+            autostart: exitCode !== 0,
+          },
+        },
+      }),
+    );
+    await cp(
+      resolve("cef-test/fixtures/dev-service-ui.mjs"),
+      join(stagePath, "muon-core"),
+    );
+    await chmod(join(stagePath, "muon-core"), 0o755);
+    for (const name of ["muon-service-host", "libcardio.so"])
+      await cp(
+        resolve("../core/service-host/.build", name),
+        join(stagePath, name),
+      );
+    vi.mocked(runMuonPrepare).mockResolvedValue({
+      stagePath,
+      muonPath: stagePath,
+      cefPath: stagePath,
+      cacheHit: true,
+    });
+    const resultPath = join(root, "result.json");
+    await build({
+      configFile: false,
+      logLevel: "silent",
+      build: {
+        outDir: join(root, "renderer"),
+        target: "es2022",
+        minify: false,
+        lib: {
+          entry: resolve("../core/common/renderer/services.ts"),
+          formats: ["es"],
+          fileName: () => "services.mjs",
+        },
+      },
+    });
+    const environment = {
+      ...process.env,
+      MUON_TEST_RESULT: resultPath,
+      MUON_TEST_EXIT: String(exitCode),
+      MUON_TEST_RENDERER: pathToFileURL(join(root, "renderer", "services.mjs"))
+        .href,
+    };
+    if (command === "run") {
+      const result = await runMuonDev({
+        root,
+        configPath,
+        assetSourcePath: "assets",
+        environment,
+      });
+      expect(result.exitCode).toBe(exitCode);
+    } else {
+      const server = await createServer({
+        root,
+        configFile: false,
+        logLevel: "silent",
+        server: { port: 0 },
+      });
+      const closed = once(server.httpServer!, "close");
+      const previousExitCode = process.exitCode;
+      try {
+        await startMuonViteBrowserBridge({
+          server,
+          pluginOptions: {},
+          refreshRuntimePluginConfig: async () => ({ mode: "simple" }),
+          platform: "linux",
+          architecture: "x64",
+          environment,
+        });
+        await server.listen();
+        await closed;
+        await server.close();
+        if (exitCode !== 0) expect(process.exitCode).toBe(1);
+      } finally {
+        await server.close();
+        process.exitCode = previousExitCode;
+      }
+    }
+    expect(JSON.parse(await readFile(resultPath, "utf8"))).toEqual({
+      status: "ok",
+      value: "Hello service",
+    });
+    expect(
+      await readdir(join(root, ".muon", "development", "linux-amd64")),
+    ).toEqual([]);
+  },
+);
+
+it("rejects an invalid service before preparing or launching the UI", async () => {
+  await mkdir("../.build", { recursive: true });
+  const root = await mkdtemp(resolve("../.build/invalid-dev-service-"));
+  directories.push(root);
+  await mkdir(join(root, "assets"));
+  await writeFile(
+    join(root, "muon.json"),
+    JSON.stringify({ services: { worker: { runtime: "unknown" } } }),
+  );
+  await expect(runMuonDev({ root, assetSourcePath: "assets" })).rejects.toThrow(
+    "services.worker.runtime",
+  );
+  expect(runMuonPrepare).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "removes a failed development startup (canceled=%s)",
+  async (canceled) => {
+    await mkdir("../.build", { recursive: true });
+    const root = await mkdtemp(resolve("../.build/failed-dev-service-"));
+    directories.push(root);
+    const cancellation = new AbortController();
+    if (canceled) cancellation.abort();
+    const bundle = await buildMuonQuickJsService(
+      resolve("../sdk/test/fixtures/quickjs-service.ts"),
+      [],
+    );
+    await expect(
+      startMuonDevelopmentServices(
+        root,
+        "linux-amd64",
+        join(root, "missing-runtime"),
+        [
+          {
+            id: "worker",
+            runtime: "quickjs",
+            autostart: true,
+            config: {},
+            android: undefined,
+            plugins: [],
+            bundle,
+          },
+        ],
+        process.env,
+        cancellation.signal,
+      ),
+    ).rejects.toThrow(canceled ? "session ended during startup" : "ENOENT");
+    expect(
+      await readdir(join(root, ".muon", "development", "linux-amd64")),
+    ).toEqual([]);
+  },
+);

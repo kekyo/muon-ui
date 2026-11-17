@@ -2816,10 +2816,14 @@ describe("muon Vite plugin", () => {
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
     expect(overrideConfig).toEqual({
+      serviceHost: { development: true },
       cdp: {
         enable: true,
       },
       browser: {
+        profilePath: expect.stringContaining(
+          join(root, ".muon", "development", "linux-amd64", "session-"),
+        ),
         startPage: baseUrl,
         keybind: {
           devtools: "f12",
@@ -3518,7 +3522,7 @@ export default {
     expect(warnings.join("\n")).toContain("generated Vite config only");
   });
 
-  it("warns and ignores an invalid project config during Vite dev startup", async () => {
+  it("reports an invalid project config without launching a partial Vite application", async () => {
     const root = await createTemporaryDirectory("muon-vite-invalid-config-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -3538,19 +3542,21 @@ export default {
         stagePath: undefined,
         enableDebugger: undefined,
         open: undefined,
+        exitWithServer: false,
       },
       undefined,
       logger,
     );
-    await wait(() => existsSync(join(outputDirectory, "override.json")));
-
-    const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
-      .trim()
-      .split("\n");
-    const overrideConfigPath = args[1];
-    expect(args).toEqual(["-c", overrideConfigPath]);
+    await wait(
+      () =>
+        warnings.some((warning) => warning.includes("muon startup failed")) ||
+        existsSync(join(outputDirectory, "override.json")),
+    );
     expect(warnings.join("\n")).toContain(join(root, "muon.json"));
-    expect(warnings.join("\n")).toContain("will be ignored");
+    expect(warnings.join("\n")).toContain("muon startup failed");
+    await expect(
+      access(join(outputDirectory, "override.json")),
+    ).rejects.toThrow();
   });
 
   it("uses the Vite base URL as the muon start page when server.open is a string", async () => {
@@ -4199,6 +4205,7 @@ describe("muon run CLI", () => {
     expect(devResult.assetSourcePath).toBe(assetsPath);
     expect(devResult.stagePath).toBe(join(root, ".muon", "linux-amd64"));
     expect(overrideConfig).toEqual({
+      serviceHost: { development: true },
       asset: {
         sourcePath: assetsPath,
       },
@@ -4206,6 +4213,9 @@ describe("muon run CLI", () => {
         enable: true,
       },
       browser: {
+        profilePath: expect.stringContaining(
+          join(root, ".muon", "development", "linux-amd64", "session-"),
+        ),
         keybind: {
           devtools: "f12",
           recycle: "ctrl+f12",

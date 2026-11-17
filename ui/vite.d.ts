@@ -458,10 +458,11 @@ export interface MuonVitePluginOptions {
   readonly allowInsecureLocalhost?: boolean;
 
   /**
-   * Close the Vite dev server when the launched muon process exits.
+   * Close the Vite dev server when the launched UI and its services have exited.
    *
    * @remarks Vite build and `muon run` ignore this option. Recycle exits keep
-   * the Vite dev server running so muon can restart.
+   * the Vite dev server running so muon can restart. Resident services keep
+   * the development session alive after the UI closes.
    * @defaultValue `true`
    */
   readonly exitWithServer?: boolean;

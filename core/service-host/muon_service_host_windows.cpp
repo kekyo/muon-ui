@@ -129,9 +129,9 @@ class ServiceProcess final {
  public:
   ServiceProcess(cardio::dispatcher_group& group,
                  cardio::dispatcher_host_win32_auto& dispatcher,
-                 std::wstring endpoint, std::filesystem::path data_root, bool bootstrap)
+                 std::wstring endpoint, std::filesystem::path data_root, bool bootstrap, bool development)
       : group_(group), dispatcher_(dispatcher), endpoint_(std::move(endpoint)),
-        data_root_(std::move(data_root)), bootstrap_live_(bootstrap) {
+        data_root_(std::move(data_root)), bootstrap_live_(bootstrap), development_(development) {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = WindowProcedure;
     window_class.hInstance = GetModuleHandleW(nullptr);
@@ -543,6 +543,15 @@ class ServiceProcess final {
         const auto size = co_await cardio::win32::read(bootstrap_->value,
             std::as_writable_bytes(std::span(bytes)), transport_cancellation_.get_cancellation());
         if (size == 0) break;
+        if (development_) {
+          // Release the UI startup guard while retaining EOF ownership. The
+          // supervisor may disappear without sending an administrative RPC.
+          for (size_t index = 0; index < size; ++index)
+            if (bytes[index] != 'd') throw std::invalid_argument("Invalid development session command");
+          bootstrap_live_ = false;
+          ever_connected_ = true;
+          MaybeFinish();
+        }
       }
     } catch (const cardio::canceled_exception&) {
     } catch (const std::system_error& error) {
@@ -556,6 +565,7 @@ class ServiceProcess final {
     }
     bootstrap_live_ = false;
     ever_connected_ = true;
+    if (development_) controller_->Shutdown("Development session ended");
     --io_count_;
     MaybeFinish();
   }
@@ -623,6 +633,7 @@ class ServiceProcess final {
   bool session_ending_ = false;
   bool loop_finished_ = false;
   bool bootstrap_live_ = false;
+  bool development_ = false;
 };
 
 int wmain(int argc, wchar_t** argv) {
@@ -631,9 +642,10 @@ int wmain(int argc, wchar_t** argv) {
     for (int index = 1; index + 1 < argc; index += 2)
       arguments.emplace(argv[index], argv[index + 1]);
     const auto bootstrap = arguments.contains(L"--bootstrap");
+    const auto development = bootstrap && arguments.at(L"--bootstrap") == L"development";
     const auto count = 3 + static_cast<int>(bootstrap) + static_cast<int>(arguments.contains(L"--startup"));
     if (argc != count * 2 + 1 || arguments.size() != static_cast<size_t>(count) ||
-        (bootstrap && arguments.at(L"--bootstrap") != L"stdin") || !arguments.contains(L"--config") ||
+        (bootstrap && !development && arguments.at(L"--bootstrap") != L"stdin") || !arguments.contains(L"--config") ||
         !arguments.contains(L"--endpoint") || !arguments.contains(L"--data-root"))
       throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint PIPE --data-root DIR [--bootstrap stdin]");
     const auto& endpoint = arguments.at(L"--endpoint");
@@ -650,7 +662,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     cardio::dispatcher_group group;
     cardio::dispatcher_host_win32_auto dispatcher(group);
-    ServiceProcess process(group, dispatcher, endpoint, arguments.at(L"--data-root"), bootstrap);
+    ServiceProcess process(group, dispatcher, endpoint, arguments.at(L"--data-root"), bootstrap, development);
     cardio::fire_and_forget(process.Run(arguments.at(L"--config"), arguments.contains(L"--startup") ?
         muon_internal::FilesystemPathToUtf8(arguments.at(L"--startup")) : ""));
     dispatcher.park();

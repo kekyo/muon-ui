@@ -3258,6 +3258,24 @@ static bool RunServiceHostConfigValidationTest(const std::filesystem::path& dire
       !LoadConfigFilesExpectSuccess({path, overlay}, &config) ||
       !Expect(config.service_registry == override_directory / "other.json",
               "service registry override retained another configuration base")) return false;
+  if (!WriteFile(path, R"({"serviceHost":{"development":true}})") ||
+      !LoadConfigExpectSuccess(path, &config)) return false;
+#if defined(_WIN32)
+  const auto development = R"({"serviceHost":{"registry":"./muon-services.json","development":true,"endpoint":"\\\\.\\pipe\\muon-service-development"}})";
+#else
+  const auto development = R"({"serviceHost":{"registry":"./muon-services.json","development":true,"endpoint":"/tmp/muon-service-development/control"}})";
+#endif
+  if (!WriteFile(path, development) ||
+      !LoadConfigExpectSuccess(path, &config)) return false;
+  for (const auto& invalid : std::vector<std::string>{
+      R"({"serviceHost":{"development":"true"}})",
+      R"({"serviceHost":{"development":false}})",
+      R"({"serviceHost":{"registry":"services.json","endpoint":"/tmp/control"}})",
+      R"({"serviceHost":{"registry":"services.json","development":true,"endpoint":""}})",
+      R"({"serviceHost":{"registry":"services.json","development":true,"endpoint":"relative"}})",
+      R"({"serviceHost":{"registry":"services.json","development":true,"endpoint":"a\u0000b"}})"}) {
+    if (!WriteFile(path, invalid) || !LoadConfigExpectFailure(path, "serviceHost")) return false;
+  }
   return true;
 }
 

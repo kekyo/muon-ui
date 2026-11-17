@@ -18,6 +18,12 @@ import { ensureMuonGitignoreEntry } from "../common/gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import type { MuonVitePluginOptions } from "../common/vite.js";
+import { resolveMuonServices } from "../common/service-config.ts";
+import {
+  startMuonDevelopmentServices,
+  type MuonDevelopmentServiceConfig,
+  type MuonDevelopmentServices,
+} from "./development-services.ts";
 import {
   assertMuonNodeHostArtifacts,
   assertMuonNodeProjectStagingIsSafe,
@@ -53,6 +59,7 @@ interface MuonProjectConfigResolution {
 }
 
 interface MuonOverrideConfig {
+  serviceHost: MuonDevelopmentServiceConfig["serviceHost"];
   config?: Record<string, string>;
   node?: {
     project: string;
@@ -61,6 +68,7 @@ interface MuonOverrideConfig {
     enable: true;
   };
   browser: {
+    profilePath: string;
     startPage: string;
     titleBarType?: "native" | "muon";
     initialTitleBarVisibility?: boolean;
@@ -315,9 +323,11 @@ const createMuonOverrideConfig = (
   config: Readonly<Record<string, string>> | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig,
   nodeProjectPath: string | undefined,
+  serviceConfig: MuonDevelopmentServiceConfig,
 ): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
+    serviceHost: serviceConfig.serviceHost,
     ...(config === undefined ? {} : { config: { ...config } }),
     ...(nodeProjectPath === undefined
       ? {}
@@ -334,6 +344,7 @@ const createMuonOverrideConfig = (
         }
       : {}),
     browser: {
+      ...serviceConfig.browser,
       startPage: startUrl,
       ...(enableDebugger
         ? {
@@ -367,6 +378,7 @@ const writeMuonOverrideConfig = (
   pluginOptions: MuonVitePluginOptions,
   runtimePluginConfig: MuonRuntimePluginConfig,
   nodeProjectPath: string | undefined,
+  serviceConfig: MuonDevelopmentServiceConfig,
 ): boolean => {
   const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
@@ -383,6 +395,7 @@ const writeMuonOverrideConfig = (
         pluginOptions.dev?.config,
         runtimePluginConfig,
         nodeProjectPath,
+        serviceConfig,
       ),
       null,
       2,
@@ -433,13 +446,9 @@ const resolveProjectConfig = async (
         config: parsed,
       };
     } catch (error) {
-      server.config.logger.warn(
-        `muon project config will be ignored because it could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
+      throw new Error(
+        `muon project config could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
       );
-      return {
-        path: undefined,
-        config: undefined,
-      };
     }
   }
 
@@ -548,6 +557,8 @@ export const startMuonViteBrowserBridge = async ({
   let closing = false;
   let serverCloseRequested = false;
   let supervisorPromise: Promise<void> | undefined = undefined;
+  let serviceSession: MuonDevelopmentServices | undefined;
+  const cancellation = new AbortController();
 
   const setCurrentChild = (child: ChildProcess | undefined): void => {
     currentChild = child;
@@ -561,6 +572,14 @@ export const startMuonViteBrowserBridge = async ({
     ) {
       try {
         const projectConfig = await resolveProjectConfig(server);
+        const services = await resolveMuonServices(
+          projectConfig.config?.services,
+          projectConfig.path === undefined
+            ? server.config.root
+            : dirname(projectConfig.path),
+          [target],
+          { root: server.config.root, environment },
+        );
         const nodeProject = await resolveMuonNodeProject(
           projectConfig.config,
           projectConfig.path === undefined
@@ -598,12 +617,21 @@ export const startMuonViteBrowserBridge = async ({
             platform,
           );
         }
+        serviceSession ??= await startMuonDevelopmentServices(
+          server.config.root,
+          target,
+          preparedRuntime.stagePath,
+          services,
+          environment,
+          cancellation.signal,
+        );
         const configWritten = writeMuonOverrideConfig(
           server,
           paths.overrideConfigPath,
           pluginOptions,
           runtimePluginConfig,
           nodeProjectPath,
+          serviceSession.config,
         );
         if (!configWritten || closing) {
           return;
@@ -634,6 +662,9 @@ export const startMuonViteBrowserBridge = async ({
               process.exitCode = 1;
             }
           }
+          await serviceSession.stop();
+        } else if (!closing && result.code !== muonRecycleExitCode) {
+          await serviceSession.waitForExit();
         }
       } catch (error) {
         if (!closing) {
@@ -645,6 +676,13 @@ export const startMuonViteBrowserBridge = async ({
               process.exitCode = 1;
             }
           }
+        }
+        try {
+          await serviceSession?.stop();
+        } catch (cleanupError) {
+          server.config.logger.warn(
+            `muon service cleanup failed: ${getErrorMessage(cleanupError)}`,
+          );
         }
         return;
       }
@@ -658,9 +696,14 @@ export const startMuonViteBrowserBridge = async ({
     }
     cleanupPromise = (async () => {
       closing = true;
+      cancellation.abort();
       currentChild?.kill();
       await supervisorPromise;
-      await rm(paths.temporaryDirectory, { recursive: true, force: true });
+      try {
+        await serviceSession?.stop();
+      } finally {
+        await rm(paths.temporaryDirectory, { recursive: true, force: true });
+      }
     })();
     return cleanupPromise;
   };

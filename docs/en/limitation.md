@@ -38,7 +38,7 @@ Therefore, always take care not to expose unnecessary plugin functions.
 
 ## Android WebView backend
 
-See [building and distributing Android apps](./android.md) for public APK commands and verified environments. FCM and QuickJS are unavailable in public application builds. QuickJS mentioned below applies only to the prototype host.
+See [building and distributing Android apps](./android.md) for public APK commands and verified environments. Public applications support [QuickJS services](services.md); FCM is unavailable. The `muon.node.createNode()` QuickJS functionality below belongs only to the prototype host and differs from the public service API.
 
 The Android WebView backend does not comprehensively intercept normal WebView network traffic through muon. CEF settings such as `network.allow`, `network.authorizedOrigin`, and `network.localAccess` may remain in a shared `muon.json`, but Android does not enforce them as allow or deny rules for WebView traffic and emits a warning when they are explicitly configured.
 

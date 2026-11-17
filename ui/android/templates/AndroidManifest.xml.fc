@@ -28,5 +28,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+{{if servicesEnabled}}
+        <service android:name="dev.muon.runtime.MuonServiceControlService"
+            android:exported="false" android:process=":muon_services" />
+{{for service services}}
+        <service android:name="{{service.component}}" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="{{service.foregroundServiceType}}">
+{{if service.specialUseSubtype}}
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="{{service.specialUseSubtype}}" />
+{{end}}
+        </service>
+{{end}}
+{{end}}
     </application>
 </manifest>

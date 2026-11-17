@@ -420,6 +420,17 @@ class MuonPluginRuntime final {
   void ReleaseFunctionContext(const MuonRpcContextReleased& release);
 
   /**
+   * Waits for an invalidated owner's native callback sources, borrows, proxy
+   * leases and pending renderer calls to finish their actual finalization.
+   * @param owner Owner already invalidated by ReleaseFunctionContext.
+   * @param completion Deferred owner-thread completion after cleanup.
+   * @remarks Does not release plugin-held retains or stop plugin I/O. Keep the
+   * runtime alive, and initiate Stop before awaiting the final owner's drain
+   * when Stop is responsible for releasing those resources. No polling is used.
+   */
+  void DrainFunctionContext(const MuonRpcOwner& owner, StopCompletion completion);
+
+  /**
    * Releases function sources and proxy leases owned by one browser frame.
    *
    * @param browser_id Browser whose frame was destroyed.

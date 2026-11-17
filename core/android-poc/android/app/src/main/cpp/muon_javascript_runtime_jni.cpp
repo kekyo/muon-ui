@@ -39,6 +39,8 @@
 #include <vector>
 
 #include "quickjs.h"
+#include "quickjs/muon_quickjs_module.h"
+#include "quickjs/muon_quickjs_engine.h"
 
 static constexpr const char* kLogTag = "muon-quickjs";
 static constexpr const char* kQuickJsVersion = "2026-06-04";
@@ -126,6 +128,7 @@ struct MuonTimer {
 struct MuonJavaScriptHost {
   int file_descriptor = -1;
   std::filesystem::path filesystem_root;
+  std::unique_ptr<MuonQuickJsEngine> engine;
   JSRuntime* runtime = nullptr;
   JSContext* context = nullptr;
   std::vector<MuonPendingPromise> pending_promises;
@@ -136,7 +139,6 @@ struct MuonJavaScriptHost {
   std::unordered_map<std::int64_t, MuonTcpServer> tcp_servers;
   std::vector<MuonHostEvent> host_events;
   std::atomic<bool>* stop_requested = nullptr;
-  std::atomic<std::int64_t> execution_deadline_nanoseconds{0};
 };
 
 struct MuonJavaScriptSession {
@@ -532,21 +534,22 @@ static bool get_js_string(JSContext* context, JSValueConst value,
 }
 
 static std::string take_exception(JSContext* context) {
-  auto exception = JS_GetException(context);
-  std::string message;
-  if (!get_js_string(context, exception, &message)) {
-    message = "Unknown QuickJS exception";
+  auto* host = static_cast<MuonJavaScriptHost*>(JS_GetContextOpaque(context));
+  const auto error = JS_GetException(context);
+  const auto diagnostic = host->engine->ExceptionText(error);
+  JS_FreeValue(context, error);
+  return diagnostic;
+}
+
+static JSValue call_javascript(JSContext* context, JSValueConst function,
+                                JSValueConst receiver,
+                                const std::vector<JSValue>& arguments) {
+  auto* host = static_cast<MuonJavaScriptHost*>(JS_GetContextOpaque(context));
+  try {
+    return host->engine->Call(function, receiver, arguments);
+  } catch (const std::exception& error) {
+    return JS_ThrowInternalError(context, "%s", error.what());
   }
-  auto stack = JS_GetPropertyStr(context, exception, "stack");
-  std::string stack_text;
-  if (!JS_IsException(stack) && !JS_IsUndefined(stack) &&
-      get_js_string(context, stack, &stack_text) && !stack_text.empty()) {
-    message.append("\n");
-    message.append(stack_text);
-  }
-  JS_FreeValue(context, stack);
-  JS_FreeValue(context, exception);
-  return message;
 }
 
 static MuonJavaScriptHost* require_host(JSContext* context) {
@@ -583,99 +586,18 @@ static JSValue get_host_module(JSContext* context, const char* module_name) {
                                  "JavaScript host module registry is unavailable");
   }
   auto argument = JS_NewString(context, module_name);
-  auto module = JS_Call(context, getter, global, 1, &argument);
+  auto module = call_javascript(context, getter, global, {argument});
   JS_FreeValue(context, argument);
   JS_FreeValue(context, getter);
   JS_FreeValue(context, global);
   return module;
 }
 
-static int for_each_host_module_export(
-    JSContext* context, JSValueConst module,
-    const std::function<int(const char*, JSAtom)>& callback) {
-  JSPropertyEnum* properties = nullptr;
-  std::uint32_t property_count = 0;
-  if (JS_GetOwnPropertyNames(context, &properties, &property_count, module,
-                             JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) < 0) {
-    return -1;
-  }
-  auto result = 0;
-  for (std::uint32_t index = 0; index < property_count; ++index) {
-    const char* name = JS_AtomToCString(context, properties[index].atom);
-    if (name == nullptr) {
-      result = -1;
-      break;
-    }
-    if (std::strcmp(name, "default") != 0) {
-      result = callback(name, properties[index].atom);
-    }
-    JS_FreeCString(context, name);
-    if (result < 0) {
-      break;
-    }
-  }
-  JS_FreePropertyEnum(context, properties, property_count);
-  return result;
-}
-
-static int initialize_host_module(JSContext* context, JSModuleDef* definition) {
-  // The loader stores the JavaScript module object until QuickJS instantiates
-  // the synthetic module, when its properties can become ESM exports.
-  auto module = JS_GetModulePrivateValue(context, definition);
-  if (JS_IsException(module)) {
-    return -1;
-  }
-  auto default_export = JS_GetPropertyStr(context, module, "default");
-  if (JS_IsException(default_export)) {
-    JS_FreeValue(context, module);
-    return -1;
-  }
-  if (JS_IsUndefined(default_export)) {
-    JS_FreeValue(context, default_export);
-    default_export = JS_DupValue(context, module);
-  }
-  auto result =
-      JS_SetModuleExport(context, definition, "default", default_export);
-  if (result >= 0) {
-    result = for_each_host_module_export(
-        context, module, [&](const char* name, JSAtom atom) {
-          auto value = JS_GetProperty(context, module, atom);
-          if (JS_IsException(value)) {
-            return -1;
-          }
-          return JS_SetModuleExport(context, definition, name, value);
-        });
-  }
-  JS_FreeValue(context, module);
-  return result;
-}
-
 static JSModuleDef* load_host_module(JSContext* context,
                                      const char* module_name, void* opaque) {
   (void)opaque;
-  auto module = get_host_module(context, module_name);
-  if (JS_IsException(module)) {
-    return nullptr;
-  }
-  if (!JS_IsObject(module)) {
-    JS_FreeValue(context, module);
-    JS_ThrowTypeError(context, "Host module '%s' is not an object", module_name);
-    return nullptr;
-  }
-  auto* definition =
-      JS_NewCModule(context, module_name, initialize_host_module);
-  if (definition == nullptr ||
-      JS_AddModuleExport(context, definition, "default") < 0 ||
-      for_each_host_module_export(
-          context, module, [&](const char* name, JSAtom atom) {
-            (void)atom;
-            return JS_AddModuleExport(context, definition, name);
-          }) < 0) {
-    JS_FreeValue(context, module);
-    return nullptr;
-  }
-  JS_SetModulePrivateValue(context, definition, module);
-  return definition;
+  return CreateMuonQuickJsObjectModule(
+      context, module_name, get_host_module(context, module_name));
 }
 
 static bool resolve_filesystem_path(JSContext* context,
@@ -2488,28 +2410,6 @@ static bool install_host_functions(MuonJavaScriptHost* host) {
   return installed;
 }
 
-static int interrupt_handler(JSRuntime* runtime, void* opaque) {
-  (void)runtime;
-  auto* host = static_cast<MuonJavaScriptHost*>(opaque);
-  if (host->stop_requested->load()) {
-    return 1;
-  }
-  auto deadline = host->execution_deadline_nanoseconds.load();
-  return deadline != 0 && steady_nanoseconds() >= deadline ? 1 : 0;
-}
-
-static void begin_js_execution(MuonJavaScriptHost* host) {
-  host->execution_deadline_nanoseconds.store(
-      steady_nanoseconds() +
-      std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::milliseconds(kExecutionLimitMilliseconds))
-          .count());
-}
-
-static void end_js_execution(MuonJavaScriptHost* host) {
-  host->execution_deadline_nanoseconds.store(0);
-}
-
 static JSValue create_host_event_payload(JSContext* context,
                                          const MuonHostEvent& event) {
   if (event.type == "data" || event.type == "httpData") {
@@ -2597,10 +2497,8 @@ static bool dispatch_host_events(MuonJavaScriptHost* host) {
                   take_exception(host->context));
         return false;
       }
-      begin_js_execution(host);
-      auto result = JS_Call(host->context, dispatcher, JS_UNDEFINED, 3,
-                            arguments);
-      end_js_execution(host);
+      auto result = call_javascript(host->context, dispatcher, JS_UNDEFINED,
+                                    {arguments[0], arguments[1], arguments[2]});
       for (auto& argument : arguments) {
         JS_FreeValue(host->context, argument);
       }
@@ -2883,33 +2781,29 @@ static void process_tcp_deferred_output(MuonJavaScriptHost* host) {
 static JSValue evaluate_source(MuonJavaScriptHost* host,
                                const std::string& source,
                                const char* filename, int flags) {
-  begin_js_execution(host);
-  auto result = JS_Eval(host->context, source.data(), source.size(), filename,
-                        flags);
-  end_js_execution(host);
-  return result;
+  try {
+    return host->engine->Evaluate(source, filename, flags);
+  } catch (const std::exception& error) {
+    return JS_ThrowInternalError(host->context, "%s", error.what());
+  }
 }
 
 static bool execute_pending_jobs(MuonJavaScriptHost* host) {
-  while (JS_IsJobPending(host->runtime)) {
-    JSContext* job_context = nullptr;
-    begin_js_execution(host);
-    auto result = JS_ExecutePendingJob(host->runtime, &job_context);
-    end_js_execution(host);
-    if (result < 0) {
-      log_error("QuickJS job failed: " + take_exception(
-                                             job_context == nullptr
-                                                 ? host->context
-                                                 : job_context));
-      return false;
-    }
+  try {
+    host->engine->RunJobs(256);
+    return true;
+  } catch (const std::exception& error) {
+    log_error(std::string("QuickJS job failed: ") + error.what());
+    return false;
   }
-  return true;
 }
 
 static bool settle_initial_promise(MuonJavaScriptHost* host, JSValue promise) {
+  const auto deadline = std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(kExecutionLimitMilliseconds);
   while (JS_PromiseState(host->context, promise) == JS_PROMISE_PENDING) {
-    if (!execute_pending_jobs(host) || !JS_IsJobPending(host->runtime)) {
+    if (!execute_pending_jobs(host) || !JS_IsJobPending(host->runtime) ||
+        std::chrono::steady_clock::now() >= deadline) {
       break;
     }
   }
@@ -2919,10 +2813,7 @@ static bool settle_initial_promise(MuonJavaScriptHost* host, JSValue promise) {
   }
   if (state == JS_PROMISE_REJECTED) {
     auto reason = JS_PromiseResult(host->context, promise);
-    std::string diagnostic;
-    if (!get_js_string(host->context, reason, &diagnostic)) {
-      diagnostic = "QuickJS module evaluation rejected";
-    }
+    const auto diagnostic = host->engine->ExceptionText(reason);
     JS_FreeValue(host->context, reason);
     log_error(diagnostic);
   } else {
@@ -2972,10 +2863,24 @@ static bool handle_protocol_message(MuonJavaScriptHost* host,
   }
   auto argument =
       JS_NewStringLen(host->context, message.data(), message.size());
-  begin_js_execution(host);
-  auto result =
-      JS_Call(host->context, handler, JS_UNDEFINED, 1, &argument);
-  end_js_execution(host);
+  JSValue result;
+  try {
+    // This trusted async wrapper turns request exceptions into protocol error
+    // responses. Preserve its promise after interruption so bounded job turns
+    // can deliver that response; ordinary author calls remain fail-closed.
+    const auto observed =
+        host->engine->CallObserved(handler, JS_UNDEFINED, {argument});
+    result = observed.value;
+    const auto state = JS_PromiseState(host->context, result);
+    if (observed.interrupted && state != JS_PROMISE_PENDING &&
+        state != JS_PROMISE_FULFILLED && state != JS_PROMISE_REJECTED) {
+      JS_FreeValue(host->context, result);
+      result = JS_ThrowInternalError(
+          host->context, "Interrupted protocol handler returned no promise");
+    }
+  } catch (const std::exception& error) {
+    result = JS_ThrowInternalError(host->context, "%s", error.what());
+  }
   JS_FreeValue(host->context, argument);
   JS_FreeValue(host->context, handler);
   if (JS_IsException(result)) {
@@ -3009,9 +2914,7 @@ static bool process_timers(MuonJavaScriptHost* host) {
       return false;
     }
     auto argument = JS_NewInt64(host->context, identifier);
-    begin_js_execution(host);
-    auto result = JS_Call(host->context, dispatcher, JS_UNDEFINED, 1, &argument);
-    end_js_execution(host);
+    auto result = call_javascript(host->context, dispatcher, JS_UNDEFINED, {argument});
     JS_FreeValue(host->context, argument);
     JS_FreeValue(host->context, dispatcher);
     if (JS_IsException(result)) {
@@ -3052,10 +2955,7 @@ static bool process_protocol_promises(MuonJavaScriptHost* host) {
     }
     auto result = JS_PromiseResult(host->context, iterator->promise);
     if (state == JS_PROMISE_REJECTED) {
-      std::string diagnostic;
-      if (!get_js_string(host->context, result, &diagnostic)) {
-        diagnostic = "QuickJS protocol promise rejected";
-      }
+      const auto diagnostic = host->engine->ExceptionText(result);
       JS_FreeValue(host->context, result);
       JS_FreeValue(host->context, iterator->promise);
       host->pending_promises.erase(iterator);
@@ -3094,7 +2994,7 @@ static bool should_shutdown(MuonJavaScriptHost* host) {
 }
 
 static int timer_poll_timeout(const MuonJavaScriptHost* host) {
-  if (!host->host_events.empty()) {
+  if (!host->host_events.empty() || JS_IsJobPending(host->runtime)) {
     return 0;
   }
   if (host->timers.empty()) {
@@ -3155,13 +3055,11 @@ static void free_host(MuonJavaScriptHost* host) {
     for (auto& pending : host->pending_promises) {
       JS_FreeValue(host->context, pending.promise);
     }
-    JS_FreeContext(host->context);
-    host->context = nullptr;
+    host->pending_promises.clear();
   }
-  if (host->runtime != nullptr) {
-    JS_FreeRuntime(host->runtime);
-    host->runtime = nullptr;
-  }
+  host->engine.reset();
+  host->context = nullptr;
+  host->runtime = nullptr;
 }
 
 static void close_session_descriptors(
@@ -3222,113 +3120,110 @@ static void run_session(const std::shared_ptr<MuonJavaScriptSession>& session,
   host.filesystem_root = std::filesystem::path(filesystem_root);
   host.session = session;
   host.stop_requested = &session->stop_requested;
-  host.runtime = JS_NewRuntime();
-  if (host.runtime == nullptr) {
-    log_error("Unable to create a QuickJS runtime");
-  } else {
-    JS_SetMemoryLimit(host.runtime, kMemoryLimit);
-    JS_SetMaxStackSize(host.runtime, kStackLimit);
-    JS_SetInterruptHandler(host.runtime, interrupt_handler, &host);
-    host.context = JS_NewContext(host.runtime);
-    if (host.context == nullptr) {
-      log_error("Unable to create a QuickJS context");
-    } else {
-      JS_SetContextOpaque(host.context, &host);
-      auto initialized = install_host_functions(&host) &&
-                         evaluate_runtime_sources(&host, runtime_source,
-                                                  backend_source);
-      if (initialized) {
-        const std::string handshake =
-            "{\"kind\":\"handshake\",\"protocol\":\"muon-js/1\","
-            "\"engine\":{\"name\":\"quickjs\",\"version\":\"" +
-            std::string(kQuickJsVersion) +
-            "\"},\"capabilities\":[\"esm\",\"multiple-runtimes\","
-            "\"callbacks\",\"node:fs/promises\",\"node:fs\","
-            "\"node:path\",\"node:events\",\"node:buffer\","
-            "\"node:timers\",\"node:timers/promises\",\"node:stream\","
-            "\"node:process\",\"node:os\","
-            "\"node:util\",\"node:assert\",\"node:querystring\","
-            "\"node:string_decoder\",\"node:crypto\","
-            "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
-            "\"tcp-server\","
-            "\"node:http\",\"http-server\",\"node:https\",\"fetch\","
-            "\"abort\"]}";
-        initialized = write_frame(host.file_descriptor, handshake);
-      }
+  try {
+    host.engine = std::make_unique<MuonQuickJsEngine>(
+        MuonQuickJsLimits{kMemoryLimit, kStackLimit,
+                         std::chrono::milliseconds(kExecutionLimitMilliseconds)},
+        [session]() { return session->stop_requested.load(); });
+    host.runtime = host.engine->Runtime();
+    host.context = host.engine->Context();
+    JS_SetContextOpaque(host.context, &host);
+    auto initialized = install_host_functions(&host) &&
+                       evaluate_runtime_sources(&host, runtime_source,
+                                                backend_source);
+    if (initialized) {
+      const std::string handshake =
+          "{\"kind\":\"handshake\",\"protocol\":\"muon-js/1\","
+          "\"engine\":{\"name\":\"quickjs\",\"version\":\"" +
+          std::string(kQuickJsVersion) +
+          "\"},\"capabilities\":[\"esm\",\"multiple-runtimes\","
+          "\"callbacks\",\"node:fs/promises\",\"node:fs\","
+          "\"node:path\",\"node:events\",\"node:buffer\","
+          "\"node:timers\",\"node:timers/promises\",\"node:stream\","
+          "\"node:process\",\"node:os\","
+          "\"node:util\",\"node:assert\",\"node:querystring\","
+          "\"node:string_decoder\",\"node:crypto\","
+          "\"node:url\",\"node:dns\",\"node:net\",\"tcp\","
+          "\"tcp-server\","
+          "\"node:http\",\"http-server\",\"node:https\",\"fetch\","
+          "\"abort\"]}";
+      initialized = write_frame(host.file_descriptor, handshake);
+    }
 
-      while (initialized && !session->stop_requested.load()) {
-        collect_dns_results(&host);
-        collect_external_events(&host);
-        if (!dispatch_host_events(&host) || !process_timers(&host) ||
-            !process_protocol_promises(&host)) {
-          break;
-        }
-        process_tcp_deferred_output(&host);
-        if (should_shutdown(&host)) {
-          break;
-        }
-        std::vector<pollfd> descriptors;
-        std::vector<std::int64_t> tcp_identifiers;
-        std::vector<std::int64_t> tcp_server_identifiers;
-        pollfd protocol_descriptor{};
-        protocol_descriptor.fd = host.file_descriptor;
-        protocol_descriptor.events = POLLIN;
-        descriptors.push_back(protocol_descriptor);
-        pollfd event_descriptor{};
-        event_descriptor.fd = session->event_file_descriptor;
-        event_descriptor.events = POLLIN;
-        descriptors.push_back(event_descriptor);
-        append_tcp_poll_descriptors(&host, &descriptors, &tcp_identifiers);
-        append_tcp_server_poll_descriptors(
-            &host, &descriptors, &tcp_server_identifiers);
-        auto poll_result = poll(descriptors.data(), descriptors.size(),
-                                timer_poll_timeout(&host));
-        if (poll_result < 0) {
-          if (errno == EINTR) {
-            continue;
-          }
-          break;
-        }
-        if (poll_result == 0) {
+    while (initialized && !session->stop_requested.load()) {
+      collect_dns_results(&host);
+      collect_external_events(&host);
+      if (!dispatch_host_events(&host) || !process_timers(&host) ||
+          !process_protocol_promises(&host)) {
+        break;
+      }
+      process_tcp_deferred_output(&host);
+      if (should_shutdown(&host)) {
+        break;
+      }
+      std::vector<pollfd> descriptors;
+      std::vector<std::int64_t> tcp_identifiers;
+      std::vector<std::int64_t> tcp_server_identifiers;
+      pollfd protocol_descriptor{};
+      protocol_descriptor.fd = host.file_descriptor;
+      protocol_descriptor.events = POLLIN;
+      descriptors.push_back(protocol_descriptor);
+      pollfd event_descriptor{};
+      event_descriptor.fd = session->event_file_descriptor;
+      event_descriptor.events = POLLIN;
+      descriptors.push_back(event_descriptor);
+      append_tcp_poll_descriptors(&host, &descriptors, &tcp_identifiers);
+      append_tcp_server_poll_descriptors(
+          &host, &descriptors, &tcp_server_identifiers);
+      auto poll_result = poll(descriptors.data(), descriptors.size(),
+                              timer_poll_timeout(&host));
+      if (poll_result < 0) {
+        if (errno == EINTR) {
           continue;
         }
-        if ((descriptors[0].revents & POLLIN) != 0) {
-          std::string message;
-          if (!read_frame(host.file_descriptor, &message) ||
-              !handle_protocol_message(&host, message)) {
-            break;
-          }
-        }
-        if ((descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 &&
-            (descriptors[0].revents & POLLIN) == 0) {
+        break;
+      }
+      if (poll_result == 0) {
+        continue;
+      }
+      if ((descriptors[0].revents & POLLIN) != 0) {
+        std::string message;
+        if (!read_frame(host.file_descriptor, &message) ||
+            !handle_protocol_message(&host, message)) {
           break;
         }
-        if ((descriptors[1].revents & POLLIN) != 0) {
-          drain_event_file_descriptor(session->event_file_descriptor);
-          collect_dns_results(&host);
-          collect_external_events(&host);
+      }
+      if ((descriptors[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0 &&
+          (descriptors[0].revents & POLLIN) == 0) {
+        break;
+      }
+      if ((descriptors[1].revents & POLLIN) != 0) {
+        drain_event_file_descriptor(session->event_file_descriptor);
+        collect_dns_results(&host);
+        collect_external_events(&host);
+      }
+      for (std::size_t index = 0; index < tcp_identifiers.size(); ++index) {
+        auto revents = descriptors[index + 2].revents;
+        if (revents != 0 &&
+            !process_tcp_poll_event(&host, tcp_identifiers[index], revents)) {
+          initialized = false;
+          break;
         }
-        for (std::size_t index = 0; index < tcp_identifiers.size(); ++index) {
-          auto revents = descriptors[index + 2].revents;
-          if (revents != 0 &&
-              !process_tcp_poll_event(&host, tcp_identifiers[index], revents)) {
-            initialized = false;
-            break;
-          }
-        }
-        auto tcp_server_offset = 2 + tcp_identifiers.size();
-        for (std::size_t index = 0; initialized &&
-                                    index < tcp_server_identifiers.size();
-             ++index) {
-          auto revents = descriptors[tcp_server_offset + index].revents;
-          if (revents != 0 && !process_tcp_server_poll_event(
-                                  &host, tcp_server_identifiers[index],
-                                  revents)) {
-            initialized = false;
-          }
+      }
+      auto tcp_server_offset = 2 + tcp_identifiers.size();
+      for (std::size_t index = 0; initialized &&
+                                  index < tcp_server_identifiers.size();
+           ++index) {
+        auto revents = descriptors[tcp_server_offset + index].revents;
+        if (revents != 0 && !process_tcp_server_poll_event(
+                                &host, tcp_server_identifiers[index],
+                                revents)) {
+          initialized = false;
         }
       }
     }
+  } catch (const std::exception& error) {
+    log_error(std::string("QuickJS runtime failed: ") + error.what());
   }
   free_host(&host);
   remove_session(session);

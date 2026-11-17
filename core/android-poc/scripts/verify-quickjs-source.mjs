@@ -7,14 +7,13 @@ import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import profile from '../../common/quickjs-source.json' with { type: 'json' };
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const androidRoot = join(projectRoot, 'android');
 const dependencyRoot = join(androidRoot, '.native-dependencies', 'quickjs');
-const version = '2026-06-04';
+const { version, archiveSha256 } = profile;
 const archiveUrl = `https://bellard.org/quickjs/quickjs-${version}.tar.xz`;
-const archiveSha256 =
-  'b376e839b322978313d929fd20663b11ba58b75df5a46c126dd19ea2fa70ad2a';
 const sourceRoot = join(dependencyRoot, `quickjs-${version}`);
 const requiredSourceFiles = [
   'LICENSE',

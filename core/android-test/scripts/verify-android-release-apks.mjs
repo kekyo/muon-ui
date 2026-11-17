@@ -38,6 +38,7 @@ const runtimeSonames = [
   'libc++_shared.so',
   'libcardio.so',
   'libmuon_android_rpc.so',
+  'libmuon_android_services.so',
   ...(includeQuickJs ? ['libmuon_javascript_runtime.so'] : []),
 ];
 const forbiddenDependencies = ['libcef', 'libgtk', 'libgio', 'muon-executor'];
@@ -114,7 +115,10 @@ const inspectElf = (readelf, filePath, entry, soname, plugin) => {
       needed.includes('libc++_shared.so') && needed.includes('libandroid.so'),
       `${filePath}: cardio DT_NEEDED mismatch`
     );
-  } else if (soname === 'libmuon_android_rpc.so') {
+  } else if (
+    soname === 'libmuon_android_rpc.so' ||
+    soname === 'libmuon_android_services.so'
+  ) {
     expectCondition(
       needed.includes('libcardio.so') && needed.includes('libc++_shared.so'),
       `${filePath}: muon runtime DT_NEEDED mismatch`

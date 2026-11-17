@@ -96,6 +96,7 @@ The following is an example of `muon.json`:
 | `notifications` | `object` | `{ "enabled": false }` | Shared local notification settings for Android and CEF. |
 | `android` | `object` | None | [Android build and display settings](./android.md). |
 | `node` | `object` | none | Optional Node.js sidecar project. |
+| `services` | `object` | `{}` | Native and QuickJS services whose lifetime is independent of the UI. |
 
 - `iconPath` accepts only `.png`. Relative paths are resolved from the directory where `muon.json` is located.
 - `iconPath` is the shared source for Windows PE/NSIS, Linux desktop, and the startup title-bar icon.
@@ -103,6 +104,22 @@ The following is an example of `muon.json`:
   Therefore, if an existing asset has the same entry, the build fails.
 - To use separate icons only for Windows or only for Linux, specify `windows.resource.iconPath` or `linux.desktop.iconPath` respectively as overrides.
 - To change only the title-bar icon of a normal browser window at runtime, use `window.muon.browser.setTitleBarIcon()`.
+
+## services key
+
+Keys are service IDs of up to 64 ASCII letters, digits, `_`, `.`, or `-`, starting with a letter. Paths are resolved relative to this configuration file.
+
+| Key | Type | Default or condition | Meaning |
+| --- | --- | --- | --- |
+| `runtime` | `"native" \| "quickjs"` | Required | Implementation runtime; `node` is unsupported. |
+| `artifact` | `string` | Required for native | SDK-generated service artifact `muon-plugin.json` |
+| `entry` | `string` | Required for QuickJS | JS/TS file default-exporting `defineService()` |
+| `autostart` | `boolean` | `false` | Resident preference when no saved user override exists |
+| `config` | `object` | `{}` | String keys and values supplied to the service; NUL is disallowed |
+| `plugins` | `object` | QuickJS only | Named native plugins with `native`, `allow`, and optional `config` |
+| `android` | `object` | Required for Android | `foregroundServiceType` and `notification`; specialUse also requires `specialUseSubtype` |
+
+See the [service guide](services.md) for implementations, Android purposes and notifications, autostart changes, and page communication. Grant page access separately under `plugin`.
 
 ## config key
 

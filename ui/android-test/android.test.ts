@@ -61,6 +61,29 @@ const project = async (config: unknown): Promise<string> => {
 };
 
 describe("public Android builds", () => {
+  it("allows release through an acquire capability without exposing unrelated operations", async () => {
+    const root = await project({
+      plugin: {
+        mode: "simple",
+        plugins: [{ name: "internal", allow: ["muon.services.acquire"] }],
+      },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].pluginAccess.internalAllow).toEqual([
+      "muon.services.acquire",
+      "muon.services.release",
+      "muon.services.rpc",
+    ]);
+  });
+  it("validates service declarations before invoking the APK builder", async () => {
+    const root = await project({
+      services: { worker: { runtime: "node", entry: "worker.ts" } },
+    });
+    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
+      /services.*runtime/,
+    );
+    expect(buildAndroid).not.toHaveBeenCalled();
+  });
   it("packages static notification categories and a separately validated small icon", async () => {
     const root = await project({
       notifications: { enabled: true, defaultCategory: "orders" },

@@ -1,6 +1,8 @@
 # muon-plugin-sdk
 
-Build native C/C++ plugins for muon-ui on CEF/Linux, CEF/Windows, and Android. Use the public headers and target-specific link libraries without obtaining or rebuilding muon-ui's source repository.
+Build native C/C++ plugins and services for muon-ui on CEF/Linux, CEF/Windows, and Android. The SDK also provides TS APIs for QuickJS services. Use the public headers and target-specific link libraries without obtaining or rebuilding muon-ui's source repository.
+
+Generate a service project with `npx muon-plugin init native/worker --kind service --name worker`, or define a TS service with `defineService()` from `muon-plugin-sdk/services`. See the [service guide](https://github.com/kekyo/muon-ui/blob/main/docs/en/services.md) for references, autostart, page communication, and native calls from QuickJS.
 
 ```bash
 npm install -D muon-plugin-sdk

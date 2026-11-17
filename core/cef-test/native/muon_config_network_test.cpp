@@ -3233,13 +3233,42 @@ static bool RunNotificationConfigValidationTest(
   return true;
 }
 
+static bool RunServiceHostConfigValidationTest(const std::filesystem::path& directory) {
+  const auto path = directory / "services.json";
+  for (const auto& invalid : std::vector<std::string>{
+      R"({"serviceHost":true})", R"({"serviceHost":{}})",
+      R"({"serviceHost":{"registry":42}})", R"({"serviceHost":{"registry":""}})",
+      R"({"serviceHost":{"registry":"a\u0000b"}})",
+      R"({"serviceHost":{"registry":"services.json","unknown":true}})"}) {
+    if (!WriteFile(path, invalid) || !LoadConfigExpectFailure(path, "serviceHost")) return false;
+  }
+  MuonConfig config;
+  if (!WriteFile(path, R"({"serviceHost":{"registry":"./muon-services.json"}})") ||
+      !LoadConfigExpectSuccess(path, &config) ||
+      !Expect(config.service_registry == directory / "muon-services.json",
+              "service registry was not resolved from its declaring configuration")) return false;
+  const auto override_directory = directory / "service-override";
+  std::filesystem::create_directories(override_directory);
+  const auto overlay = override_directory / "overlay.json";
+  if (!WriteFile(overlay, R"({"config":{"label":"overlay"}})") ||
+      !LoadConfigFilesExpectSuccess({path, overlay}, &config) ||
+      !Expect(config.service_registry == directory / "muon-services.json",
+              "unrelated config overlay changed service registry base")) return false;
+  if (!WriteFile(overlay, R"({"serviceHost":{"registry":"./other.json"}})") ||
+      !LoadConfigFilesExpectSuccess({path, overlay}, &config) ||
+      !Expect(config.service_registry == override_directory / "other.json",
+              "service registry override retained another configuration base")) return false;
+  return true;
+}
+
 int main() {
   const auto test_directory = CreateTestDirectory();
   if (!Expect(!test_directory.empty(), "failed to create test directory")) {
     return 1;
   }
 
-  const auto passed = RunNotificationConfigValidationTest(test_directory) &&
+  const auto passed = RunServiceHostConfigValidationTest(test_directory) &&
+                      RunNotificationConfigValidationTest(test_directory) &&
                       RunConfigLoadingTest(test_directory) &&
                       RunConfigJson5LoadingTest(test_directory) &&
                       RunNodeConfigLoadingTest(test_directory) &&

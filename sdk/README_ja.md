@@ -1,6 +1,8 @@
 # muon-plugin-sdk
 
-muon-uiのCEF/Linux・WindowsとAndroid向けに、C/C++のネイティブプラグインを開発するSDKです。muon-ui本体のソースやビルド環境を取得せず、公開ヘッダーと対象別のリンク用ライブラリを使用できます。
+muon-uiのCEF/Linux・WindowsとAndroid向けに、C/C++のネイティブプラグインとサービスを開発するSDKです。QuickJSサービス用のTS APIも提供します。muon-ui本体のソースやビルド環境を取得せず、公開ヘッダーと対象別のリンク用ライブラリを使用できます。
+
+サービス用の雛形は`npx muon-plugin init native/worker --kind service --name worker`で生成します。TSサービスは`muon-plugin-sdk/services`の`defineService()`で定義します。参照の取得・解放、自動起動、画面との通信、QuickJSからのnative呼び出しは[サービスのガイド](https://github.com/kekyo/muon-ui/blob/main/docs/ja/services.md)を参照してください。
 
 ```bash
 npm install -D muon-plugin-sdk

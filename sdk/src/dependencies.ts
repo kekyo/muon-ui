@@ -78,28 +78,51 @@ export interface PluginLibraryInspection {
 export const validatePluginLibraryDependencies = (
   libraries: readonly PluginLibraryInspection[],
   target: MuonPluginTarget
+): void => validateNativeLibraryDependencies(libraries, target, 'plugin');
+
+/**
+ * Checks service dependencies against the independent service host and OS.
+ * @param libraries - Service entry and ordinary shared dependencies.
+ * @param target - Application output target.
+ * @returns Normally when every dependency is provided or packaged.
+ * @remarks CEF, page UI and Android page RPC libraries are not host dependencies.
+ */
+export const validateServiceLibraryDependencies = (
+  libraries: readonly PluginLibraryInspection[],
+  target: MuonPluginTarget
+): void => validateNativeLibraryDependencies(libraries, target, 'service');
+
+const validateNativeLibraryDependencies = (
+  libraries: readonly PluginLibraryInspection[],
+  target: MuonPluginTarget,
+  kind: 'plugin' | 'service'
 ): void => {
   const os = getPluginTarget(target).os;
   const normalize = (name: string): string =>
     os === 'windows' ? name.toLowerCase() : name;
   const runtime =
     os === 'android'
-      ? ['libcardio.so', 'libc++_shared.so', 'libmuon_android_rpc.so']
+      ? ['libcardio.so', 'libc++_shared.so']
       : os === 'windows'
         ? [
             'libcardio.dll',
-            'libmuon-ui.dll',
-            'libcef.dll',
             'libstdc++-6.dll',
             'libgcc_s_seh-1.dll',
             'libgcc_s_dw2-1.dll',
             'libgcc_s_sjlj-1.dll',
             'libwinpthread-1.dll',
           ]
-        : ['libcardio.so', 'libmuon-ui.so', 'libcef.so'];
+        : ['libcardio.so'];
+  const pageRuntime =
+    os === 'android'
+      ? ['libmuon_android_rpc.so']
+      : os === 'windows'
+        ? ['libmuon-ui.dll', 'libcef.dll']
+        : ['libmuon-ui.so', 'libcef.so'];
   const reserved = new Set(
     [
       ...runtime,
+      ...(kind === 'plugin' ? pageRuntime : []),
       ...(os === 'android'
         ? androidSystem
         : os === 'windows'

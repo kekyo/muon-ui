@@ -142,7 +142,8 @@ int muon_prepare_ensure_node_catalog_cache_with_status_progress(
  * When `engines.node` was omitted, only matching LTS releases are considered.
  * When it was specified, matching LTS releases are preferred and every
  * matching release is considered only if no LTS release matches. Within the
- * selected group, the greatest semantic version is selected.
+ * selected group, the greatest semantic version is selected. Valid prerelease
+ * entries are checked for catalog consistency but never selected.
  */
 int muon_prepare_resolve_node_artifact(
     const char *cache_dir, const char *target,

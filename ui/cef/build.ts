@@ -33,6 +33,11 @@ import {
 } from "../common/native-plugins.js";
 import { resolveMuonPluginAccessOptions } from "../common/plugin-access.js";
 import { resolveMuonNotificationConfig } from "../common/notification-config.js";
+import {
+  resolveMuonServices,
+  type MuonResolvedService,
+} from "../common/service-config.ts";
+import { stageMuonDesktopServices } from "./services.ts";
 
 import AdmZip from "adm-zip";
 
@@ -68,6 +73,7 @@ import {
 } from "./windows-code-signing.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "../common/app-icon.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
+import { expandMuonServicePermissions } from "../common/capability.ts";
 import type { MuonProgressCallback } from "../common/progress.js";
 import {
   assertMuonNodeProjectAssetSourceIsSafe,
@@ -145,6 +151,12 @@ export const buildDesktopMuonApp = async (
   const appName = resolveAppName(packageJson, options.appName);
   const appId = resolveAppId(packageJson, options.appId);
   const buildConfig = await readBuildConfig(root, options.configPath);
+  const services = await resolveMuonServices(
+    buildConfig.config.services,
+    buildConfig.directory,
+    targets,
+    { root, environment },
+  );
   const notifications = resolveMuonNotificationConfig(
     buildConfig.config.notifications,
   );
@@ -195,7 +207,11 @@ export const buildDesktopMuonApp = async (
       ),
     );
   }
-  const { android: _androidBuildConfig, ...desktopConfig } = buildConfig.config;
+  const {
+    android: _androidBuildConfig,
+    services: _serviceBuildConfig,
+    ...desktopConfig
+  } = buildConfig.config;
   const sourceConfig = createPackagedMuonNodeConfig(
     applyRuntimePluginConfig(
       { ...desktopConfig, notifications },
@@ -297,6 +313,7 @@ export const buildDesktopMuonApp = async (
       assetInput,
       sourceConfig,
       nativeArtifacts,
+      services,
       windowsResource,
       windowsCodeSigning,
       linuxDesktop,
@@ -473,13 +490,26 @@ const applyRuntimePluginConfig = (
     );
   }
   const plugin: JsonObject = sourcePlugin ?? {};
+  const merged: JsonObject = { ...plugin, ...runtimePluginConfig };
+  if (Array.isArray(merged.plugins)) {
+    merged.plugins = merged.plugins.map((entry) => {
+      if (
+        !isJsonObject(entry) ||
+        entry.name !== "internal" ||
+        !Array.isArray(entry.allow) ||
+        !entry.allow.every((value) => typeof value === "string")
+      )
+        return entry;
+      return {
+        ...entry,
+        allow: expandMuonServicePermissions(entry.allow as string[]),
+      };
+    });
+  }
 
   return {
     ...sourceConfig,
-    plugin: {
-      ...plugin,
-      ...runtimePluginConfig,
-    },
+    plugin: merged,
   };
 };
 
@@ -496,6 +526,7 @@ const buildMuonTarget = async (input: {
     string,
     import("muon-plugin-sdk/artifact").ResolvedPluginArtifact
   >;
+  services: readonly MuonResolvedService[];
   windowsResource: ResolvedMuonWindowsResource;
   windowsCodeSigning: ResolvedMuonWindowsCodeSigning | undefined;
   linuxDesktop: ResolvedMuonLinuxDesktop;
@@ -603,6 +634,18 @@ const buildMuonTarget = async (input: {
       input.target,
       join(outputPath, "plugins"),
     );
+  const serviceRegistry = await stageMuonDesktopServices(
+    input.services,
+    input.target,
+    outputPath,
+  );
+  const serviceConfig: JsonObject =
+    serviceRegistry === undefined
+      ? input.sourceConfig
+      : {
+          ...input.sourceConfig,
+          serviceHost: { registry: "./" + serviceRegistry },
+        };
 
   input.progress?.({
     phase: "build",
@@ -616,9 +659,9 @@ const buildMuonTarget = async (input: {
   );
   const embeddedConfig = createEmbeddedConfig(
     input.nativeArtifacts.size === 0
-      ? input.sourceConfig
+      ? serviceConfig
       : {
-          ...input.sourceConfig,
+          ...serviceConfig,
           plugin: applyMuonNativePluginCatalogs(
             input.sourceConfig.plugin as unknown as MuonRuntimePluginConfig,
             input.nativeArtifacts,

@@ -108,6 +108,11 @@ dependencies {
 }
 
 val bundletoolVersion = "1.18.3"
+// Bundletool's bundled protobuf still uses Unsafe on JDK 24+. Keep only this
+// external tool on JDK 21: https://github.com/google/bundletool/issues/387
+val bundletoolJava = javaToolchains.launcherFor {
+    languageVersion.set(JavaLanguageVersion.of(21))
+}
 val bundletoolJar = rootProject.layout.projectDirectory.file(
     ".generated/bundletool/bundletool-all-$bundletoolVersion.jar",
 )
@@ -135,6 +140,7 @@ val debugKeyPassword = requireNotNull(debugSigning.keyPassword) {
 }
 
 val buildReleaseApks by tasks.registering(JavaExec::class) {
+    javaLauncher.set(bundletoolJava)
     group = "build"
     description = "Builds a signed APK set from the release Android App Bundle."
     dependsOn("bundleRelease", prepareBundletool)
@@ -161,6 +167,7 @@ val buildReleaseApks by tasks.registering(JavaExec::class) {
 }
 
 tasks.register<JavaExec>("installReleaseBundleApks") {
+    javaLauncher.set(bundletoolJava)
     group = "install"
     description = "Installs the release APK set on the exact ANDROID_SERIAL device."
     dependsOn(buildReleaseApks)

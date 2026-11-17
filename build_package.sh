@@ -21,6 +21,9 @@ MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER="/workspace/${MUON_NOTIFICATION_REND
 MUON_SERVER_RENDERER_HEADER_RELATIVE="core/cef/.build/server-renderer/muon_server_renderer_generated.h"
 MUON_SERVER_RENDERER_HEADER_HOST="${SCRIPT_DIR}/${MUON_SERVER_RENDERER_HEADER_RELATIVE}"
 MUON_SERVER_RENDERER_HEADER_CONTAINER="/workspace/${MUON_SERVER_RENDERER_HEADER_RELATIVE}"
+MUON_SERVICE_RENDERER_HEADER_RELATIVE="core/cef/.build/service-renderer/muon_service_renderer_generated.h"
+MUON_SERVICE_RENDERER_HEADER_HOST="${SCRIPT_DIR}/${MUON_SERVICE_RENDERER_HEADER_RELATIVE}"
+MUON_SERVICE_RENDERER_HEADER_CONTAINER="/workspace/${MUON_SERVICE_RENDERER_HEADER_RELATIVE}"
 
 usage() {
   cat <<'EOF'
@@ -226,6 +229,7 @@ build_linux_target() {
     -e "MUON_CORE_VERSION_HEADER=${MUON_CORE_VERSION_HEADER_CONTAINER}" \
     -e "MUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER}" \
     -e "MUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_CONTAINER}" \
+    -e "MUON_SERVICE_RENDERER_HEADER=${MUON_SERVICE_RENDERER_HEADER_CONTAINER}" \
     -e "MUON_NODE_BRIDGE_PREBUILT=1" \
     -e "MUON_TRA_FFIC_ROOT=/workspace-deps/tra-ffic" \
     -e "MUON_CARDIO_ROOT=/workspace-deps/cardio" \
@@ -279,10 +283,12 @@ build_windows_targets() {
   npm run build:target --workspace muon-builder -- dist Release windows-amd64
   npm run build:target --workspace muon-core -- dist Release windows-i686 \
     "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" \
-    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}"
+    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}" \
+    "-DMUON_SERVICE_RENDERER_HEADER=${MUON_SERVICE_RENDERER_HEADER_HOST}"
   npm run build:target --workspace muon-core -- dist Release windows-amd64 \
     "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" \
-    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}"
+    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}" \
+    "-DMUON_SERVICE_RENDERER_HEADER=${MUON_SERVICE_RENDERER_HEADER_HOST}"
 }
 
 stage_targets() {
@@ -436,6 +442,11 @@ build_dist() {
   [[ -f "${MUON_SERVER_RENDERER_HEADER_HOST}" ]] ||
     fail "Server renderer header was not generated: ${MUON_SERVER_RENDERER_HEADER_HOST}"
 
+  printf 'Building shared service renderer\n'
+  npm run build:service-renderer --workspace muon-core
+  [[ -f "${MUON_SERVICE_RENDERER_HEADER_HOST}" ]] ||
+    fail "Service renderer header was not generated: ${MUON_SERVICE_RENDERER_HEADER_HOST}"
+
   printf 'Preparing shared native source dependencies\n'
   bash core/cef/build_yyjson.sh
   bash core/cef/build_llhttp.sh
@@ -523,6 +534,11 @@ verify_package_file_list() {
   require_pack_file "dist/runtime/linux-amd64/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-armhf/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-arm64/muon-executor-supervisor"
+  require_pack_file "dist/runtime/linux-amd64/muon-service-host"
+  require_pack_file "dist/runtime/linux-armhf/muon-service-host"
+  require_pack_file "dist/runtime/linux-arm64/muon-service-host"
+  require_pack_file "dist/runtime/windows-i686/muon-service-host.exe"
+  require_pack_file "dist/runtime/windows-amd64/muon-service-host.exe"
   local linux_target
   for linux_target in linux-amd64 linux-armhf linux-arm64; do
     require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json"

@@ -31,6 +31,8 @@ declare global {
     readonly android?: MuonAndroidApi;
     /** Native local notifications, present only when enabled and permitted. */
     readonly notifications?: MuonNotificationsApi;
+    /** Configured background services, present when permitted by the plugin policy. */
+    readonly services?: MuonServicesApi;
     /** CEF-only page-owned loopback HTTP servers, present when permitted. */
     readonly server?: MuonServerApi;
     /**
@@ -41,6 +43,177 @@ declare global {
      * `createNode()` through the `muon:node` virtual module instead.
      */
     readonly node?: MuonNodeApi;
+  }
+
+  /** An OS-retained exit of the shared host, not a failure of the current service. */
+  interface MuonServiceHostExit {
+    /** Platform that supplied the historical observation. */
+    readonly platform: "android";
+    /** Exact process name of the previous shared service host. */
+    readonly processName: string;
+    /** PID of the process that ended; unrelated to the current generation. */
+    readonly pid: number;
+    /** OS wall-clock time in milliseconds since Unix epoch, as a decimal string. */
+    readonly timestampMs: string;
+    /** Android reason name in lower-case hyphenated form; unknown codes use "unknown". */
+    readonly reason: string;
+    /** Original ApplicationExitInfo reason code, including future unknown values. */
+    readonly reasonCode: number;
+    /** Original exit status or signal number reported by Android. */
+    readonly status: number;
+    /** Optional OS diagnostic text, without a stable or localized format. */
+    readonly description: string | null;
+  }
+
+  /** A copied service observation that does not keep its runtime alive. */
+  interface MuonServiceState {
+    /** Logical identity declared in muon.json. */
+    readonly id: string;
+    /** Actual runtime state, independently of the autostart preference. */
+    readonly state: "stopped" | "starting" | "running" | "stopping" | "failed";
+    /** Decimal generation identity; "0" means the runtime has never started. */
+    readonly generation: string;
+    /** Decimal identity of the last committed autostart setting operation. */
+    readonly revision: string;
+    /** Effective persistent preference, falling back to the application default. */
+    readonly autostart: boolean;
+    /** Whether the host currently owns the single resident reference. */
+    readonly resident: boolean;
+    /** Number of page references, including acquisitions still starting. */
+    readonly clientReferences: number;
+    /** Last runtime failure, or an empty string when there is no failure. */
+    readonly error: string;
+    /**
+     * Most recent retained OS record for this shared host, read at host startup.
+     * @remarks Null on unsupported platforms, before Android API 30, or when no
+     * record can be read. A record does not imply that this logical service was
+     * running then, and never changes the current state, generation, or error.
+     */
+    readonly lastHostExit: MuonServiceHostExit | null;
+  }
+
+  /** One page-owned reference to an acquired service generation. */
+  interface MuonServiceHandle {
+    /** Configured service identity. */
+    readonly id: string;
+    /** Decimal generation identity, preserved without conversion to a JS number. */
+    readonly generation: string;
+    /** Validated runtime metadata; use the service SDK to inspect or bind typed calls. */
+    readonly interface: unknown;
+    /**
+     * Invokes a declared method on this reference and generation.
+     * @param method - Declared method name.
+     * @param args - Arguments; 64-bit integers use bigint and bytes use Uint8Array.
+     * @param options - Optional cancellation for this invocation.
+     * @returns Decoded result; errors include a stable code property.
+     * @remarks Input callbacks expire when their method completes or is cancelled.
+     */
+    readonly call: (
+      method: string,
+      args: readonly unknown[],
+      options?: {
+        readonly signal?: MuonServiceCancellationSignal;
+      },
+    ) => Promise<unknown>;
+    /**
+     * Receives typed event values sequentially without creating a lifetime reference.
+     * @param event - Declared event name.
+     * @param listener - Event handler; rejection closes this subscription.
+     * @returns A subscription that reports termination and can be closed explicitly.
+     */
+    readonly subscribe: (
+      event: string,
+      listener: (value: unknown) => void | Promise<void>,
+    ) => Promise<MuonServiceSubscription>;
+    /**
+     * Cancels this handle's calls and subscriptions and releases its reference.
+     * @returns Completion of reference release; repeated calls share this promise.
+     * @remarks Page destruction also reclaims references through the native owner.
+     * Releasing the final reference requests shutdown but does not await disposal.
+     */
+    readonly release: () => Promise<void>;
+  }
+
+  /** A FIFO event subscription tied to one acquired service handle. */
+  interface MuonServiceSubscription {
+    /** Always resolves; overflow and disconnection are reported as a failure value. */
+    readonly closed: Promise<
+      { readonly code: string; readonly message: string } | undefined
+    >;
+    /** @returns Completion of unsubscribe; repeated calls share the same promise. */
+    readonly close: () => Promise<void>;
+  }
+
+  /** Cancellation source; browser AbortSignal instances are compatible. */
+  interface MuonServiceCancellationSignal {
+    /** Whether cancellation has already been requested. */
+    readonly aborted: boolean;
+    /** @param type - Abort event. @param listener - Cancellation callback. @param options - One-shot registration. */
+    readonly addEventListener: (
+      type: "abort",
+      listener: () => void,
+      options: { readonly once: boolean },
+    ) => void;
+    /** @param type - Abort event. @param listener - Previously registered callback. */
+    readonly removeEventListener: (type: "abort", listener: () => void) => void;
+  }
+
+  /** A non-owning state observer, automatically removed when its page disappears. */
+  interface MuonServiceWatcher {
+    /**
+     * Stops observation and settles any pending state request.
+     * @returns Completion of removal; repeated calls share this promise.
+     * @remarks Does not release service references or change autostart settings.
+     */
+    readonly close: () => Promise<void>;
+  }
+
+  /**
+   * Receives the initial service state and subsequent coalesced observations.
+   * @param state - Copied current state; retaining it does not keep a service alive.
+   * @returns Optional asynchronous processing, during which changes are coalesced.
+   */
+  type MuonServiceStateListener = (
+    state: MuonServiceState,
+  ) => void | Promise<void>;
+
+  /** Configured application services with lifetimes independent of their UI pages. */
+  interface MuonServicesApi {
+    /**
+     * Reserves a reference and starts the service when necessary.
+     * @param id - Logical service identity declared by the application.
+     * @returns A handle after startup succeeds; rejects on startup failure.
+     * @remarks Every successful call owns a distinct reference. Reopening a page
+     * can acquire an existing generation retained by the host or another page.
+     */
+    readonly acquire: (id: string) => Promise<MuonServiceHandle>;
+    /**
+     * Reads current runtime and desired lifetime without creating a reference.
+     * @param id - Logical service identity declared by the application.
+     * @returns A copied state observation.
+     */
+    readonly getState: (id: string) => Promise<MuonServiceState>;
+    /**
+     * Persists the user preference and updates the host's resident reference.
+     * @param id - Logical service identity declared by the application.
+     * @param enabled - Whether the host should retain one resident reference.
+     * @returns After persistence and policy update, without waiting for runtime stop.
+     * @remarks OFF preserves every other page's reference. Startup failures remain
+     * visible in getState/watchState independently of this saved preference.
+     */
+    readonly setAutostart: (id: string, enabled: boolean) => Promise<void>;
+    /**
+     * Observes service state without acquiring a runtime reference.
+     * @param id - Logical service identity declared by the application.
+     * @param listener - Receives initial state after this method returns, then changes.
+     * @returns A page-owned observer with idempotent asynchronous close.
+     * @remarks Slow listeners receive the latest state, not a history of transitions.
+     * Listener failures are logged; a disconnected host closes the observation.
+     */
+    readonly watchState: (
+      id: string,
+      listener: MuonServiceStateListener,
+    ) => Promise<MuonServiceWatcher>;
   }
 
   /** Options for creating a page-owned native HTTP server. */
@@ -2375,19 +2548,19 @@ declare global {
      */
     readonly getRuntimeInfo: () => Promise<MuonRuntimeInfo>;
     /**
-     * Return whether the current muon application starts with the user session.
+     * Return whether login automatically displays this application's UI.
      *
-     * @returns A promise for the autostart state, or `undefined` when unknown.
-     * @remarks The active launch source selects the platform backend. muon uses
-     * XDG Autostart on POSIX desktop environments and the current user's Run
-     * registry entry on Windows.
+     * @returns The saved UI preference, or `undefined` for an unsupported launch source.
+     * @remarks Service residency is configured independently with `services.setAutostart`.
+     * The OS login entry is retained while UI auto-display or any service autostart is enabled.
      */
     readonly getAutostart: () => Promise<boolean | undefined>;
     /**
-     * Enable or disable startup with the user session.
+     * Configure automatic UI display at the next user login.
      *
-     * @param enabled - Whether autostart should be enabled.
-     * @returns A promise that resolves when the platform backend updates the setting.
+     * @param enabled - Whether login should display the UI.
+     * @returns A promise that resolves after the UI preference is saved.
+     * @remarks Service residency and the current UI lifetime are independent of this preference.
      */
     readonly setAutostart: (enabled: boolean) => Promise<void>;
   }

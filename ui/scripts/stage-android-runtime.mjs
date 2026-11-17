@@ -7,6 +7,7 @@ import { access, chmod, copyFile, cp, mkdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { prepareAndroid } from "../.build/android-host/index.mjs";
+import quickjs from "../../core/common/quickjs-source.json" with { type: "json" };
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repository = resolve(root, "..");
@@ -51,6 +52,10 @@ for (const [name, source] of [
   ["tra-ffic", "deps/tra-ffic/LICENSE"],
   ["libffi", "deps/tra-ffic/deps/libffi/LICENSE"],
   ["sha2", "deps/sha2/sha2.h"],
+  [
+    "quickjs",
+    `core/android/.native-dependencies/quickjs/quickjs-${quickjs.version}/LICENSE`,
+  ],
 ]) {
   await copyFile(
     join(repository, source),

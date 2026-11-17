@@ -1,8 +1,8 @@
 # Android向けQuickJSの試作
 
-Android WebView上の`muon.node.createNode()`から、別プロセスのQuickJSを利用する実験用アプリです。QuickJSの実装と固有テストをこのディレクトリにまとめています。
+Android WebView上の`muon.node.createNode()`から、別プロセスのQuickJSを利用する実験用アプリです。このディレクトリではNode.jsに似たAPIをQuickJS上で提供する試作と、その固有テストを管理しています。QuickJSエンジンの共通部分は`core/common`に置いています。
 
-利用者アプリの作成は[Androidアプリのビルド・配布](../../docs/ja/android.md)を参照してください。共有ランタイムは[core/android](../android)を使用します。製品の回帰テストとテストプラグインは[core/android-test](../android-test)に分離しており、QuickJSは公開APKへ組み込みません。
+利用者アプリの作成は[Androidアプリのビルド・配布](../../docs/ja/android.md)を参照してください。共有ランタイムは[core/android](../android)、製品の回帰テストとテストプラグインは[core/android-test](../android-test)を使用します。公開APKでは`services`の`runtime: "quickjs"`で[バックグラウンドサービス](../../docs/ja/services.md)を実装できます。この試作の`muon.node.createNode()`とNode.js互換APIは、公開APKの機能には含まれません。
 
 ## 対応環境
 

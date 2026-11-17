@@ -189,6 +189,15 @@ const createFakeMuonPackageDist = async (
       ]),
     );
     await writeFile(join(runtimeDirectory, descriptor.uiLibraryName), "ui\n");
+    await writeExecutable(
+      join(
+        runtimeDirectory,
+        target.startsWith("windows-")
+          ? "muon-service-host.exe"
+          : "muon-service-host",
+      ),
+      `${target} service host\n`,
+    );
     await writeFile(
       join(runtimeDirectory, descriptor.cardioLibraryName),
       "cardio\n",

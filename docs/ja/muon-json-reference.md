@@ -95,12 +95,29 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `notifications` | `object` | `{ "enabled": false }` | Android・CEF共通のローカル通知設定です。 |
 | `android` | `object` | なし | [Androidのビルド・表示設定](./android.md)です。 |
 | `node`     | `object`          | なし             | オプションのNode.js sidecarプロジェクトです。                        |
+| `services` | `object` | `{}` | UIから独立したnative・QuickJSサービスの一覧です。 |
 
 - `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
 - `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
   内部的には、 `asset://main/.muon/app-icon.png"` に配置されます。従って、既存アセットに同じエントリがある場合はビルドエラーになります。
 - Windowsだけ、またはLinuxだけ別アイコンにしたい場合は、それぞれ `windows.resource.iconPath`、`linux.desktop.iconPath` をoverrideとして指定します。
 - 実行中に通常ブラウザウインドウのタイトルバーアイコンだけを変更する場合は、`window.muon.browser.setTitleBarIcon()` を使用します。
+
+## servicesキー
+
+サービスIDをキーとし、次の値を指定します。IDは英字で始まる64文字以内の英数字・`_`・`.`・`-`です。パスはこの設定ファイルからの相対パスとして解決します。
+
+| キー | 型 | 既定値・条件 | 内容 |
+| --- | --- | --- | --- |
+| `runtime` | `"native" \| "quickjs"` | 必須 | 実装方式。`node`は未対応です。 |
+| `artifact` | `string` | nativeで必須 | SDKで生成したサービス成果物の`muon-plugin.json` |
+| `entry` | `string` | QuickJSで必須 | `defineService()`をdefault exportするJS/TSファイル |
+| `autostart` | `boolean` | `false` | 利用者による上書きがない場合の常駐設定 |
+| `config` | `object` | `{}` | サービスへ渡す文字列のキーと値。NULは含められません。 |
+| `plugins` | `object` | QuickJSのみ | nativeプラグイン名ごとの`native`、`allow`、任意の`config` |
+| `android` | `object` | Android向けで必須 | `foregroundServiceType`と`notification`。specialUseには`specialUseSubtype`も必要です。 |
+
+実装例、Androidの用途と通知、自動起動の変更、画面との通信は[サービスのガイド](services.md)を参照してください。サービスへの操作権限は`plugin`で別に指定します。
 
 ## configキー
 

@@ -21,6 +21,17 @@ it('builds native dependencies from shallow checkouts without release tags', asy
   const output = join(project, '.native-dependencies');
   try {
     await mkdir(join(project, 'scripts'), { recursive: true });
+    await mkdir(join(fixture, 'builder'), { recursive: true });
+    await mkdir(join(fixture, 'core/common'), { recursive: true });
+    for (const name of ['prepare-quickjs-source.mjs', 'quickjs-source.json'])
+      await cp(
+        join(repository, 'core/common', name),
+        join(fixture, 'core/common', name)
+      );
+    await cp(
+      join(repository, 'builder/build_yyjson.sh'),
+      join(fixture, 'builder/build_yyjson.sh')
+    );
     await cp(
       resolve('../android/scripts/build-native-dependencies.mjs'),
       join(project, 'scripts/build-native-dependencies.mjs')

@@ -24,7 +24,11 @@ import { resolveWindowsRuntimeTarget } from "./plugin-e2e/windows-matrix.js";
 import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.js";
 import { stageWindowsRuntimeDirectory } from "./plugin-e2e/windows-staging.js";
 import { runNotificationDesktopCase } from "./notifications-desktop-case.js";
-import { createWindowsNotificationDriver } from "./notifications-windows-accessibility.js";
+import {
+  captureWindowsNotificationOpening,
+  createWindowsNotificationArtifacts,
+  createWindowsNotificationDriver,
+} from "./notifications-windows-accessibility.ts";
 import { runWindowsNotificationLaunchCase } from "./notifications-windows-launch-case.js";
 import type { MuonNotificationEvent } from "../common/renderer/notifications.js";
 
@@ -192,12 +196,9 @@ describeWindowsE2e(suiteName, () => {
       const remote = agent;
       const directory = win32.join(root, mode);
       const assets = win32.join(directory, "assets", "main");
-      const artifacts = resolve(
-        ".run/notifications-windows",
-        target.target,
-        mode,
+      const artifacts = await createWindowsNotificationArtifacts(
+        resolve(".run/notifications-windows", target.target, mode),
       );
-      await mkdir(artifacts, { recursive: true });
       await remote.files.mkdir(assets, { recursive: true });
       const appId = `dev.muon.NotificationTest.${target.target}.${mode}.run${process.pid}`;
       const appName = `Muon Notifications ${target.target} ${mode}`;
@@ -380,10 +381,16 @@ describeWindowsE2e(suiteName, () => {
         await evaluate(
           `await notificationApi.post({id:'status-probe',title:${JSON.stringify(statusTitle)},body:'Register this notification source'}); return true;`,
         );
-        await driver.waitForNotification(
-          statusTitle,
-          join(artifacts, "status-probe.png"),
+        // Retain the opening animation as evidence alongside the stable crop.
+        const opening = await captureWindowsNotificationOpening(
+          remote.recordVideo(3000, join(artifacts, "status-probe-opening.mp4")),
+          driver.waitForNotification(
+            statusTitle,
+            join(artifacts, "status-probe.png"),
+          ),
         );
+        expect(opening.frameCount).toBeGreaterThan(1);
+        expect(opening.clipped).toBe(false);
         await evaluate(
           "await notificationApi.cancel('status-probe'); return true;",
         );

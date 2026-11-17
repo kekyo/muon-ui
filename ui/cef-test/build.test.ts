@@ -315,6 +315,15 @@ const createFakeMuonPackageDistForTargets = async (
       createMuonEmbeddedConfigSlot(),
       "core",
     );
+    await writeFile(
+      join(
+        runtimeDirectory,
+        target.startsWith("windows-")
+          ? "muon-service-host.exe"
+          : "muon-service-host",
+      ),
+      `${target} service host\n`,
+    );
     if (target.startsWith("linux-")) {
       await chmod(runtimeExecutablePath, 0o644);
       const supervisorPath = join(runtimeDirectory, "muon-executor-supervisor");
@@ -1431,6 +1440,11 @@ describe("muon build", () => {
         `${target} executor supervisor\n`,
       );
       expect((await stat(supervisorPath)).mode & 0o777).toBe(0o755);
+      const serviceHost = join(root, "dist-muon", target, "muon-service-host");
+      await expect(readFile(serviceHost, "utf8")).resolves.toBe(
+        `${target} service host\n`,
+      );
+      expect((await stat(serviceHost)).mode & 0o777).toBe(0o755);
     }
   });
 

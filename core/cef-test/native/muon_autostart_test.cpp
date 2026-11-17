@@ -232,6 +232,18 @@ static bool RunAppImageRelocationTest(
   return true;
 }
 
+static bool RunLoginArgumentsTest(const std::filesystem::path& directory) {
+  SetEnvironment("XDG_CONFIG_HOME", directory / "login-config");
+  auto options = CreateTestOptions(directory, "normal");
+  options.arguments = {"--muon-autostart", "-c", "日本語 config %f.json"};
+  std::string error;
+  if (!Expect(SetMuonAutostart(options, true, &error), error)) return false;
+  std::ifstream input(directory / "login-config/autostart/sample-app.desktop");
+  const std::string content((std::istreambuf_iterator<char>(input)), {});
+  return Expect(content.find("\"--muon-autostart\" \"-c\" \"日本語 config %%f.json\"") != std::string::npos,
+      "login must preserve individually quoted startup arguments");
+}
+
 int main() {
   const auto test_directory = CreateTestDirectory();
   if (!Expect(!test_directory.empty(), "failed to create test directory")) {
@@ -244,7 +256,8 @@ int main() {
       RunXdgSystemShadowTest(test_directory) &&
       RunUnknownLaunchSourceTest(test_directory) &&
       RunLaunchSourceParsingTest() &&
-      RunAppImageRelocationTest(test_directory);
+      RunAppImageRelocationTest(test_directory) &&
+      RunLoginArgumentsTest(test_directory);
 
   std::error_code error;
   std::filesystem::remove_all(test_directory, error);

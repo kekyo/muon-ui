@@ -1,0 +1,123 @@
+{
+  "startPage": "https://main.asset.muon.invalid/index.html",
+  "values": {},
+  "plugin": {
+    "mode": "simple",
+    "enabled": true,
+    "internalAllow": [
+      "muon.environments.getProcessId",
+      "muon.services.acquire",
+      "muon.services.release",
+      "muon.services.getState",
+      "muon.services.setAutostart",
+      "muon.services.watchState",
+      "muon.services.rpc"
+    ]
+  },
+  "services": {
+    "quickjs-fault": {
+      "runtime": "quickjs",
+      "asset": "muon/services/quickjs-fault.js",
+      "autostart": true,
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickJsFaultService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "quickjs-fault",
+          "title": "QuickJS fault fixture",
+          "text": "Execution deadline regression"
+        }
+      }
+    },
+    "quickjs": {
+      "runtime": "quickjs",
+      "asset": "muon/services/quickjs.js",
+      "autostart": true,
+      "config": { "label": "日本語😀", "stopDelayMs": "1" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickJsService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "quickjs",
+          "title": "Muon QuickJS fixture",
+          "text": "Resident JavaScript processing"
+        }
+      }
+    },
+    "alpha.v1-test": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": true,
+      "config": { "port": "49171", "label": "日本語😀" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureAlphaService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "alpha",
+          "title": "Muon alpha fixture",
+          "text": "Resident native processing"
+        }
+      }
+    },
+    "rejected": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": false,
+      "config": { "port": "49173" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureRejectedService",
+        "foregroundServiceType": "camera",
+        "notification": {
+          "channelId": "rejected",
+          "title": "Rejected FGS",
+          "text": "Must fail before native start"
+        }
+      }
+    },
+    "beta": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": false,
+      "config": { "port": "49172" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureBetaService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "beta",
+          "title": "Muon beta fixture",
+          "text": "Page-owned native processing"
+        }
+      }
+    },
+    "held": {
+      "runtime": "native",
+      "library": "libmuon_service_held_fixture.so",
+      "autostart": false,
+      "config": { "port": "49173" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureHeldService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "held",
+          "title": "Muon held fixture",
+          "text": "OS service constraints regression"
+        }
+      }
+    },
+    "timed": {
+      "runtime": "native",
+      "library": "libmuon_service_fixture.so",
+      "autostart": false,
+      "config": { "port": "49174" },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureTimedService",
+        "foregroundServiceType": "dataSync",
+        "notification": {
+          "channelId": "timed",
+          "title": "Muon timed fixture",
+          "text": "OS service constraints regression"
+        }
+      }
+    }
+  }
+}

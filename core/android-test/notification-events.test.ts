@@ -160,6 +160,7 @@ describe('durable notification event facade', () => {
         'muon.browser': 'browser',
         'muon.environments': 'environments',
         'muon.fs': 'fs',
+        'muon.services': 'services-capability',
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings',
         'muon.android.notifications': 'android',

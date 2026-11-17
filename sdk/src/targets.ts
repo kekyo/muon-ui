@@ -27,6 +27,8 @@ export interface MuonPluginTargetDescriptor {
 
 /** Plugin ABI supported by this SDK and matching muon runtimes. */
 export const muonPluginAbiVersion = runtimeProfile.pluginAbi;
+/** Service factory ABI supported by this SDK and matching service hosts. */
+export const muonServiceAbiVersion = runtimeProfile.serviceAbi;
 /** NDK revision used by the matching Android runtime. */
 export const muonPluginNdkVersion = runtimeProfile.ndkVersion;
 /** Android API level required by the shared runtime. */

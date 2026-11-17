@@ -12,7 +12,8 @@
     "generate:runtime-version-header": "screw-up format -i cmake/muon_core_version_generated.h.in",
     "build:test": "bash ./build.sh test Release linux-amd64",
     "dev": "bash ./build.sh dev && node scripts/run-dev-supervisor.mjs",
-    "test": "npm run build:test && xvfb-run -a node ../../scripts/run-xvfb-command.mjs ctest --test-dir .build/test/linux-amd64/release --output-on-failure"
+    "test": "npm run build:test && xvfb-run -a node ../../scripts/run-xvfb-command.mjs ctest --test-dir .build/test/linux-amd64/release --output-on-failure",
+    "build:service-renderer": "vite build --config service-renderer.vite.config.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

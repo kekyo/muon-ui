@@ -565,6 +565,8 @@ struct MuonNotificationsConfig {
  * Root muon.json configuration.
  */
 struct MuonConfig {
+  /** Resolved generated service registry path; empty when services are absent. */
+  std::filesystem::path service_registry;
   /** Application-owned local notification settings. */
   MuonNotificationsConfig notifications;
   /**

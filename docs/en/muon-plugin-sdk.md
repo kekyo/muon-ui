@@ -2,6 +2,8 @@
 
 Add `muon-plugin-sdk` as a development dependency to build C/C++ plugins without obtaining the muon-ui repository. CEF on Linux and Windows and the Android runtime share the public C ABI. Applications control plugin registration and permissions in `muon.json`.
 
+Use `init --kind service` to generate a service project. See [background services](services.md) for QuickJS TS APIs, page communication, and native calls from services.
+
 ## Create a plugin
 
 Run these commands in your application directory. The defaults are C++20 with cardio, Make, and pkg-config. Use the SDK from the same release as muon-ui.

@@ -145,7 +145,7 @@ npm run dev:vite -- --no-muon
 When omitted, the `plugin` setting from `muon.json` is used as-is, and an omitted `plugin.mode` is treated as `"validate"`.
 Validate mode does not expose `window.muon`; applications import permitted virtual modules. Importers are checked at build time, while the native host checks capabilities and allowed functions. These checks do not prevent other code in the same page from using an obtained capability.
 Android also supports validate mode. External plugins require ABI-specific libraries and metadata; page conditions and available functions have Android-specific limits. See [Android configuration](./android.md#import-with-validate-mode).
-On desktop, configuring `node.project` prepares the Node.js runtime in validate mode and starts a sidecar when `createNode()` is called through `muon:node`. This module requires no `pluginAccess.plugins[].imports` entry or allow setting. Public Android APKs provide neither Node.js nor QuickJS.
+On desktop, configuring `node.project` prepares the Node.js runtime in validate mode and starts a sidecar when `createNode()` is called through `muon:node`. This module requires no `pluginAccess.plugins[].imports` entry or allow setting. Public Android APKs do not provide Node.js. QuickJS is available through [services](services.md).
 For the development server, the Node project and `engines.node` range are preflighted during Vite config resolution, and a failure may be reported as a warning. During a build, validation failures are errors.
 
 ```ts

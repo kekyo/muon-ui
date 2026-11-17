@@ -12,6 +12,7 @@ const packageRuntimeTargets = {
     nativeLauncher: "muon-launcher",
     nativePluginInspector: "muon-plugin-inspector",
     coreExecutable: "muon-core",
+    serviceHost: "muon-service-host",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
     nodePluginLibrary: "node.so",
@@ -22,6 +23,7 @@ const packageRuntimeTargets = {
     nativeLauncher: "muon-launcher",
     nativePluginInspector: "muon-plugin-inspector",
     coreExecutable: "muon-core",
+    serviceHost: "muon-service-host",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
     nodePluginLibrary: "node.so",
@@ -32,6 +34,7 @@ const packageRuntimeTargets = {
     nativeLauncher: "muon-launcher",
     nativePluginInspector: "muon-plugin-inspector",
     coreExecutable: "muon-core",
+    serviceHost: "muon-service-host",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
     nodePluginLibrary: "node.so",
@@ -42,6 +45,7 @@ const packageRuntimeTargets = {
     nativeLauncher: "muon-launcher.exe",
     nativePluginInspector: "muon-plugin-inspector.exe",
     coreExecutable: "muon-core.exe",
+    serviceHost: "muon-service-host.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
     nodePluginLibrary: "node.dll",
@@ -51,6 +55,7 @@ const packageRuntimeTargets = {
     nativeLauncher: "muon-launcher.exe",
     nativePluginInspector: "muon-plugin-inspector.exe",
     coreExecutable: "muon-core.exe",
+    serviceHost: "muon-service-host.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
     nodePluginLibrary: "node.dll",
@@ -137,6 +142,7 @@ for (const target of targets) {
   const runtimePath = join("dist", "runtime", target);
   const expectedPayload = [
     descriptor.coreExecutable,
+    descriptor.serviceHost,
     descriptor.uiLibrary,
     descriptor.cardioLibrary,
     join("plugins", descriptor.nodePluginLibrary),
@@ -153,6 +159,7 @@ for (const target of targets) {
   for (const item of expectedPayload) {
     await assertExists(join(runtimePath, item));
   }
+  await assertExecutable(join(runtimePath, descriptor.serviceHost));
   if (descriptor.executorSupervisor !== undefined) {
     await assertExecutable(join(runtimePath, descriptor.executorSupervisor));
   }

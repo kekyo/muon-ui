@@ -3,8 +3,8 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve, win32 } from "node:path";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RemoteAgent, ScreenRect } from "agent-rover";
 import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
@@ -47,6 +47,72 @@ export interface WindowsNotificationDriver {
 }
 
 const psLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
+/** Captures a notification after its screen position and pixels settle.
+ * @param bounds Reads the current notification group's physical screen bounds.
+ * @param screenshot Captures the supplied rectangle without changing the UI.
+ * @returns The complete notification image.
+ */
+export const captureWindowsNotification = async (
+  bounds: () => Promise<ScreenRect>,
+  screenshot: (rectangle: ScreenRect) => Promise<Buffer>,
+): Promise<Buffer> => {
+  const sameBounds = (left: ScreenRect, right: ScreenRect): boolean =>
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height;
+  const deadline = performance.now() + 30000;
+  let previous: { bounds: ScreenRect; image: Buffer } | undefined;
+  do {
+    const before = await bounds();
+    const image = await screenshot(before);
+    const after = await bounds();
+    // UIA visibility precedes the shell's slide/expand animation. Both the
+    // rectangle around this capture and the next captured frame must agree.
+    if (sameBounds(before, after)) {
+      if (
+        previous &&
+        sameBounds(previous.bounds, after) &&
+        previous.image.equals(image)
+      )
+        return image;
+      previous = { bounds: after, image };
+    } else previous = undefined;
+  } while (performance.now() < deadline);
+  throw new Error(
+    "Notification position and pixels did not settle for capture",
+  );
+};
+
+/** Creates a directory for one notification test run without replacing evidence.
+ * @param parent Parent directory grouping captures for this test mode.
+ * @returns A new local artifact directory.
+ */
+export const createWindowsNotificationArtifacts = async (
+  parent: string,
+): Promise<string> => {
+  await mkdir(parent, { recursive: true });
+  return await mkdtemp(join(parent, "run-"));
+};
+
+/** Records opening motion and the stable notification before allowing cleanup.
+ * @typeParam T Recorded video metadata.
+ * @param video In-progress opening video capture.
+ * @param notification In-progress notification observation and screenshot.
+ * @returns Video metadata after both operations have finished.
+ */
+export const captureWindowsNotificationOpening = async <T>(
+  video: Promise<T>,
+  notification: Promise<void>,
+): Promise<T> => {
+  // Neither capture may outlive the observer whose executable and DLLs are
+  // removed in the caller's finally block, including after a recording error.
+  const [recorded, observed] = await Promise.allSettled([video, notification]);
+  if (recorded.status === "rejected") throw recorded.reason;
+  if (observed.status === "rejected") throw observed.reason;
+  return recorded.value;
+};
 
 /** Creates an observer for the English Windows test machine.
  * @param agent Existing agent-rover connection, owned by the caller.
@@ -156,11 +222,13 @@ export const createWindowsNotificationDriver = async (
     path: string,
   ): Promise<void> => {
     await center();
-    const bounds = JSON.parse(
-      await observe("prepare", title, action),
-    ) as ScreenRect;
+    const image = await captureWindowsNotification(
+      async () =>
+        JSON.parse(await observe("prepare", title, action)) as ScreenRect,
+      async (bounds) => (await agent.screenshot({ rect: bounds })).image,
+    );
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, (await agent.screenshot({ rect: bounds })).image);
+    await writeFile(path, image);
   };
   const close = async (): Promise<void> => {
     if (closed) return;

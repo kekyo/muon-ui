@@ -842,6 +842,9 @@ add_executable(muon_service_host
   src/muon_string_helpers.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp
+  ../service-host/muon_service_io_desktop.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_io.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_files.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_value.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp

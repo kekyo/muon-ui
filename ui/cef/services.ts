@@ -14,6 +14,7 @@ import type { MuonServiceInputObserver } from "../common/service-inputs.ts";
 
 /** Normalized runtime settings stored beside a desktop application. */
 export interface MuonDesktopServiceSettings {
+  /** Portable service I/O grants. */ readonly io?: import("../common/service-io.ts").MuonServiceIoPolicy;
   /** Application default when no user override has been persisted. */
   readonly autostart: boolean;
   /** Immutable strings passed to this logical native instance. */
@@ -95,6 +96,7 @@ export const stageMuonDesktopServices = async (
         bridge: runtimeFile("plugins/node-bridge.mjs"),
         autostart: definition.autostart,
         config: definition.config,
+        ...(definition.io ? { io: definition.io } : {}),
       };
       continue;
     }
@@ -106,6 +108,7 @@ export const stageMuonDesktopServices = async (
         script,
         autostart: definition.autostart,
         config: definition.config,
+        ...(definition.io ? { io: definition.io } : {}),
         plugins: definition.plugins.flatMap((plugin) => plugin.allow),
       };
       continue;
@@ -131,6 +134,7 @@ export const stageMuonDesktopServices = async (
       library: "./services/native/" + basename(artifact.library),
       autostart: definition.autostart,
       config: definition.config,
+      ...(definition.io ? { io: definition.io } : {}),
     };
   }
   const directory = join(output, "services", "native");

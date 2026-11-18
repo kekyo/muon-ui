@@ -6,6 +6,8 @@
 import {
   createServiceRuntime,
   defineService,
+  type ServiceIoBridge,
+  type ServiceIoReply,
   type ServiceDefinition,
   type ServiceInterface,
   type ServiceRuntime,
@@ -14,6 +16,7 @@ import {
   type ServiceStopRequest,
 } from 'muon-plugin-sdk/services';
 import type { Readable, Writable } from 'node:stream';
+import { createNodeServiceIo, type NodeServiceIoPolicy } from './service-io.ts';
 import { createMuonNodeFrameDecoder, encodeMuonNodeFrame } from './framing.ts';
 import {
   initializeMuonNodeProject,
@@ -88,6 +91,16 @@ export const createMuonNodeServiceBridge = (
   let callbackSequence = 0n;
   let activeRequests = 0;
   let queuedBytes = 0;
+  let ioSequence = 0n;
+  const ioRequests = new Map<
+    string,
+    { resolve: (reply: ServiceIoReply) => void; reject: (error: Error) => void }
+  >();
+  const disconnectIo = () => {
+    for (const request of ioRequests.values())
+      request.reject(failure('unavailable', 'Service I/O transport closed'));
+    ioRequests.clear();
+  };
   const callbacks = new Map<
     string,
     { callId: string; resolve: (value: ServiceRuntimeResult) => void }
@@ -118,6 +131,7 @@ export const createMuonNodeServiceBridge = (
   const fail = (error: unknown) => {
     if (ended) return;
     ended = true;
+    disconnectIo();
     options.input.pause();
     cancelCallbacks(undefined);
     signalShutdown(error);
@@ -164,6 +178,40 @@ export const createMuonNodeServiceBridge = (
     })();
     return stopOperation;
   };
+  const hostIo: ServiceIoBridge = async (
+    operation,
+    parameters,
+    body,
+    signal
+  ) => {
+    if (ended || signal.aborted)
+      throw failure('cancelled', 'Service I/O cancelled');
+    const id = String(++ioSequence);
+    const response = new Promise<ServiceIoReply>((resolve, reject) =>
+      ioRequests.set(id, { resolve, reject })
+    );
+    const cancel = () => {
+      void publish({ kind: 'ioCancel', id });
+    };
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      // Send starts synchronously, preserving request/cancel order on the transport.
+      const [, result] = await Promise.all([
+        write({
+          kind: 'io',
+          id,
+          operation,
+          parameters,
+          body: Buffer.from(body).toString('base64'),
+        }),
+        response,
+      ]);
+      return result;
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      ioRequests.delete(id);
+    }
+  };
   const initialize = async (params: Record<string, unknown>) => {
     const project = await initializeMuonNodeProject(
       params,
@@ -187,7 +235,17 @@ export const createMuonNodeServiceBridge = (
       config: record(params.config) as Record<string, string>,
       dataDirectory: text(params.dataDirectory),
     };
+    const files = createNodeServiceIo(
+      identity.dataDirectory,
+      record(params.io ?? {}) as NodeServiceIoPolicy
+    );
     runtime = createServiceRuntime(definition, {
+      io: async (op, params, body, signal) => {
+        // Win32 directory handles must deny delete-sharing while names are resolved.
+        const run =
+          op.startsWith('fs.') && process.platform === 'linux' ? files : hostIo;
+        return await run(op, params, body, signal);
+      },
       callback: async (callId, token, args) => {
         if (stopping || ended)
           return {
@@ -332,6 +390,19 @@ export const createMuonNodeServiceBridge = (
       // identities cannot escape as detached promise rejections.
       text(message.id);
       void request(message);
+    } else if (message.kind === 'ioResult') {
+      const pending = ioRequests.get(text(message.id));
+      if (!pending) return;
+      if (message.error) {
+        const error = record(message.error);
+        pending.reject(failure(text(error.code), text(error.message)));
+      } else if (typeof message.body === 'string') {
+        pending.resolve({
+          metadata: message.metadata,
+          body: Uint8Array.from(Buffer.from(message.body, 'base64')),
+        });
+      } else
+        throw failure('ERR_MUON_NODE_PROTOCOL', 'Invalid service I/O response');
     } else if (message.kind === 'callbackResult') {
       const id = text(message.id);
       if (!/^[1-9][0-9]{0,19}$/u.test(id) || BigInt(id) > callbackSequence)
@@ -358,6 +429,7 @@ export const createMuonNodeServiceBridge = (
       return;
     }
     ended = true;
+    disconnectIo();
     cancelCallbacks(undefined);
     signalShutdown(
       stopping
@@ -376,6 +448,7 @@ export const createMuonNodeServiceBridge = (
     close: async () => {
       closeOperation ??= (async () => {
         ended = true;
+        disconnectIo();
         options.input.off('data', data);
         options.input.off('end', end);
         options.input.off('error', fail);

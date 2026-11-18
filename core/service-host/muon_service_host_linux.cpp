@@ -6,6 +6,7 @@
 
 #include "muon_service_protocol.h"
 #include "muon_service_policy.h"
+#include "muon_service_io_desktop.h"
 #include "muon_service_session_monitor.h"
 #include "muon_service_startup.h"
 #include "muon_service_plugins.h"
@@ -184,12 +185,15 @@ class ServiceProcess final {
         definitions.push_back({id, yyjson_get_bool(autostart), preference});
         if (yyjson_arr_size(yyjson_obj_get(value, "plugins"))) plugin_services_.insert(id);
         const auto resolve_node_path = [&](const char* name) { return (std::filesystem::path(config).parent_path() / StringValue(yyjson_obj_get(value, name))).lexically_normal().string(); };
+        spec.io = CreateDesktopMuonServiceIo(yyjson_obj_get(value, "io"));
         if (runtime == "node") nodes_.emplace(id, MuonNodeServiceSpec{
             id, library, StringValue(yyjson_obj_get(value, "entry")),
-            resolve_node_path("executable"), resolve_node_path("bridge"), spec.data_directory, std::move(spec.config)});
+            resolve_node_path("executable"), resolve_node_path("bridge"), spec.data_directory, std::move(spec.config),
+            MUON_SERVICE_START_ACQUIRE, {}, spec.io});
         else if (runtime == "native") specs_.emplace(id, std::move(spec));
         else scripts_.emplace(id, MuonQuickJsServiceSpec{
-            id, spec.library_path, {}, spec.data_directory, std::move(spec.config)});
+            id, spec.library_path, {}, spec.data_directory, std::move(spec.config),
+            std::nullopt, MUON_SERVICE_START_ACQUIRE, {}, spec.io});
       }
       login_ = std::move(co_await CreateMuonServiceLoginPolicy(data_root_, definitions, std::move(startup)));
       const auto post = [this](std::function<void()> task) { Post(std::move(task)); };

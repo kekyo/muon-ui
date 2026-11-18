@@ -1,4 +1,10 @@
 /** Browser and QuickJS-compatible service contracts, values, and RPC client. */
+export type {
+  ServiceFileOptions,
+  ServiceFileSystem,
+  ServiceIoBridge,
+  ServiceIoReply,
+} from './service-io.ts';
 export { bindServiceClient } from './service-binding.ts';
 export type {
   BoundServiceClient,

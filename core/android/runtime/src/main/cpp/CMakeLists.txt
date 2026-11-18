@@ -151,6 +151,8 @@ add_library(muon_android_services SHARED
   "${MUON_COMMON_ROOT}/src/services/muon_quickjs_plugin_bindings.cpp"
   "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_engine.cpp"
   "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_module.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_io.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_files.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_value.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp"

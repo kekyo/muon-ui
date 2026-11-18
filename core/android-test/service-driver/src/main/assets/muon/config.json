@@ -15,6 +15,34 @@
     ]
   },
   "services": {
+    "stateNative": {
+      "runtime": "native",
+      "library": "libmuon_native_state.so",
+      "io": { "fs": { "data": "read-write", "assets": { "initial": "AP8=" } } },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureNativeStateService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "stateNative",
+          "title": "State fixture",
+          "text": "Service state persistence"
+        }
+      }
+    },
+    "stateQuick": {
+      "runtime": "quickjs",
+      "asset": "muon/services/stateQuick.js",
+      "io": { "fs": { "data": "read-write", "assets": { "initial": "AP8=" } } },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickStateService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "stateQuick",
+          "title": "State fixture",
+          "text": "Service state persistence"
+        }
+      }
+    },
     "quickjs-fault": {
       "runtime": "quickjs",
       "asset": "muon/services/quickjs-fault.js",

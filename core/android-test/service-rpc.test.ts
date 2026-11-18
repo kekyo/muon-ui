@@ -119,6 +119,15 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
         '-rf',
         'files/service-autostart',
       ]);
+      const stateId = serviceId === 'quickjs' ? 'stateQuick' : 'stateNative';
+      await adb([
+        'shell',
+        'run-as',
+        app,
+        'rm',
+        '-f',
+        'files/services/' + stateId + '/state.bin',
+      ]);
       const first = await start();
       const pid = (await adb(['shell', 'pidof', app])).trim();
       port = (
@@ -138,6 +147,16 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
       await server.connect(b);
       await client.connect(a);
       await select(first);
+      expect(
+        await evaluate(`const saved = await muon.services.acquire('${stateId}');
+        const initial = Array.from(await saved.call('get', []));
+        await saved.call('set', [new Uint8Array([0, 128, 255])]);
+        await saved.release();
+        const restored = await muon.services.acquire('${stateId}');
+        const bytes = Array.from(await restored.call('get', []));
+        await restored.release();
+        return [initial, bytes, saved.generation !== restored.generation];`)
+      ).toEqual([[0, 255], [0, 128, 255], true]);
       expect(
         await evaluate(`globalThis.handle = await muon.services.acquire('${serviceId}');
       const value = 'Android\\0日本語😀';

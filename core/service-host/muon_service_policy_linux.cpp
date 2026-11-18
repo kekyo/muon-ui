@@ -25,7 +25,7 @@ static void RunMetadataTask(GTask* task, gpointer, gpointer data, GCancellable*)
   }
 }
 
-cardio::promise<void> RunMuonServiceMetadata(std::function<void()> work) {
+cardio::promise<void> RunMuonServiceFileWork(std::function<void()> work) {
   // Return the GIO promise directly: no coroutine frame needs to own a
   // temporary closure, which GCC 12 can destroy twice in a co_await expression.
   return cardio::gio::submit<void>(

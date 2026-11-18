@@ -7,6 +7,7 @@
 #pragma once
 #include "services/muon_service_execution.h"
 #include "services/muon_service_reason.h"
+#include "services/muon_service_io.h"
 #include <chrono>
 #include <muon_plugin_api.h>
 
@@ -21,6 +22,7 @@ struct MuonNodeServiceSpec {
   std::vector<std::pair<std::string, std::string>> config; /**< String settings. */
   muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE; /**< Demand for this generation. */
   std::shared_ptr<MuonServiceCancellation> signal{}; /**< Shared cancellation during asynchronous initialization. */
+  MuonServiceIoSettings io{}; /**< Per-service portable I/O grants and executor. */
 };
 
 /** Owner dispatcher callbacks, also used while draining child processes. */

@@ -54,4 +54,9 @@ val buildQuickJsService by tasks.registering(Exec::class) {
     commandLine("node", "../../sdk/scripts/build-service-runtime-fixture.mjs",
         "service-driver/build/framework/muon/services/quickjs.js")
 }
-tasks.named("preBuild") { dependsOn(":app:buildNativeDependencies", buildServiceWeb, copyRuntimeRenderer, buildQuickJsService) }
+val buildStateService by tasks.registering(Exec::class) {
+    workingDir(rootProject.projectDir.parentFile)
+    commandLine("node", "../../sdk/scripts/build-service-runtime-fixture.mjs",
+        "service-driver/build/framework/muon/services/stateQuick.js", "--entry", "../../sdk/examples/services/state.ts")
+}
+tasks.named("preBuild") { dependsOn(":app:buildNativeDependencies", buildServiceWeb, copyRuntimeRenderer, buildQuickJsService, buildStateService) }

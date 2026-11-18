@@ -15,6 +15,7 @@ import { resolveAndroidPlugins } from "./plugins.ts";
 
 /** Common Android settings for one independently declared service component. */
 interface MuonAndroidPackagedServiceBase {
+  /** Portable service I/O grants. */ readonly io?: import("../common/service-io.ts").MuonServiceIoPolicy;
   /** Application-local service identity. */ readonly id: string;
   /** Initial resident setting. */ readonly autostart: boolean;
   /** Configuration passed to this instance. */ readonly config: Readonly<
@@ -82,6 +83,7 @@ export const resolveAndroidServices = async (
       id: definition.id,
       autostart: definition.autostart,
       config: definition.config,
+      ...(definition.io ? { io: definition.io } : {}),
       android: {
         ...definition.android,
         component: `dev.muon.generated.MuonService_${Buffer.from(definition.id, "utf8").toString("hex")}`,

@@ -37,6 +37,19 @@ import { runServiceConsumerDevelopment } from "./service-consumer-development.ts
 
 const target = process.env.MUON_SERVICE_CONSUMER_TARGET ?? "linux-amd64";
 
+// Hold all three page references until the UI closes. Each runtime saves its own bytes.
+const savedServiceValues = (next: number[] | undefined) => `
+  globalThis.fileHandles = [];
+  const values = [];
+  for (const name of ['nativeState','quickState','nodeState']) {
+    const handle = await api.acquire(name);
+    fileHandles.push(handle);
+    values.push(Array.from(await handle.call('get', [])));
+    if (${JSON.stringify(next !== undefined)}) await handle.call('set', [new Uint8Array(${JSON.stringify(next ?? [])})]);
+  }
+  return values;
+`;
+
 const cleanupResources = async (actions: (() => Promise<unknown>)[]) => {
   const results = await Promise.allSettled(
     actions.map(async (action) => await action()),
@@ -256,6 +269,7 @@ const runWindowsConsumer = async (
     expect(first.text).toBe("日本\0🙂");
     expect(first.next).toBe(42);
     expect(first.base64).toBe("/wA=");
+    expect(await evaluate(savedServiceValues([5, 128, 1]))).toEqual(Array(3).fill([0, 255]));
     const firstNode = await evaluate(
       `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
     );
@@ -287,6 +301,7 @@ const runWindowsConsumer = async (
     const reopened = await evaluate(
       `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');await api.setAutostart('extension',false);return {native:native.generation,script:script.generation,extension:extension.generation,next:await extension.call('next',[99]),autostart:(await api.getState('extension')).autostart};`,
     );
+    expect(await evaluate(savedServiceValues([0, 17, 240]))).toEqual(Array(3).fill([5, 128, 1]));
     expect(reopened).toEqual({
       native: first.native,
       script: first.script,
@@ -312,6 +327,7 @@ const runWindowsConsumer = async (
         `const handle=await api.acquire('node');try{return await handle.call('saved',[])}finally{await handle.release()}`,
       ),
     ).toBe("packaged again");
+    expect(await evaluate(savedServiceValues(undefined))).toEqual(Array(3).fill([0, 17, 240]));
     await evaluate(
       "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
     );
@@ -469,7 +485,9 @@ it.skipIf(
       "--language",
       "c",
     ]);
-    for (const name of ["echo", "counter"]) {
+    await run(process.execPath, [sdkCli, "init", "producer/state", "--name", "state", "--kind", "service", "--language", "c"]);
+    await copyFile(join(sdk, "examples/services/native-state.c"), join(app, "producer/state/service.c"));
+    for (const name of ["echo", "counter", "state"]) {
       await run(process.execPath, [
         sdkCli,
         "build",
@@ -481,7 +499,7 @@ it.skipIf(
       ]);
     }
     await rm(join(app, "producer"), { recursive: true });
-    for (const name of ["echo", "counter"])
+    for (const name of ["echo", "counter", "state"])
       await rm(join(app, "artifacts", name, ".build"), {
         recursive: true,
         force: true,
@@ -515,6 +533,8 @@ it.skipIf(
     ).rejects.toThrow(/Uint8Array/);
     await rm(invalid);
     await mkdir(join(app, "worker"));
+    for (const directory of [app, quickjs, join(app, "worker")]) await writeFile(join(directory, "initial.bin"), new Uint8Array([0, 255]));
+    for (const directory of [quickjs, join(app, "worker")]) await copyFile(join(sdk, "examples/services/state.ts"), join(directory, "state.ts"));
     for (const name of ["node-files.ts", "node-greeting.txt"])
       await copyFile(
         join(sdk, "examples/services", name),
@@ -608,6 +628,9 @@ export default defineService({
       join(app, "muon.json"),
       JSON.stringify({
         services: {
+          nativeState: { runtime: "native", artifact: "artifacts/state/muon-plugin.json", io: { fs: { data: "read-write", assets: { initial: "initial.bin" } } } },
+          quickState: { runtime: "quickjs", project: "quickjs", entry: "state.ts", io: { fs: { data: "read-write", assets: { initial: "initial.bin" } } } },
+          nodeState: { runtime: "node", project: "worker", entry: "state.ts", io: { fs: { data: "read-write", assets: { initial: "initial.bin" } } } },
           native: {
             runtime: "native",
             artifact: "artifacts/echo/muon-plugin.json",
@@ -818,6 +841,7 @@ export default defineService({
       expect(first.text).toBe("日本\0🙂");
       expect(first.next).toBe(42);
       expect(first.base64).toBe("/wA=");
+    expect(await evaluate(savedServiceValues([5, 128, 1]))).toEqual(Array(3).fill([0, 255]));
       const firstNode = await evaluate(
         `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
       );
@@ -846,7 +870,8 @@ export default defineService({
       const reopened = await evaluate(
         `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');await api.setAutostart('extension',false);return {native:native.generation,script:script.generation,extension:extension.generation,next:await extension.call('next',[99]),autostart:(await api.getState('extension')).autostart};`,
       );
-      expect(reopened).toEqual({
+      expect(await evaluate(savedServiceValues([0, 17, 240]))).toEqual(Array(3).fill([5, 128, 1]));
+    expect(reopened).toEqual({
         native: first.native,
         script: first.script,
         extension: first.extension,
@@ -876,6 +901,7 @@ export default defineService({
           `const handle=await api.acquire('node');try{return await handle.call('saved',[])}finally{await handle.release()}`,
         ),
       ).toBe("packaged again");
+    expect(await evaluate(savedServiceValues(undefined))).toEqual(Array(3).fill([0, 17, 240]));
       await evaluate(
         "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
       );

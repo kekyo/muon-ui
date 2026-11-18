@@ -1,4 +1,9 @@
 import { parseServiceInterface } from './service-interface.ts';
+import {
+  createServiceFiles,
+  type ServiceFileSystem,
+  type ServiceIoBridge,
+} from './service-io.ts';
 import type {
   ServiceArguments,
   ServiceInterface,
@@ -69,7 +74,7 @@ export interface ServiceRuntimeInput {
   /** Application-owned configuration strings. */ readonly config: Readonly<
     Record<string, string>
   >;
-  /** Host-owned private directory; no filesystem API is implied. */ readonly dataDirectory: string;
+  /** Absolute service-private directory. */ readonly dataDirectory: string;
 }
 
 /** Invocation-scoped cancellation; no page owner or native pointer is exposed. */
@@ -82,6 +87,7 @@ export interface ServiceInvocationContext {
 export interface ServiceStartContext<
   Definition extends ServiceInterface,
 > extends ServiceRuntimeInput {
+  /** Permission-checked files, private to the service unless explicitly shared. */ readonly fs: ServiceFileSystem;
   /** Aborted when service shutdown begins, including shutdown during start. */ readonly signal: ServiceCancellationSignal;
   /**
    * Publishes an event while this instance is running.
@@ -133,6 +139,7 @@ export interface ServiceDefinition<Definition extends ServiceInterface> {
 
 /** Environment-specific delivery; all values here use the shared JSON codec. */
 export interface ServiceRuntimeBridge {
+  /** Performs permission-checked I/O for this generation. */ readonly io?: ServiceIoBridge;
   /**
    * Calls a page function within its pending parent invocation.
    * @param callId - Host invocation identity.
@@ -225,6 +232,12 @@ const commonErrors = new Set([
   'invalid-result',
   'callback-failed',
   'resource-exhausted',
+  'permission-denied',
+  'not-found',
+  'io-error',
+  'invalid-input',
+  'timeout',
+  'size-limit',
 ]);
 const diagnostic = (
   error: unknown,
@@ -333,6 +346,39 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
   let instance: ServiceImplementation<Definition> | undefined;
   let startup: Promise<void> | undefined, shutdown: Promise<void> | undefined;
   const calls = new Map<string, Invocation>();
+  const operations = new Set<{ cancel: () => void; done: Promise<void> }>();
+  let cleanupSignal: ServiceCancellationSignal | undefined;
+  const io: ServiceIoBridge = async (name, parameters, body, signal) => {
+    if (
+      signal.aborted ||
+      phase === 'failed' ||
+      phase === 'stopped' ||
+      (source.signal.aborted && (!cleanupSignal || signal !== cleanupSignal))
+    )
+      throw failure('cancelled', 'Service I/O was cancelled');
+    if (!bridge.io)
+      throw failure('permission-denied', 'Service I/O is unavailable');
+    if (operations.size >= 64)
+      throw failure('resource-exhausted', 'Too many service I/O operations');
+    const operation = cancellation();
+    const drained = deferred<void>();
+    const pending = { cancel: operation.abort, done: drained.promise };
+    operations.add(pending);
+    try {
+      signal.addEventListener('abort', operation.abort, { once: true });
+      return await bridge.io(name, parameters, body, operation.signal);
+    } finally {
+      signal.removeEventListener('abort', operation.abort);
+      operation.clear();
+      operations.delete(pending);
+      drained.resolve();
+    }
+  };
+  const drainIo = async () => {
+    const pending = [...operations];
+    for (const operation of pending) operation.cancel();
+    await Promise.all(pending.map((operation) => operation.done));
+  };
   let callbacks = 0;
   const cancelCall = (call: Invocation) => {
     if (call.cancelled) return;
@@ -375,6 +421,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           dataDirectory: text(input.dataDirectory),
           config,
           signal: source.signal,
+          fs: createServiceFiles(io, source.signal),
           emit: (
             event: keyof Definition['events'] & string,
             value: unknown
@@ -414,6 +461,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
       } catch (error) {
         phase = 'failed';
         source.abort();
+        await drainIo();
         started.reject(error);
       }
     };
@@ -583,6 +631,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
     const cleanup = cancellation();
     const stopped = deferred<void>();
     shutdown = stopped.promise;
+    let outcome: { error: unknown } | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (remainingMs !== undefined) {
       try {
@@ -594,6 +643,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
     }
     phase = 'stopping';
     source.abort();
+    for (const operation of operations) operation.cancel();
     for (const call of calls.values()) cancelCall(call);
     const run = async () => {
       try {
@@ -605,12 +655,14 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           }
         }
         await Promise.all([...calls.values()].map((call) => call.done.promise));
+        await drainIo();
         if (instance && typeof instance.stop === 'function') {
           const left =
             deadline === undefined
               ? undefined
               : Math.max(0, Math.min(remainingMs!, deadline - Date.now()));
           if (left === 0) cleanup.abort();
+          cleanupSignal = cleanup.signal;
           await instance.stop(
             Object.freeze({
               reason,
@@ -623,20 +675,26 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
         instance = undefined;
         phase = 'stopped';
         source.clear();
-        stopped.resolve();
       } catch (error) {
         phase = 'failed';
-        stopped.reject(error);
+        outcome = { error };
       } finally {
+        cleanupSignal = undefined;
         if (timer !== undefined) clearTimeout(timer);
         cleanup.abort();
+        await drainIo();
       }
+      if (outcome) stopped.reject(outcome.error);
+      else stopped.resolve();
     };
     void run();
     return shutdown;
   };
   const cancelStart = () => {
-    if (phase === 'starting' || phase === 'new') source.abort();
+    if (phase === 'starting' || phase === 'new') {
+      source.abort();
+      for (const operation of operations) operation.cancel();
+    }
   };
   return Object.freeze({ start, invoke, cancel, cancelStart, stop });
 };

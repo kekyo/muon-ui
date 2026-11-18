@@ -101,6 +101,7 @@ import definition from {{entry}};
 import { createServiceRuntime } from 'muon-plugin-sdk/services';
 globalThis.__muonServiceInterface = definition.interface;
 globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
+  io: globalThis.__muonServiceIo,
   callback: globalThis.__muonServiceCallback,
   emit: globalThis.__muonServiceEmit,
 });

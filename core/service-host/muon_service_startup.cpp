@@ -54,7 +54,7 @@ static LoginRegistration ParseStartup(const std::string& startup) {
       std::string error;
       if (!SetMuonAutostart(*registration, enabled, &error)) throw std::runtime_error(error);
     };
-    co_await RunMuonServiceMetadata(apply);
+    co_await RunMuonServiceFileWork(apply);
   }, refresh};
 }
 

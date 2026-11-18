@@ -47,5 +47,11 @@
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="QuickJS heap failure isolation regression fixture" />
         </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickStateService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureNativeStateService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
     </application>
 </manifest>

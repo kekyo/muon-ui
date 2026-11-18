@@ -9,6 +9,7 @@
 #include "muon_service_api.h"
 #include "services/muon_service_execution.h"
 #include "services/muon_service_reason.h"
+#include "services/muon_service_io.h"
 
 #include <functional>
 #include <memory>
@@ -29,6 +30,7 @@ struct MuonNativeServiceSpec {
   std::vector<std::pair<std::string, std::string>> config;
   muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE; /**< Demand for this generation. */
   std::shared_ptr<MuonServiceCancellation> signal{}; /**< Shared cancellation during asynchronous initialization. */
+  MuonServiceIoSettings io{}; /**< Per-service portable I/O grants and executor. */
 };
 
 /** Platform operations; no operation depends on a UI runtime. */

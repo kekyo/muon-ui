@@ -9,6 +9,7 @@
 #include "muon_plugin_api.h"
 #include "muon_service_value.h"
 #include "muon_service_lifecycle_types.h"
+#include "muon_service_io.h"
 
 /** Native service ABI revision used by service artifact manifests. */
 #define MUON_SERVICE_ABI_VERSION 3
@@ -74,6 +75,7 @@ typedef struct muon_service_call_context {
   int (*callback)(void* user_data, uint64_t token,
       const muon_service_value* arguments, size_t count,
       muon_service_result_completion complete, void* completion_data);
+  const muon_service_signal* signal; /**< Cancelled when the invocation ends or the caller withdraws it. */
 } muon_service_call_context;
 
 /** Host operations borrowed by one service until its stop completion. */
@@ -125,6 +127,7 @@ typedef struct muon_service_context {
   const muon_plugin_config_entry* config_entries;
   muon_service_start_reason start_reason; /**< What caused this generation to start. */
   const muon_service_signal* signal; /**< Cancelled when shutdown begins, including during startup. */
+  const muon_service_io* io; /**< Permission-checked, asynchronous I/O for this generation. */
 } muon_service_context;
 
 /**

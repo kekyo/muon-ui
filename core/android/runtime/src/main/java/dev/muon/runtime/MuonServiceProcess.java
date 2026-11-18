@@ -130,6 +130,7 @@ final class MuonServiceProcess {
             String[] libraries = new String[count];
             String[] runtimes = new String[count];
             String[] directories = new String[count];
+            String[] ioPolicies = new String[count];
             boolean[] autostarts = new boolean[count];
             String[][] configurations = new String[count][];
             String[][] pluginGrants = new String[count][];
@@ -138,6 +139,7 @@ final class MuonServiceProcess {
                 String id = entry.getKey();
                 JSONObject definition = entry.getValue();
                 String runtime = definition.getString("runtime");
+                ioPolicies[index] = definition.has("io") ? definition.getJSONObject("io").toString() : "{}";
                 String path;
                 if ("native".equals(runtime)) {
                     String library = definition.getString("library");
@@ -207,7 +209,7 @@ final class MuonServiceProcess {
                     initializationError = sessionEnding ? "Android device shutdown" : error;
                     if (initializationError == null) {
                         try {
-                            nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
+                            nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories, ioPolicies,
                                     autostarts, overrides, configurations, pluginGrants, pluginRegistry);
                         } catch (RuntimeException failure) {
                             initializationError = failure.getMessage();
@@ -411,6 +413,10 @@ final class MuonServiceProcess {
     }
 
     // Called by JNI on the owner Looper. No native callback is invoked inline.
+    private void submitFileWork(long work) {
+        java.util.concurrent.ForkJoinPool.commonPool().execute(() -> nativeFileWork(work));
+    }
+
     private void postTask(long task) { handler.post(() -> nativeRunTask(nativeHandle, task)); }
 
     private void delayTask(long task, long milliseconds) {
@@ -529,8 +535,9 @@ final class MuonServiceProcess {
     }
 
     private static native long nativeCreate(MuonServiceProcess owner, String[] ids, String[] runtimes,
-            String[] libraries, String[] directories, boolean[] autostarts, int[] overrides,
+            String[] libraries, String[] directories, String[] ioPolicies, boolean[] autostarts, int[] overrides,
             String[][] configurations, String[][] pluginGrants, String pluginRegistry);
+    private static native void nativeFileWork(long work);
     private static native void nativeRunTask(long handle, long task);
     private static native void nativeActivate(long handle);
     private static native String nativeSetAutostart(long handle, String id, boolean enabled);

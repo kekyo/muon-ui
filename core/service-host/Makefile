@@ -10,14 +10,14 @@ OUT := .build
 CPPFLAGS += -I../../sdk/include -I../common/include -I$(COMMON) -I$(YYJSON) -I. -I../cef/src
 CPPFLAGS += -I../../node/native -I../cef/src/platform -DNOMINMAX
 NODE_SOURCES := muon_node_service_host.cpp ../../node/native/node_process.cpp
-SERVICE_API := ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_lifecycle_types.h ../../sdk/include/muon_service_value.h
+SERVICE_API := ../../sdk/include/muon_service_io.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_lifecycle_types.h ../../sdk/include/muon_service_value.h
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wpedantic -Werror
 CFLAGS += -std=c99 -Wall -Wextra -Wpedantic
 LIFECYCLE := $(COMMON)/services/muon_service_lifecycle.cpp $(COMMON)/services/muon_service_controller.cpp
 CARDIO_PC := $(abspath ../../sdk/native/linux-amd64/lib/pkgconfig)
 CARDIO_CFLAGS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --cflags muon-plugin-cardio)
 CARDIO_LIBS = $(shell PKG_CONFIG_PATH=$(CARDIO_PC) pkg-config --libs muon-plugin-cardio)
-NATIVE := $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/services/muon_service_value.cpp $(COMMON)/services/muon_service_interface.cpp $(COMMON)/services/muon_service_broker.cpp $(COMMON)/muon_filesystem.cpp
+NATIVE := muon_service_io_desktop.cpp $(COMMON)/services/muon_service_io.cpp $(COMMON)/services/muon_service_files.cpp $(COMMON)/services/muon_native_service_host.cpp $(COMMON)/services/muon_native_service_library.cpp $(COMMON)/services/muon_service_value.cpp $(COMMON)/services/muon_service_interface.cpp $(COMMON)/services/muon_service_broker.cpp $(COMMON)/muon_filesystem.cpp
 QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
 QUICKJS_SOURCE_DIR := ../common/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
 QUICKJS_SOURCES := $(COMMON)/quickjs/muon_quickjs_engine.cpp $(COMMON)/services/muon_quickjs_service_host.cpp $(COMMON)/services/muon_service_execution_router.cpp
@@ -136,7 +136,7 @@ $(OUT)/windows-$(1)/node-job.o: ../cef/src/platform/muon_windows_job_process.cpp
 	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 -c $$< -o $$@
 
 $(OUT)/windows-$(1)/muon-service-host.exe: $(OUT)/windows-$(1)/node-job.o muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(NODE_SOURCES) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/sha2.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes $$(WIN_$(1)_FFI)/lib/libffi.a $(SERVICE_API) $(COMMON)/services/muon_service_reason.h
-	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -I$$(WIN_$(1)_FFI)/include -D_WIN32_WINNT=0x0601 -municode $(filter-out %.h %/runtimes,$^) $(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -lbcrypt -o $$@
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -I$$(WIN_$(1)_FFI)/include -D_WIN32_WINNT=0x0601 -municode $$(filter-out %.h %/runtimes,$$^) $$(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -lbcrypt -o $$@
 
 $(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c $(SERVICE_API) | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@

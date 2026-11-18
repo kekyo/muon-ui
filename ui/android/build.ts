@@ -246,6 +246,7 @@ export const buildAndroidApplication = async (
                 }),
             autostart: service.autostart,
             config: service.config,
+            ...(service.io ? { io: service.io } : {}),
             android: service.android,
           },
         ]),

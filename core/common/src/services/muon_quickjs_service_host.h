@@ -8,6 +8,7 @@
 #include "quickjs/muon_quickjs_engine.h"
 #include "services/muon_service_execution.h"
 #include "services/muon_service_reason.h"
+#include "services/muon_service_io.h"
 #include <muon_plugin_api.h>
 
 /** Resolved source and immutable configuration of one JavaScript service. */
@@ -21,6 +22,7 @@ struct MuonQuickJsServiceSpec {
   std::optional<std::chrono::steady_clock::time_point> startup_deadline = std::nullopt;
   muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE; /**< Demand for this generation. */
   std::shared_ptr<MuonServiceCancellation> signal{}; /**< Shared cancellation during asynchronous initialization. */
+  MuonServiceIoSettings io{}; /**< Per-service portable I/O grants and executor. */
 };
 
 /** Generation-scoped host modules and their asynchronous native resources. */

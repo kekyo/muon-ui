@@ -30,9 +30,9 @@ cardio::promise<void> SaveMuonServiceAutostart(std::filesystem::path path, bool 
 
 /**
  * Runs a platform operation which has no asynchronous system API.
- * @param work Finite metadata work; must not wait for another queued job.
+ * @param work Bounded blocking filesystem or registration work; must not wait for another queued job.
  * @return After the platform pool completes, resumed on the owner dispatcher.
- * @remarks Used for login registration and Win32 file metadata. Service work and
- * file contents continue to use cardio asynchronous I/O directly.
+ * @remarks The OS pool also supports handle-relative file operations that cannot
+ * be submitted through a pathname-based asynchronous file API.
  */
-cardio::promise<void> RunMuonServiceMetadata(std::function<void()> work);
+cardio::promise<void> RunMuonServiceFileWork(std::function<void()> work);

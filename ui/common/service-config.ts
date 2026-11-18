@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { resolveServiceIo, type MuonServiceIoPolicy } from "./service-io.ts";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { observeMuonServiceArtifact } from "./service-inputs.ts";
@@ -55,6 +56,7 @@ export interface MuonServiceSettings {
   readonly autostart: boolean;
   /** Immutable string values passed to this instance's factory. */
   readonly config: Readonly<Record<string, string>>;
+  /** Explicit portable I/O grants. */ readonly io?: MuonServiceIoPolicy;
   /** Android execution purpose; required when building Android. */
   readonly android: MuonAndroidServiceConfig | undefined;
 }
@@ -220,6 +222,7 @@ export const resolveMuonServices = async (
         "config",
         "android",
         "plugins",
+        "io",
       ],
       label,
     );
@@ -279,7 +282,18 @@ export const resolveMuonServices = async (
       throw new Error(
         `${label}.android must declare the foreground execution purpose and notification.`,
       );
+    const serviceDirectory =
+      value.project === undefined
+        ? directory
+        : resolve(directory, text(value.project, label + ".project"));
+    const io = await resolveServiceIo(
+      value.io,
+      serviceDirectory,
+      options?.onInput,
+      label + ".io",
+    );
     const settings = {
+      ...(io ? { io } : {}),
       id,
       autostart: value.autostart ?? false,
       config,

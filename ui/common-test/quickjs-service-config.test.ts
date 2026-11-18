@@ -84,13 +84,14 @@ it("builds a portable TS service and stages executable source for both desktop a
       id: "worker",
       generation: "1",
       config: {},
-      startReason: 'acquire', dataDirectory: "/private",
+      startReason: "acquire",
+      dataDirectory: "/private",
     });
     expect(await runtime.invoke("1", "echo", ["日本語😀\0value"])).toEqual({
       status: "ok",
       value: "worker:日本語😀\0value",
     });
-    await runtime.stop({reason:"reference-released"});
+    await runtime.stop({ reason: "reference-released" });
   }
 });
 
@@ -161,13 +162,14 @@ it("bundles an npm dependency from the selected project and observes its build i
     id: "worker",
     generation: "1",
     config: {},
-    startReason: 'acquire', dataDirectory: "/private",
+    startReason: "acquire",
+    dataDirectory: "/private",
   });
   expect(await service.invoke("1", "echo", ["test"])).toEqual({
     status: "ok",
     value: "npm test",
   });
-  await service.stop({reason:"reference-released"});
+  await service.stop({ reason: "reference-released" });
   for (const path of [
     join(project, "package.json"),
     join(project, "package-lock.json"),
@@ -230,4 +232,54 @@ it.each([
   await expect(
     resolveMuonServices({ worker: definition }, root, ["linux-amd64"]),
   ).rejects.toThrow(/services.worker/);
+});
+
+it("packages declared binary assets by logical name and observes changes to their source", async () => {
+  const asset = join(root, "initial.bin");
+  await writeFile(asset, new Uint8Array([0, 255]));
+  const inputs: string[] = [];
+  const declaration = {
+    runtime: "quickjs",
+    entry: "service.ts",
+    io: {
+      fs: {
+        data: "read-write",
+        assets: { "defaults/value": "initial.bin" },
+      },
+    },
+  };
+  const services = await resolveMuonServices(
+    { files: declaration },
+    root,
+    ["linux-amd64"],
+    {
+      root,
+      environment: process.env,
+      onInput: (input) => {
+        inputs.push(input.path);
+      },
+    },
+  );
+  const output = join(root, "asset-output");
+  await stageMuonDesktopServices(services, "linux-amd64", output);
+  const registry = JSON.parse(
+    await readFile(join(output, "muon-services.json"), "utf8"),
+  );
+  expect(registry.services.files.io.fs).toMatchObject({
+    data: "read-write",
+    assets: { "defaults/value": "AP8=" },
+  });
+  expect(inputs).toContain(asset);
+  await expect(
+    resolveMuonServices(
+      {
+        files: {
+          ...declaration,
+          io: { fs: { assets: { initial: "../outside" } } },
+        },
+      },
+      root,
+      ["linux-amd64"],
+    ),
+  ).rejects.toThrow(/outside|escapes/iu);
 });

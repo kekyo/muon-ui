@@ -32,6 +32,8 @@ for (const path of [
   'include/muon_plugin_api.h',
   'include/muon_service_api.h',
   'include/muon_service_lifecycle_types.h',
+  'include/muon_service_io.h',
+  'include/muon_service_io_cpp.h',
   'include/muon_service_value.h',
   'include/cardio.h',
   'make/plugin.mk',

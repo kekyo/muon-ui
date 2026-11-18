@@ -152,7 +152,7 @@ $(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c $(
 	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@
 
 $(OUT)/windows-$(1)/http-service.dll: ../../sdk/examples/services/native-http.c $(SERVICE_API) | $(OUT)/windows-$(1)
-	$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $< -o $@
+	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@
 
 $(OUT)/windows-$(1)/probe-service.dll: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(SERVICE_API) $(OUT)/windows-$(1)/runtimes | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -shared $$< $$(WIN_$(1)_LIBS) -lws2_32 -o $$@

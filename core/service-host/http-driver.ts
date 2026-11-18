@@ -27,7 +27,7 @@ export const createHttpDriver = async (assets: string, binaries: string) => {
     if (req.url === '/redirect') { res.writeHead(302, { location: origin.replace('127.0.0.1', 'localhost') + '/forbidden' }); res.end(); return; }
     if (req.url === '/forbidden') ++forbiddenVisits;
     if (req.url === '/loop') { res.writeHead(307, {location:'/loop'}); res.end(); return; }
-    if (req.url === '/large') { res.end(Buffer.alloc(1024 * 1024 + 1)); return; }
+    if (req.url === '/large') { req.resume(); res.end(Buffer.alloc(1024 * 1024 + 1)); return; }
     if (req.url === '/text') { res.writeHead(418, { 'x-answer': 'yes' }); res.end('茶'); return; }
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));

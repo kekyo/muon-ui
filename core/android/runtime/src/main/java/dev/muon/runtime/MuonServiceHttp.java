@@ -54,6 +54,9 @@ final class MuonServiceHttp {
                 try (OutputStream output = active.getOutputStream()) { output.write(body); }
             }
             status = active.getResponseCode();
+            if (!method.equals("HEAD") && status != 304 && active.getContentLengthLong() > 1024 * 1024) {
+                code = "size-limit"; message = "HTTP body exceeds 1 MiB"; return null;
+            }
             List<String> pairs = new ArrayList<>();
             int headerSize = 0;
             for (Map.Entry<String, List<String>> entry : active.getHeaderFields().entrySet()) {

@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <array>
+#include <charconv>
 #include <condition_variable>
 #include <utility>
 
@@ -124,6 +125,14 @@ MuonServiceHttpResult RunDesktopMuonServiceHttp(const MuonServiceHttpHop& hop, M
   state->Await(WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE, [](HINTERNET handle) { return WinHttpReceiveResponse(handle, nullptr); });
   MuonServiceHttpResult result;
   ReadHeaders(*state, result);
+  const auto length = result.headers.find("content-length");
+  if (hop.method != "HEAD" && result.status != 304 && length != result.headers.end()) {
+    uint64_t declared = 0;
+    const auto& text = length->second;
+    const auto number = std::from_chars(text.data(), text.data() + text.size(), declared);
+    if (number.ec == std::errc::result_out_of_range || (number.ec == std::errc{} && declared > MuonHttpBodyLimit))
+      throw MuonServiceIoError("size-limit", "HTTP response exceeds 1 MiB");
+  }
   for (;;) {
     state->Await(WINHTTP_CALLBACK_STATUS_READ_COMPLETE, [&](HINTERNET handle) {
       return WinHttpReadData(handle, state->bytes.data(), static_cast<DWORD>(state->bytes.size()), nullptr);

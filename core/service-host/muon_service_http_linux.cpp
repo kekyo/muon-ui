@@ -74,6 +74,11 @@ MuonServiceHttpResult RunDesktopMuonServiceHttp(const MuonServiceHttpHop& hop, M
   settings.on_headers_complete = [](llhttp_t* p) {
     auto& s = *static_cast<HttpResponseParser*>(p->data);
     s.result.status = llhttp_get_status_code(p);
+    if (!s.head && s.result.status >= 200 && s.result.status != 304 &&
+        (p->flags & F_CONTENT_LENGTH) && p->content_length > MuonHttpBodyLimit) {
+      s.exceeded = true;
+      return -1;
+    }
     return s.head ? 1 : 0;
   };
   settings.on_body = [](llhttp_t* p, const char* data, size_t n) {

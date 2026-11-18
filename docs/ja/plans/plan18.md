@@ -303,7 +303,7 @@ Linux・Windowsの実行、既存のAndroid native・QuickJS、ページ用Node.
 - [x] ビルド失敗時に旧サービスを維持し、次の編集から更新を再試行できる。
 - [x] 開発セッション終了時に、サービスホストとNode.js子プロセスを回収する。
 - [x] 独立した利用アプリで公開パッケージによる開発・配布・実行を確認する。
-- [ ] Linux・Windowsと既存Android、ページ用Node.jsを回帰検証し、全体テストが成功する。
+- [x] Linux・Windowsと既存Android、ページ用Node.jsを回帰検証し、全体テストが成功する。
 - [x] 利用ガイドと検証記録を更新し、実行確認とビルド・配置の検査を区別する。
 - [x] 今回対象外としたQuickJSの基本I/O、`muon.server`の移動、executor・sidecar全体の再整理を含めない。
 
@@ -531,3 +531,49 @@ Windowsのサーバー試験は32bit・64bitとも8件ずつ成功し、両タ�
 64bitの通知試験で取得した診断でも、この誤判定を確認した。対象のPID 5876は終了コード0で終了済みだったが、SDKは起動前から存在するWindowsのプロセスとagent自身を子プロセスへ含め、全体を実行中と判定していた。その作成時刻は17時台UTCで、試験用プロセスの作成時刻は09時52分UTCだった。他の終了待ちの失敗もすべて同じ原因かどうかは未確定である。
 
 再現試験は`.build/plan18-agent-rover-pid-reuse.test.ts`、結果は`.build/plan18-agent-rover-pid-reuse.log`へ保存した。Windowsの管理対象プロセス数を優先する修正案を`.build/plan18-agent-rover-native-job.patch`に用意し、別リポジトリーへの適用チェックまで実施した。外部コードを変更しないという利用者の指示に従い、修正案は未適用であり、対象範囲を広げるか確認中である。全体試験の成功を確認してから計画の完了を判定する。
+
+### 2026年11月18日 agent-rover 0.11.0への更新
+
+利用者から`agent-rover` 0.11.0への更新と修正確認を依頼されたため、UIとCEF試験の開発依存を更新した。公開npmパッケージを使用し、ロックファイルにも0.11.0を記録した。Windows試験が要求する通信仕様を`2026-11-17.2`へ変更し、`process.managedProcesses`と`process.managedRunning`の提供も検証するようにした。
+
+Windows 11 VMのエージェントも[公式の0.11.0配布物](https://github.com/kekyo/agent-rover/releases/tag/0.11.0)へ更新した。配布アーカイブと実行ファイルのSHA-256を照合し、既存の接続設定と起動引数を保って再起動した。接続後の応答でバージョン、通信仕様、新しい機能の提供を確認した。旧実行ファイルは同じディレクトリーにバックアップした。
+
+WindowsのJobはプロセスの集合を管理する仕組みである。0.11.0ではJobに属する実際のプロセスを使って子プロセスを列挙し、親が終了した後も生存する子を含めて終了を判定する。SDKはこの情報を使い、親PIDと作成時刻による推定を加えない。[管理対象プロセスの列挙と終了判定](https://github.com/kekyo/agent-rover/blob/0.11.0/agents/README.md#managed-capture-and-tree-state)
+
+公開APIを使う単独検証に、無関係なプロセスが子プロセスの一覧へ混入しないことの確認も加えた。同じ条件を旧版と新版の通信仕様に合わせて比較した結果、0.10.0では3件中2件が失敗し、0.11.0では3件とも成功した。時計の巻き戻りとPID再利用があっても終了を正しく判定し、親の終了後に本来の子が残っている間は待機することを確認した。結果は`.build/plan18-agent-rover-0.10.0-comparison.log`と`.build/plan18-agent-rover-0.11.0-comparison.log`へ保存した。
+
+実Windowsでは通信仕様の検証と、前回PID 5876の終了待ちで失敗した通知操作の試験が成功した。この実行は対象を絞った2件であり、選択しなかった274件はスキップとして記録される。結果は`.build/plan18-agent-rover-0.11.0-windows-focused.log`へ保存した。
+
+依存パッケージと試験を更新し、コミット`8d1e92d9`へ保存した。セルフビルドガイドも日本語・英語ともに0.11.0へ更新し、Windows側のエージェントも更新する手順を追加した。
+
+0.11.0での全体試験の初回はLinuxのCEFとWindowsのパス・ビルダー試験まで成功した。Windowsの32bitプラグイン試験中に終了コード143（SIGTERM）で中断し、テスト失敗の記録はなく、シグナルの送信元も特定できなかった。この実行は成功として数えず、ログを`.build/plan18-agent-rover-0.11.0-full-test.log`へ保持した。再実行ではログに加えて終了状態もファイルへ保存するようにした。
+
+再実行ではWindowsの32bitプラグイン試験237件が成功し、長いパスの診断を調べる1件が失敗した。結果は`.build/plan18-agent-rover-0.11.0-full-retry.log`へ保存した。0.11.0で一時ディレクトリー名が長くなり、作業ディレクトリーのパス全体が診断の先頭部分に収まらなくなっていた。試験はその部分が省略されないことを期待していた。[0.11.0の一時ディレクトリー生成処理](https://github.com/kekyo/agent-rover/blob/0.11.0/agents/windows/win32_temp_directory.cpp)
+
+診断に残った先頭と末尾が元のパスに一致することを調べる検証へ変更した。Unicodeファイル名、エラー番号、メッセージの255バイト上限、Unicodeの置換文字（U+FFFD）がないことの確認も維持している。修正した試験は32bit・64bitともに成功し、型検査も通過した。結果は`.build/plan18-agent-rover-0.11.0-long-path-i686.log`と`.build/plan18-agent-rover-0.11.0-long-path-amd64.log`へ保存した。各実行は対象の1件が成功し、選択しなかった267件はスキップとなる。この試験の修正はコミット`63d03bf4`へ保存した。
+
+### 2026年11月19日 全体試験と完了判定
+
+コミット`63d03bf4`でリポジトリーのルートから`npm test`を再実行し、終了コード0で完了した。所要時間は約1時間51分で、終了時刻は11月19日0時49分（JST）だった。Windowsの試験先は`win11vm`、試験用Node.jsは`C:\Program Files\nodejs\node.exe`、AndroidのJavaはTemurin 21を指定した。
+
+| 検証 | 結果 |
+| --- | --- |
+| 共通C/C++とビルダー | Makefile、シェルスクリプト、Wineによる試験が成功 |
+| SDK | 119件成功 |
+| Android | 111件成功、2件スキップ。APKのビルドと静的検査を含む |
+| AndroidのQuickJS試作 | 3件成功 |
+| Node.js | 44件成功 |
+| UI | 616件成功、7件スキップ |
+| LinuxのCEF native試験 | 62件成功 |
+| Linuxの実CEF | 267件成功、33件スキップ |
+| Windowsのパス | 62件成功 |
+| Windowsのビルダーパス | 122件成功 |
+| Windowsのプラグイン | 32bit・64bitそれぞれ238件成功、30件スキップ |
+| Windowsの通知 | 32bit・64bitそれぞれ8件成功 |
+| Windowsのサーバー | 32bit・64bitそれぞれ8件成功 |
+| Windowsのサービスホスト | 両ターゲットを検証する1件が成功 |
+| WindowsのサービスUI | 32bit・64bitそれぞれ2件成功 |
+
+Windowsの各スイートはVMへ接続して実行した。前回失敗した通知の終了待ちとサービスUIの試験も成功した。ログは`.build/plan18-agent-rover-0.11.0-full-final.log`、開始・終了時刻と終了コードは`.build/plan18-agent-rover-0.11.0-full-final-status.json`へ保存した。
+
+段階1から4の実装記録、段階5の独立した利用アプリによる開発・配布・実行確認、今回の全体試験を完了条件と照合し、すべて満たしたためplan18を完了とする。Linux armhf・arm64とAndroid arm64の実行は、段階5に記録したとおり未確認である。これらはビルド・配置・依存関係の検査として区別している。

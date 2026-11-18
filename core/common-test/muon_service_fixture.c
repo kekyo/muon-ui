@@ -24,8 +24,9 @@ static void finish_stop(void* data) {
   complete(completion_data);
 }
 
-static void stop(void* data, muon_service_stop_completion complete,
+static void stop(void* data, const muon_service_stop_info* info, muon_service_stop_completion complete,
                   void* completion_data) {
+  (void)info;
   fixture_state* state = (fixture_state*)data;
   state->stopped = complete;
   state->completion_data = completion_data;

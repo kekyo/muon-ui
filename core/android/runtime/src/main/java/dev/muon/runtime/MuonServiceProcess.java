@@ -8,6 +8,9 @@ package dev.muon.runtime;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
+import androidx.core.content.ContextCompat;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
@@ -85,6 +88,7 @@ final class MuonServiceProcess {
     private final Map<String, SourceStart> sourceStarts = new HashMap<>();
     private long nextWatch = 1;
     private long nativeHandle;
+    private boolean sessionEnding;
     private boolean initialized;
     private String initializationError;
     private JSONObject lastHostExit;
@@ -186,13 +190,22 @@ final class MuonServiceProcess {
                 if (path == null) throw new IllegalStateException("Service plugin is not installed: " + soname);
                 entry.put("library", path);
             }
+            // Keep the receiver on the service process Looper, including while an Activity is detached.
+            ContextCompat.registerReceiver(context, new BroadcastReceiver() {
+                @Override public void onReceive(Context receiverContext, Intent intent) {
+                    if (Intent.ACTION_SHUTDOWN.equals(intent.getAction())) {
+                        sessionEnding = true;
+                        if (nativeHandle != 0) nativeSessionEnding(nativeHandle);
+                    }
+                }
+            }, new IntentFilter(Intent.ACTION_SHUTDOWN), ContextCompat.RECEIVER_NOT_EXPORTED);
             String pluginRegistry = plugins.toString();
             MuonServiceExitHistory.load(context, handler, (history, historyError) -> {
                 lastHostExit = history;
                 if (historyError != null) Log.w("MuonNativeService", "Cannot read previous host exit: " + historyError);
                 preferences.load(ids, (overrides, error) -> {
-                    initializationError = error;
-                    if (error == null) {
+                    initializationError = sessionEnding ? "Android device shutdown" : error;
+                    if (initializationError == null) {
                         try {
                             nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
                                     autostarts, overrides, configurations, pluginGrants, pluginRegistry);
@@ -475,13 +488,13 @@ final class MuonServiceProcess {
         nativeStartFailed(nativeHandle, id, generation, error);
     }
 
-    void runtimeStop(String id, long generation, String reason) {
-        nativeRuntimeStop(nativeHandle, id, generation, reason);
+    void runtimeStop(String id, long generation, String reason, boolean timeout) {
+        nativeRuntimeStop(nativeHandle, id, generation, reason, timeout);
     }
 
     void componentDestroyed(MuonNativeService component, String id, long generation, boolean stopped) {
         if (components.get(id) == component) components.remove(id);
-        if (!stopped) runtimeStop(id, generation, "Android destroyed the service component");
+        if (!stopped) runtimeStop(id, generation, "Android destroyed the service component", false);
     }
 
     private void onEvent(String json) {
@@ -529,5 +542,6 @@ final class MuonServiceProcess {
     private static native String nativeSnapshot(long handle, String id);
     private static native boolean nativeForegroundReady(long handle, String id, long generation, String source, long remaining);
     private static native void nativeStartFailed(long handle, String id, long generation, String error);
-    private static native void nativeRuntimeStop(long handle, String id, long generation, String error);
+    private static native void nativeSessionEnding(long handle);
+    private static native void nativeRuntimeStop(long handle, String id, long generation, String error, boolean timeout);
 }

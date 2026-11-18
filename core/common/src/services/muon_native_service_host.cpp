@@ -23,6 +23,12 @@ struct MuonNativeServiceEntry final
   std::vector<muon_plugin_config_entry> config;
   muon_service_host host{};
   muon_service_context context{};
+  muon_service_signal signal{};
+  MuonServiceCancellation cleanup;
+  muon_service_signal cleanup_signal{};
+  MuonServiceStopCause stop_cause{};
+  muon_service_stop_info stop_info{};
+  std::function<void()> cancel_deadline;
   std::shared_ptr<const muon_service_factory> factory;
   muon_service_instance instance{};
   MuonNativeInstanceState state = MuonNativeInstanceState::Starting;
@@ -89,10 +95,20 @@ static MuonServiceResult Failure(const std::string& code, const std::string& mes
   return {{}, code, message};
 }
 
+static muon_service_signal NativeSignal(MuonServiceCancellation& source) {
+  return {&source, [](void* data) -> int { return static_cast<MuonServiceCancellation*>(data)->aborted; },
+      [](void* data, void (*notify)(void*), void* user) -> uint64_t {
+        return notify ? static_cast<MuonServiceCancellation*>(data)->Subscribe([notify, user] { notify(user); }) : 0;
+      }, [](void* data, uint64_t id) { static_cast<MuonServiceCancellation*>(data)->listeners.erase(id); }};
+}
+
 static void MaybeStop(const std::shared_ptr<MuonNativeServiceEntry>& entry) {
   if (entry->state == MuonNativeInstanceState::Stopping && entry->calls.empty() && !entry->stop_called) {
     entry->stop_called = true;
-    entry->instance.stop(entry->instance.user_data, &NativeStopped, entry.get());
+    const auto& cause = entry->stop_cause;
+    entry->stop_info = {MUON_SERVICE_ABI_VERSION, sizeof(muon_service_stop_info), cause.reason,
+        cause.detail.empty() ? nullptr : cause.detail.c_str(), MuonServiceRemainingMs(cause), &entry->cleanup_signal};
+    entry->instance.stop(entry->instance.user_data, &entry->stop_info, &NativeStopped, entry.get());
   }
 }
 
@@ -307,6 +323,8 @@ static void NativeStopped(void* data) {
   const auto impl = entry->owner.lock();
   assert(impl);
   Queue(impl, [impl, entry] {
+    if (entry->cancel_deadline) entry->cancel_deadline();
+    entry->cleanup.listeners.clear();
     impl->entries.erase(entry->spec.id);
     if (!entry->startup_failure.empty()) {
       auto complete = std::move(entry->started);
@@ -371,16 +389,19 @@ void MuonNativeServiceHost::Start(
     entry->config.push_back({key.c_str(), value.c_str()});
   }
   entry->host = {entry.get(), &PostNativeTask, &LogNativeMessage, &EmitEvent};
+  if (!entry->spec.signal) entry->spec.signal = std::make_shared<MuonServiceCancellation>();
+  entry->signal = NativeSignal(*entry->spec.signal);
+  entry->cleanup_signal = NativeSignal(entry->cleanup);
   entry->context = {&entry->host, entry->spec.id.c_str(), generation,
                     entry->spec.data_directory.c_str(),
                     static_cast<int32_t>(entry->config.size()),
-                    entry->config.empty() ? nullptr : entry->config.data()};
+                    entry->config.empty() ? nullptr : entry->config.data(), spec.start_reason, &entry->signal};
   impl_->entries.emplace(spec.id, entry);
   entry->factory->start(&entry->context, &NativeStarted, entry.get());
 }
 
 void MuonNativeServiceHost::Stop(const std::string& id, uint64_t generation,
-                                std::function<void()> complete) {
+                                std::function<void()> complete, MuonServiceStopCause cause) {
   const auto found = impl_->entries.find(id);
   if (found == impl_->entries.end() ||
       found->second->context.generation != generation) {
@@ -394,6 +415,14 @@ void MuonNativeServiceHost::Stop(const std::string& id, uint64_t generation,
   entry->stopped.push_back(std::move(complete));
   if (entry->state == MuonNativeInstanceState::Stopping) return;
   entry->state = MuonNativeInstanceState::Stopping;
+  entry->spec.signal->Cancel();
+  entry->stop_cause = std::move(cause);
+  if (entry->stop_cause.deadline && impl_->platform.delay) {
+    const auto remaining = MuonServiceRemainingMs(entry->stop_cause);
+    if (remaining == 0) entry->cleanup.Cancel();
+    else entry->cancel_deadline = impl_->platform.delay(std::chrono::milliseconds(remaining),
+        [entry] { entry->cleanup.Cancel(); });
+  }
   for (const auto& [id, call] : entry->calls) CancelCall(entry, call);
   MaybeStop(entry);
 }

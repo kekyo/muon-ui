@@ -6,9 +6,10 @@ typedef struct service_state {
   const muon_service_context* context;
 } service_state;
 
-static void stop_service(void* user_data,
+static void stop_service(void* user_data, const muon_service_stop_info* info,
                          muon_service_stop_completion completion,
                          void* completion_data) {
+  (void)info;
   service_state* state = (service_state*)user_data;
   state->context->host->log(state->context->host->user_data,
                             MUON_LOG_LEVEL_INFO, "Service stopped.");

@@ -157,7 +157,7 @@ class ServiceProcess final {
     if (window_) DestroyWindow(window_);
   }
 
-  cardio::promise<void> Run(std::filesystem::path config, std::string startup) {
+  cardio::promise<void> Run(std::filesystem::path config, std::string startup, muon_service_start_reason resident_reason) {
     // Native factories may finish using only our posted window messages. Keep
     // the dispatcher alive even when no cardio I/O remains during that drain.
     cardio::fire_and_forget(KeepAlive());
@@ -219,11 +219,6 @@ class ServiceProcess final {
       login_ = std::move(co_await CreateMuonServiceLoginPolicy(data_root_, definitions, std::move(startup)));
       if (session_ending_) { FinishLoop(); co_return; }
       const auto post = [this](std::function<void()> task) { Post(std::move(task)); };
-      native_ = std::make_unique<MuonNativeServiceHost>(MuonNativeServicePlatform{
-          LoadMuonNativeServiceFactory, post,
-          [](const std::string& id, muon_log_level, const std::string& message) {
-            std::cerr << id << ": " << message << '\n';
-          }});
       plugins_ = CreateMuonDesktopServicePlugins(yyjson_doc_get_root(document.get()),
           config.parent_path(), dispatcher_, [this](std::function<void()> task) {
             muon_internal::FireAndForgetOnDispatcher(&dispatcher_, [this, task = std::move(task)] {
@@ -250,21 +245,26 @@ class ServiceProcess final {
             return plugin_startup_ ? plugin_startup_->Attach(spec.id, generation, engine, std::move(wake), std::move(fault))
                                    : MuonQuickJsServiceExtension{};
           }};
+      native_ = std::make_unique<MuonNativeServiceHost>(MuonNativeServicePlatform{
+          LoadMuonNativeServiceFactory, post,
+          [](const std::string& id, muon_log_level, const std::string& message) {
+            std::cerr << id << ": " << message << '\n';
+          }, quickjs_platform.delay});
       if (plugins_) plugin_startup_ = std::make_unique<MuonQuickJsServicePlugins>(*plugins_, quickjs_platform.delay);
       node_ = std::make_unique<MuonNodeServiceHost>(MuonNodeServicePlatform{
           post, quickjs_platform.delay, quickjs_platform.log, quickjs_platform.exited, std::chrono::seconds(10)});
       quickjs_ = std::make_unique<MuonQuickJsServiceHost>(std::move(quickjs_platform));
       controller_ = std::make_unique<MuonServiceController>(definitions, MuonServiceBackend{
           [this](const MuonServiceSnapshot& state, auto complete) {
-            if (nodes_.contains(state.id)) node_->Start(nodes_.at(state.id), state.generation, std::move(complete));
+            if (nodes_.contains(state.id)) node_->Start(MuonServiceSpecForGeneration(nodes_.at(state.id), state), state.generation, std::move(complete));
             else if (scripts_.contains(state.id))
               cardio::fire_and_forget(StartScript(state, std::move(complete)));
-            else native_->Start(specs_.at(state.id), state.generation, std::move(complete));
+            else native_->Start(MuonServiceSpecForGeneration(specs_.at(state.id), state), state.generation, std::move(complete));
           },
           [this](const MuonServiceSnapshot& state, auto complete) {
-            if (nodes_.contains(state.id)) node_->Stop(state.id, state.generation, std::move(complete));
-            else if (scripts_.contains(state.id)) quickjs_->Stop(state.id, state.generation, std::move(complete));
-            else native_->Stop(state.id, state.generation, std::move(complete));
+            if (nodes_.contains(state.id)) node_->Stop(state.id, state.generation, std::move(complete), state.stop);
+            else if (scripts_.contains(state.id)) quickjs_->Stop(state.id, state.generation, std::move(complete), state.stop);
+            else native_->Stop(state.id, state.generation, std::move(complete), state.stop);
           },
           [this](const std::string& id, bool enabled, auto complete) {
             cardio::fire_and_forget(SavePolicy(id, enabled, std::move(complete)));
@@ -273,7 +273,7 @@ class ServiceProcess final {
             protocol_->Notify(event);
             if (event.kind == MuonServiceEventKind::Changed)
               std::cout << SerializeMuonServiceSnapshot(event.snapshot) << std::endl;
-          }, post});
+          }, post}, resident_reason);
       broker_ = std::make_unique<MuonServiceBroker>(*controller_, RouteMuonServiceExecutions(
           {native_->Execution(), quickjs_->Execution(), node_->Execution()},
           [this](const std::string& id) { return nodes_.contains(id) ? size_t{2} : scripts_.contains(id) ? size_t{1} : size_t{0}; }));
@@ -334,7 +334,7 @@ class ServiceProcess final {
   cardio::promise<void> StartScript(MuonServiceSnapshot state,
       std::function<void(const std::string&)> complete) {
     ++runtime_jobs_;
-    auto spec = scripts_.at(state.id);
+    auto spec = MuonServiceSpecForGeneration(scripts_.at(state.id), state);
     spec.startup_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     auto timeout = cardio::cancellations::timeout(10000);
     std::string error;
@@ -383,8 +383,15 @@ class ServiceProcess final {
     if (!self) return DefWindowProcW(window, message, wparam, lparam);
     if (message == WM_QUERYENDSESSION) return TRUE;
     if (message == WM_ENDSESSION && wparam) {
+      if (self->session_ending_) return 0;
       self->session_ending_ = true;
-      if (self->controller_) self->controller_->Shutdown("User session ended");
+      if (self->controller_) {
+        const auto logoff = (lparam & ENDSESSION_LOGOFF) != 0;
+        const auto maintenance = static_cast<DWORD>(lparam) == ENDSESSION_CLOSEAPP;
+        self->controller_->Shutdown("Windows confirmed termination", {
+            maintenance ? MUON_SERVICE_STOP_APP_EXIT : MUON_SERVICE_STOP_SESSION_ENDING,
+            logoff ? "logoff" : maintenance ? "close-app" : "shutdown-or-restart"});
+      }
       self->MaybeFinish();
       // Returning from WM_ENDSESSION permits immediate OS termination. Keep
       // pumping completion messages while native stops drain; Windows may still
@@ -547,6 +554,7 @@ class ServiceProcess final {
   }
 
   cardio::promise<void> WatchBootstrap() {
+    bool updated = false;
     try {
       for (;;) {
         char bytes[256];
@@ -557,7 +565,8 @@ class ServiceProcess final {
           // Release the UI startup guard while retaining EOF ownership. The
           // supervisor may disappear without sending an administrative RPC.
           for (size_t index = 0; index < size; ++index)
-            if (bytes[index] != 'd') throw std::invalid_argument("Invalid development session command");
+            if (bytes[index] == 'u') updated = true;
+            else if (bytes[index] != 'd') throw std::invalid_argument("Invalid development session command");
           bootstrap_live_ = false;
           ever_connected_ = true;
           MaybeFinish();
@@ -575,7 +584,8 @@ class ServiceProcess final {
     }
     bootstrap_live_ = false;
     ever_connected_ = true;
-    if (development_) controller_->Shutdown("Development session ended");
+    if (development_) controller_->Shutdown("Development session ended",
+        {updated ? MUON_SERVICE_STOP_DEVELOPMENT_UPDATE : MUON_SERVICE_STOP_DEVELOPMENT_EXIT});
     --io_count_;
     MaybeFinish();
   }
@@ -654,10 +664,13 @@ int wmain(int argc, wchar_t** argv) {
     for (int index = 1; index + 1 < argc; index += 2)
       arguments.emplace(argv[index], argv[index + 1]);
     const auto bootstrap = arguments.contains(L"--bootstrap");
-    const auto development = bootstrap && arguments.at(L"--bootstrap") == L"development";
+    const auto mode = bootstrap ? arguments.at(L"--bootstrap") : L"";
+    const auto development = mode == L"development" || mode == L"development-update";
+    const auto resident_reason = mode == L"login" ? MUON_SERVICE_START_LOGIN_AUTOSTART :
+        mode == L"development-update" ? MUON_SERVICE_START_DEVELOPMENT_UPDATE : MUON_SERVICE_START_APP;
     const auto count = 3 + static_cast<int>(bootstrap) + static_cast<int>(arguments.contains(L"--startup"));
     if (argc != count * 2 + 1 || arguments.size() != static_cast<size_t>(count) ||
-        (bootstrap && !development && arguments.at(L"--bootstrap") != L"stdin") || !arguments.contains(L"--config") ||
+        (bootstrap && !development && mode != L"stdin" && mode != L"login") || !arguments.contains(L"--config") ||
         !arguments.contains(L"--endpoint") || !arguments.contains(L"--data-root"))
       throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint PIPE --data-root DIR [--bootstrap stdin]");
     const auto& endpoint = arguments.at(L"--endpoint");
@@ -676,7 +689,7 @@ int wmain(int argc, wchar_t** argv) {
     cardio::dispatcher_host_win32_auto dispatcher(group);
     ServiceProcess process(group, dispatcher, endpoint, arguments.at(L"--data-root"), bootstrap, development);
     cardio::fire_and_forget(process.Run(arguments.at(L"--config"), arguments.contains(L"--startup") ?
-        muon_internal::FilesystemPathToUtf8(arguments.at(L"--startup")) : ""));
+        muon_internal::FilesystemPathToUtf8(arguments.at(L"--startup")) : "", resident_reason));
     dispatcher.park();
     return process.ExitCode();
   } catch (const std::exception& error) {

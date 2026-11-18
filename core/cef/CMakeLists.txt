@@ -870,6 +870,8 @@ if(WIN32)
   target_compile_definitions(muon_service_desktop PRIVATE _WIN32_WINNT=0x0601)
   target_compile_definitions(muon_service_host PRIVATE _WIN32_WINNT=0x0601 NOMINMAX)
   target_link_options(muon_service_host PRIVATE -municode)
+else()
+  target_sources(muon_service_host PRIVATE ../service-host/muon_service_session_monitor.cpp)
 endif()
 MUON_APPLY_SANITIZERS(muon_service_host)
 

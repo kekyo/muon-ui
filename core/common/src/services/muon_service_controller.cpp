@@ -19,8 +19,8 @@ struct MuonServiceControllerImpl {
   bool scheduled = false;
 
   MuonServiceControllerImpl(const std::vector<MuonServiceDefinition>& definitions,
-                             MuonServiceBackend callbacks)
-      : lifecycle(definitions), backend(std::move(callbacks)) {}
+                             MuonServiceBackend callbacks, muon_service_start_reason resident_reason)
+      : lifecycle(definitions, resident_reason), backend(std::move(callbacks)) {}
 };
 
 static void Dispatch(const std::shared_ptr<MuonServiceControllerImpl>& impl);
@@ -48,7 +48,11 @@ static void DispatchAction(const std::shared_ptr<MuonServiceControllerImpl>& imp
       });
       return;
     }
+    case MuonServiceEventKind::CancelStart:
+      event.snapshot.signal->Cancel();
+      return;
     case MuonServiceEventKind::Stop:
+      event.snapshot.signal->Cancel();
       impl->backend.stop(event.snapshot, [weak, id, generation] {
         if (const auto owner = weak.lock()) {
           owner->lifecycle.CompleteStop(id, generation);
@@ -110,8 +114,9 @@ static void Dispatch(const std::shared_ptr<MuonServiceControllerImpl>& impl) {
 }
 
 MuonServiceController::MuonServiceController(
-    const std::vector<MuonServiceDefinition>& definitions, MuonServiceBackend backend)
-    : impl_(std::make_shared<MuonServiceControllerImpl>(definitions, std::move(backend))) {
+    const std::vector<MuonServiceDefinition>& definitions, MuonServiceBackend backend,
+    muon_service_start_reason resident_reason)
+    : impl_(std::make_shared<MuonServiceControllerImpl>(definitions, std::move(backend), resident_reason)) {
   if (!impl_->backend.start || !impl_->backend.stop ||
       !impl_->backend.save_autostart || !impl_->backend.notify || !impl_->backend.post) {
     throw std::invalid_argument("service backend operations are required");
@@ -151,8 +156,8 @@ uint64_t MuonServiceController::SetAutostart(const std::string& id, bool enabled
 
 void MuonServiceController::RequestRuntimeStop(const std::string& id,
                                                uint64_t generation,
-                                               const std::string& reason) {
-  impl_->lifecycle.RequestRuntimeStop(id, generation, reason);
+                                               const std::string& reason, MuonServiceStopCause cause) {
+  impl_->lifecycle.RequestRuntimeStop(id, generation, reason, std::move(cause));
   Dispatch(impl_);
 }
 
@@ -163,8 +168,8 @@ void MuonServiceController::RuntimeExited(const std::string& id,
   Dispatch(impl_);
 }
 
-void MuonServiceController::Shutdown(const std::string& reason) {
-  impl_->lifecycle.Shutdown(reason);
+void MuonServiceController::Shutdown(const std::string& reason, MuonServiceStopCause cause) {
+  impl_->lifecycle.Shutdown(reason, std::move(cause));
   Dispatch(impl_);
 }
 

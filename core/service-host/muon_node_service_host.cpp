@@ -156,10 +156,11 @@ static void Fault(const std::shared_ptr<NodeServiceEntry>& entry, const std::str
   Queue(owner, [entry] { Finish(entry); });
 }
 
-static void Deadline(const std::shared_ptr<NodeServiceEntry>& entry, const std::string& message) {
+static void Deadline(const std::shared_ptr<NodeServiceEntry>& entry, const std::string& message,
+    std::optional<std::chrono::milliseconds> remaining = std::nullopt) {
   if (entry->cancel_deadline) entry->cancel_deadline();
   const auto owner = entry->owner.lock();
-  entry->cancel_deadline = owner->platform.delay(owner->platform.lifecycle_timeout,
+  entry->cancel_deadline = owner->platform.delay(remaining.value_or(owner->platform.lifecycle_timeout),
       [entry, message] { Fault(entry, message); });
 }
 
@@ -344,6 +345,7 @@ static cardio::promise<void> StartChild(const std::shared_ptr<NodeServiceEntry> 
     Request(entry, "initialize", "{\"protocol\":\"node-service/1\",\"token\":" + Quote(entry->child.session_token) +
         ",\"projectRoot\":" + Quote(entry->spec.project) + ",\"entry\":" + Quote(entry->spec.entry) +
         ",\"id\":" + Quote(entry->spec.id) + ",\"generation\":" + Quote(std::to_string(entry->generation)) +
+        ",\"startReason\":" + Quote(MuonServiceReasonName(entry->spec.start_reason)) +
         ",\"config\":" + config + ",\"dataDirectory\":" + Quote(entry->spec.data_directory) + "}",
         [entry](yyjson_val* value) {
           if (Field(value, "protocol") != "node-service/1") throw std::invalid_argument("Unsupported Node service protocol");
@@ -359,6 +361,15 @@ static cardio::promise<void> StartChild(const std::shared_ptr<NodeServiceEntry> 
             started({});
           });
         });
+    if (entry->spec.signal) {
+      const auto cancel = [weak = std::weak_ptr<NodeServiceEntry>(entry)] {
+        const auto current = weak.lock();
+        if (!current || current->ready || current->closed || !current->fault.empty()) return;
+        try { Request(current, "cancelStart", "{}", [](yyjson_val*) {}); }
+        catch (const std::exception& error) { Fault(current, error.what()); }
+      };
+      if (!entry->spec.signal->Subscribe(cancel)) cancel();
+    }
   } catch (const std::exception& error) { Fault(entry, error.what()); }
   Done(entry);
 }
@@ -404,24 +415,29 @@ void MuonNodeServiceHost::Start(const MuonNodeServiceSpec& spec, uint64_t genera
   });
 }
 
-void MuonNodeServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete) {
+void MuonNodeServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete, MuonServiceStopCause cause) {
   const auto found = impl_->entries.find({id, generation});
   if (found == impl_->entries.end()) { Queue(impl_, std::move(complete)); return; }
   const auto entry = found->second;
   entry->stopped.push_back(std::move(complete));
   if (entry->stopping || !entry->fault.empty()) return;
   entry->stopping = true;
-  Queue(impl_, [entry] {
+  const auto deadline = std::chrono::steady_clock::now() + impl_->platform.lifecycle_timeout;
+  cause.deadline = std::min(deadline, cause.deadline.value_or(deadline));
+  Queue(impl_, [entry, cause = std::move(cause)] {
     if (entry->closed || !entry->fault.empty()) return;
     try {
-      Deadline(entry, "Node service stop deadline exceeded");
+      const auto remaining = MuonServiceRemainingMs(cause);
+      Deadline(entry, "Node service stop deadline exceeded", std::chrono::milliseconds(remaining));
       for (const auto& [id, call] : entry->calls) {
         (void)id;
         call->cancelled = true;
         call->callbacks.clear();
         Complete(entry, call, {{}, "cancelled", "Node service stopped"});
       }
-      Request(entry, "stop", "{\"reason\":\"Service stopped\"}", [entry](yyjson_val* value) {
+      Request(entry, "stop", "{\"reason\":" + Quote(MuonServiceReasonName(cause.reason)) +
+          (cause.detail.empty() ? "" : ",\"detail\":" + Quote(cause.detail)) +
+          ",\"remainingMs\":" + std::to_string(remaining) + "}", [entry](yyjson_val* value) {
         if (!yyjson_is_true(yyjson_obj_get(value, "stopped"))) throw std::invalid_argument("Invalid Node service stop response");
         entry->stop_acknowledged = true;
       });

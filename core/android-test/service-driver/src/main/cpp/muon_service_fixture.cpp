@@ -189,8 +189,14 @@ static cardio::promise<void> StopAsync(Fixture* state) {
   state->context->host->post(state->context->host->user_data, FinishStop, state);
 }
 
-static void Stop(void* data, muon_service_stop_completion completion, void* completion_data) {
+static void Stop(void* data, const muon_service_stop_info* info,
+    muon_service_stop_completion completion, void* completion_data) {
   auto* state = static_cast<Fixture*>(data);
+  const auto* context = state->context;
+  const auto observation = "lifecycle " + std::to_string(context->generation) + " " +
+      muon_service_start_reason_name(context->start_reason) + " " + muon_service_stop_reason_name(info->reason) +
+      (info->detail ? std::string(" ") + info->detail : "");
+  context->host->log(context->host->user_data, MUON_LOG_LEVEL_INFO, observation.c_str());
   state->stop_completion = completion;
   state->stop_data = completion_data;
   state->stopping.emplace(StopAsync(state));

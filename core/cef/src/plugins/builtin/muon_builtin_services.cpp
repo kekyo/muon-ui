@@ -140,7 +140,7 @@ static std::string StartupMetadata(const MuonConfig& config,
 }
 
 std::shared_ptr<MuonServiceSession> CreateMuonBuiltinServiceSession(const MuonConfig& config,
-    const std::vector<std::filesystem::path>& config_paths, bool refresh) {
+    const std::vector<std::filesystem::path>& config_paths, bool refresh, bool login_launch) {
   if (!config.service_endpoint.empty()) {
     // The development command owns startup and shutdown. A stale page must
     // never spawn a replacement after that supervisor has ended its session.
@@ -170,7 +170,7 @@ std::shared_ptr<MuonServiceSession> CreateMuonBuiltinServiceSession(const MuonCo
   return std::make_shared<MuonServiceSession>(MuonServiceProcessOptions{
       muon_internal::FilesystemPathToUtf8(executable),
       muon_internal::FilesystemPathToUtf8(config.service_registry), endpoint,
-      muon_internal::FilesystemPathToUtf8(config.browser.profile / "services"), startup});
+      muon_internal::FilesystemPathToUtf8(config.browser.profile / "services"), startup, false, login_launch});
 }
 
 void InitializeMuonBuiltinServices(const MuonConfig& config,
@@ -178,7 +178,7 @@ void InitializeMuonBuiltinServices(const MuonConfig& config,
   shutdown_requested = false;
   const auto arguments = GetMuonStartupCommandLine();
   const auto login = std::find(arguments.begin(), arguments.end(), "--muon-autostart") != arguments.end();
-  session = CreateMuonBuiltinServiceSession(config, config_paths, !login);
+  session = CreateMuonBuiltinServiceSession(config, config_paths, !login, login);
   cardio::fire_and_forget(Start(session));
 }
 

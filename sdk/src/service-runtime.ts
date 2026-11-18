@@ -27,8 +27,43 @@ export type ServiceRuntimeResult =
       /** Human-readable diagnostic. */ readonly message: string;
     };
 
+const startReasons = [
+  'acquire',
+  'app-start',
+  'login-autostart',
+  'autostart-enabled',
+  'development-update',
+] as const;
+const stopReasons = [
+  'reference-released',
+  'app-exit',
+  'session-ending',
+  'development-update',
+  'development-exit',
+  'execution-timeout',
+  'host-stop',
+] as const;
+
+/** The demand that started this generation, fixed until it stops. */
+export type ServiceStartReason = (typeof startReasons)[number];
+/** The first termination request accepted by the host for this generation. */
+export type ServiceStopReason = (typeof stopReasons)[number];
+
+/** Host observation passed to the runtime at the beginning of shutdown. */
+export interface ServiceStopRequest {
+  /** Why this generation is stopping. */ readonly reason: ServiceStopReason;
+  /** Additional platform information when available. */ readonly detail?: string;
+  /** Remaining cleanup time in milliseconds when the host has a deadline. */ readonly remainingMs?: number;
+}
+
+/** Information passed to the author's cleanup handler. */
+export interface ServiceStopInfo extends ServiceStopRequest {
+  /** Cancels cleanup I/O when the host deadline expires. */ readonly signal: ServiceCancellationSignal;
+}
+
 /** Immutable host inputs for one logical service generation. */
 export interface ServiceRuntimeInput {
+  /** Why the host started this generation. */ readonly startReason: ServiceStartReason;
   /** Configured logical service name. */ readonly id: string;
   /** Positive decimal uint64 generation. */ readonly generation: string;
   /** Application-owned configuration strings. */ readonly config: Readonly<
@@ -75,10 +110,10 @@ export interface ServiceImplementation<Definition extends ServiceInterface> {
   /** Exactly the methods described by the shared interface. */ readonly methods: ServiceMethods<Definition>;
   /**
    * Releases instance resources after real invocations and callbacks have drained.
-   * @param reason - Host-provided stop reason; the first request wins.
+   * @param info - First accepted reason and cancellation signal for cleanup.
    * @returns Completion after every author-owned resource is released.
    */
-  readonly stop: (reason: string) => void | Promise<void>;
+  readonly stop: (info: ServiceStopInfo) => void | Promise<void>;
 }
 
 /** Portable service entry point. @typeParam Definition - Shared literal schema. */
@@ -143,14 +178,16 @@ export interface ServiceRuntime {
    * @param callId - Invocation identity; already completed calls are ignored.
    */
   readonly cancel: (callId: string) => void;
+  /** Cancels asynchronous initialization when demand is withdrawn during startup. */
+  readonly cancelStart: () => void;
   /**
    * Closes admission, cancels active calls, drains them, then awaits author cleanup.
-   * @param reason - Host-provided stop reason; the first request wins.
+   * @param request - First accepted reason, platform detail and remaining time.
    * @returns The shared shutdown completion.
    * @remarks This adapter never fabricates completion for pending author promises.
    * The embedding host owns deadlines and runtime interruption.
    */
-  readonly stop: (reason: string) => Promise<void>;
+  readonly stop: (request: ServiceStopRequest) => Promise<void>;
 }
 
 const deferred = <T>() => {
@@ -321,6 +358,8 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           Array.isArray(input.config)
         )
           throw new TypeError('Invalid service configuration');
+        if (!startReasons.includes(input.startReason))
+          throw new TypeError('Invalid service start reason');
         const config = Object.freeze(
           Object.fromEntries(
             Object.entries(input.config).map(([key, value]) => [
@@ -332,6 +371,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
         const context: ServiceStartContext<Definition> = Object.freeze({
           id: text(input.id),
           generation: identity(input.generation),
+          startReason: input.startReason,
           dataDirectory: text(input.dataDirectory),
           config,
           signal: source.signal,
@@ -368,7 +408,8 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           )
         )
           throw new TypeError('Service methods do not match the interface');
-        if (phase === 'starting') phase = 'running';
+        if (phase === 'starting')
+          phase = source.signal.aborted ? 'stopping' : 'running';
         started.resolve();
       } catch (error) {
         phase = 'failed';
@@ -525,10 +566,32 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
     const call = calls.get(id);
     if (call) cancelCall(call);
   };
-  const stop: ServiceRuntime['stop'] = (reason) => {
+  const stop: ServiceRuntime['stop'] = (request) => {
     if (shutdown) return shutdown;
+    if (
+      !request ||
+      !stopReasons.includes(request.reason) ||
+      (request.remainingMs !== undefined &&
+        (!Number.isSafeInteger(request.remainingMs) ||
+          request.remainingMs < 0 ||
+          request.remainingMs > 2147483647))
+    )
+      return Promise.reject(new TypeError('Invalid service stop request'));
+    const { reason, detail, remainingMs } = request;
+    const deadline =
+      remainingMs === undefined ? undefined : Date.now() + remainingMs;
+    const cleanup = cancellation();
     const stopped = deferred<void>();
     shutdown = stopped.promise;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (remainingMs !== undefined) {
+      try {
+        timer = setTimeout(cleanup.abort, remainingMs);
+      } catch {
+        // QuickJS imposes a per-instance timer quota. Cleanup still runs once.
+        cleanup.abort();
+      }
+    }
     phase = 'stopping';
     source.abort();
     for (const call of calls.values()) cancelCall(call);
@@ -542,8 +605,21 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           }
         }
         await Promise.all([...calls.values()].map((call) => call.done.promise));
-        if (instance && typeof instance.stop === 'function')
-          await instance.stop(reason);
+        if (instance && typeof instance.stop === 'function') {
+          const left =
+            deadline === undefined
+              ? undefined
+              : Math.max(0, Math.min(remainingMs!, deadline - Date.now()));
+          if (left === 0) cleanup.abort();
+          await instance.stop(
+            Object.freeze({
+              reason,
+              signal: cleanup.signal,
+              ...(detail === undefined ? {} : { detail }),
+              ...(left === undefined ? {} : { remainingMs: left }),
+            })
+          );
+        }
         instance = undefined;
         phase = 'stopped';
         source.clear();
@@ -551,10 +627,16 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
       } catch (error) {
         phase = 'failed';
         stopped.reject(error);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        cleanup.abort();
       }
     };
     void run();
     return shutdown;
   };
-  return Object.freeze({ start, invoke, cancel, stop });
+  const cancelStart = () => {
+    if (phase === 'starting' || phase === 'new') source.abort();
+  };
+  return Object.freeze({ start, invoke, cancel, cancelStart, stop });
 };

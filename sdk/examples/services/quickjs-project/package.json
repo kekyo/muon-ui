@@ -14,7 +14,9 @@
     "muon-plugin-sdk": "*"
   },
   "peerDependenciesMeta": {
-    "muon-plugin-sdk": { "optional": true }
+    "muon-plugin-sdk": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "prettier-max": "^1.16.0",

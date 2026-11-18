@@ -6,6 +6,7 @@
 
 #pragma once
 #include "services/muon_service_execution.h"
+#include "services/muon_service_reason.h"
 #include <chrono>
 #include <muon_plugin_api.h>
 
@@ -18,6 +19,8 @@ struct MuonNodeServiceSpec {
   std::string bridge; /**< Absolute bundled service bridge. */
   std::string data_directory; /**< Writable service-private data directory. */
   std::vector<std::pair<std::string, std::string>> config; /**< String settings. */
+  muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE; /**< Demand for this generation. */
+  std::shared_ptr<MuonServiceCancellation> signal{}; /**< Shared cancellation during asynchronous initialization. */
 };
 
 /** Owner dispatcher callbacks, also used while draining child processes. */
@@ -48,7 +51,7 @@ class MuonNodeServiceHost final {
   void Start(const MuonNodeServiceSpec& spec, uint64_t generation,
       std::function<void(const std::string&)> complete);
   /** Completes after author stop, process exit, and transport resource drainage. */
-  void Stop(const std::string& id, uint64_t generation, std::function<void()> complete);
+  void Stop(const std::string& id, uint64_t generation, std::function<void()> complete, MuonServiceStopCause cause = {});
   /** @returns Borrowed operations; this host must outlive them. */
   MuonServiceExecution Execution();
   /** @returns Whether all children and owner callbacks have drained. */

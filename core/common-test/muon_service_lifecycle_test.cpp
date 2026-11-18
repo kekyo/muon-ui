@@ -41,6 +41,33 @@ static bool DefaultsAndOverrides() {
                 "resident starts must not create page references");
 }
 
+static bool GenerationReasons() {
+  auto manager = MuonServiceLifecycle({{"sync", true, std::nullopt}}, MUON_SERVICE_START_LOGIN_AUTOSTART);
+  if (!Expect(manager.GetSnapshot("sync")->start_reason == MUON_SERVICE_START_LOGIN_AUTOSTART,
+              "the first resident generation records the login launch")) return false;
+  manager.CompleteStart("sync", 1, "");
+  const auto handle = *manager.Acquire("sync", "page");
+  manager.CompleteAutostart("sync", manager.SetAutostart("sync", false), "");
+  manager.Release(handle);
+  const auto pending = *manager.Acquire("sync", "page");
+  auto state = *manager.GetSnapshot("sync");
+  if (!Expect(state.stop.reason == MUON_SERVICE_STOP_REFERENCE_RELEASED && pending.generation == 2,
+              "a new acquisition cannot change the first stop reason")) return false;
+  manager.CompleteStop("sync", 1);
+  if (!Expect(manager.GetSnapshot("sync")->start_reason == MUON_SERVICE_START_ACQUIRE,
+              "the waiting page starts a new generation")) return false;
+  manager.TakeEvents();
+  manager.Shutdown("User logged off", {MUON_SERVICE_STOP_SESSION_ENDING, "logoff"});
+  manager.Shutdown("duplicate");
+  const auto cancelling = manager.TakeEvents();
+  manager.CompleteStart("sync", 2, "");
+  state = *manager.GetSnapshot("sync");
+  return Expect(Count(cancelling, MuonServiceEventKind::CancelStart) == 1 &&
+      Count(manager.TakeEvents(), MuonServiceEventKind::Stop) == 1 &&
+      state.stop.reason == MUON_SERVICE_STOP_SESSION_ENDING && state.stop.detail == "logoff",
+      "late successful start is cancelled and disposed once with the first reason");
+}
+
 static bool SharedAcquisition() {
   auto manager = MuonServiceLifecycle({{"sync", false, std::nullopt}});
   const auto a = manager.Acquire("sync", "page-a").value();
@@ -132,6 +159,20 @@ static bool ReacquireDuringStop() {
   return Expect(!manager.Release(old) && manager.IsReady(next) &&
                     manager.TakeEvents().empty(),
                 "stale completions and releases must not alter a new runtime");
+}
+
+static bool ReacquireDuringCancelledStart() {
+  MuonServiceLifecycle manager({{"sync", false, std::nullopt}});
+  const auto old = *manager.Acquire("sync", "first");
+  manager.Release(old);
+  const auto next = *manager.Acquire("sync", "second");
+  manager.TakeEvents();
+  manager.CompleteStart("sync", old.generation, "author cancelled initialization");
+  const auto events = manager.TakeEvents();
+  manager.CompleteStart("sync", next.generation, "");
+  return Expect(next.generation == old.generation + 1 &&
+      Count(events, MuonServiceEventKind::Start) == 1 && manager.IsReady(next),
+      "cancelling an abandoned startup must not strand a later page acquisition");
 }
 
 static bool CancelNextGeneration() {
@@ -502,6 +543,8 @@ int main() {
       {"shared acquisition", SharedAcquisition},
       {"exact reference identity", ExactReferenceIdentity},
       {"owner disappears during start", OwnerDisappearsDuringStart},
+      {"generation reasons", GenerationReasons},
+      {"reacquire during cancelled start", ReacquireDuringCancelledStart},
       {"reacquire during stop", ReacquireDuringStop},
       {"cancel next generation", CancelNextGeneration},
       {"persist explicit default", PersistExplicitDefault},

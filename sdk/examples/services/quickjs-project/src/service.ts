@@ -1,5 +1,8 @@
 import { fromByteArray } from 'base64-js';
-import { defineService, defineServiceInterface } from 'muon-plugin-sdk/services';
+import {
+  defineService,
+  defineServiceInterface,
+} from 'muon-plugin-sdk/services';
 
 /** A string echo and a Base64 representation of binary input. */
 export default defineService({
@@ -18,6 +21,12 @@ export default defineService({
       base64: (_call, bytes) => fromByteArray(bytes),
       notify: (_call, value) => context.emit('progress', value),
     },
-    stop: async () => {},
+    stop: (info) =>
+      console.info(
+        'lifecycle',
+        context.generation,
+        context.startReason,
+        info.reason
+      ),
   }),
 });

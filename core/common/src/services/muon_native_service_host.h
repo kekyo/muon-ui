@@ -8,6 +8,7 @@
 
 #include "muon_service_api.h"
 #include "services/muon_service_execution.h"
+#include "services/muon_service_reason.h"
 
 #include <functional>
 #include <memory>
@@ -26,6 +27,8 @@ struct MuonNativeServiceSpec {
   std::string data_directory;
   /** Immutable string configuration passed to the factory. */
   std::vector<std::pair<std::string, std::string>> config;
+  muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE; /**< Demand for this generation. */
+  std::shared_ptr<MuonServiceCancellation> signal{}; /**< Shared cancellation during asynchronous initialization. */
 };
 
 /** Platform operations; no operation depends on a UI runtime. */
@@ -42,6 +45,8 @@ struct MuonNativeServicePlatform {
   /** Writes a copied diagnostic scoped to the logical service identity. */
   std::function<void(const std::string& id, muon_log_level level,
                      const std::string& message)> log;
+  /** Owner-dispatcher timer used when the OS supplies a cleanup deadline. */
+  std::function<std::function<void()>(std::chrono::milliseconds, std::function<void()>)> delay{};
 };
 
 /** Private library and instance ownership. */
@@ -83,13 +88,14 @@ class MuonNativeServiceHost final {
    * @param id Logical identity.
    * @param generation Generation that must match the active instance.
    * @param complete Deferred completion after instance resources are disposed.
+   * @param cause First accepted stop reason, platform detail and optional deadline.
    * @remarks The lifecycle manager calls this after successful Start. Repeated
    *     requests join the same stop. Unknown or stale generations complete
    *     without touching another generation. Stop during startup is a contract
    *     error and throws std::logic_error.
    */
   void Stop(const std::string& id, uint64_t generation,
-            std::function<void()> complete);
+            std::function<void()> complete, MuonServiceStopCause cause = {});
 
   /** @param id Logical service identity.
    *  @param generation Exact running generation.

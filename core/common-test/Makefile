@@ -15,7 +15,7 @@ RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \
   $(COMMON)/src/rpc/muon_rpc_host.cpp
 YYJSON_SOURCE_DIR := ../cef/.deps/src/yyjson-0.12.0/src
 SERVICE_VALUES := $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/services/muon_service_interface.cpp
-SERVICE_HEADERS := $(COMMON)/src/services/muon_service_execution.h $(COMMON)/src/services/muon_native_service_host.h $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_value.h
+SERVICE_HEADERS := $(COMMON)/src/services/muon_service_reason.h ../../sdk/include/muon_service_lifecycle_types.h $(COMMON)/src/services/muon_service_execution.h $(COMMON)/src/services/muon_native_service_host.h $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_value.h
 CPPFLAGS += -I$(YYJSON_SOURCE_DIR)
 TESTS := $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-calls $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value $(OUT)/service-interface $(OUT)/service-broker
 QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
@@ -116,7 +116,7 @@ $(OUT)/native-service-calls: muon_native_service_calls_test.cpp $(COMMON)/src/se
 $(OUT)/service-broker: muon_service_broker_test.cpp $(COMMON)/src/services/muon_service_broker.cpp $(COMMON)/src/services/muon_service_broker.h $(COMMON)/src/services/muon_native_service_host.cpp $(COMMON)/src/services/muon_service_controller.cpp $(COMMON)/src/services/muon_service_lifecycle.cpp $(SERVICE_VALUES) $(SERVICE_HEADERS) $(OUT)/yyjson.o | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.o,$^) -o $@
 
-$(OUT)/service-fixture.so: muon_service_fixture.c ../../sdk/include/muon_service_api.h | $(OUT)
+$(OUT)/service-fixture.so: muon_service_fixture.c ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_lifecycle_types.h | $(OUT)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared $< -o $@
 
 $(OUT)/native-service-library: muon_native_service_library_test.cpp $(COMMON)/src/services/muon_native_service_host.cpp $(COMMON)/src/services/muon_native_service_library.cpp $(COMMON)/src/services/muon_service_controller.cpp $(COMMON)/src/services/muon_service_lifecycle.cpp $(COMMON)/src/muon_filesystem.cpp $(SERVICE_VALUES) $(SERVICE_HEADERS) $(OUT)/yyjson.o $(OUT)/service-fixture.so | $(OUT)

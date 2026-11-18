@@ -84,13 +84,13 @@ it("builds a portable TS service and stages executable source for both desktop a
       id: "worker",
       generation: "1",
       config: {},
-      dataDirectory: "/private",
+      startReason: 'acquire', dataDirectory: "/private",
     });
     expect(await runtime.invoke("1", "echo", ["日本語😀\0value"])).toEqual({
       status: "ok",
       value: "worker:日本語😀\0value",
     });
-    await runtime.stop("complete");
+    await runtime.stop({reason:"reference-released"});
   }
 });
 
@@ -161,13 +161,13 @@ it("bundles an npm dependency from the selected project and observes its build i
     id: "worker",
     generation: "1",
     config: {},
-    dataDirectory: "/private",
+    startReason: 'acquire', dataDirectory: "/private",
   });
   expect(await service.invoke("1", "echo", ["test"])).toEqual({
     status: "ok",
     value: "npm test",
   });
-  await service.stop("complete");
+  await service.stop({reason:"reference-released"});
   for (const path of [
     join(project, "package.json"),
     join(project, "package-lock.json"),

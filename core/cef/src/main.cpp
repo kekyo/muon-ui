@@ -71,7 +71,7 @@ static cardio::promise<void> PrepareLogin(const MuonConfig& config,
   std::shared_ptr<MuonServiceSession> session;
   result = 1;
   try {
-    session = CreateMuonBuiltinServiceSession(config, paths, setup);
+    session = CreateMuonBuiltinServiceSession(config, paths, setup, !setup);
     co_await session->Start();
     show_ui = !setup && (co_await session->Call("@login", "getUiAutostart", "{}")) == "true";
     result = 0;

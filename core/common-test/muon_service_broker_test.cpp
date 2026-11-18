@@ -56,7 +56,7 @@ static void Invoke(void*, const muon_service_call_context* context, const char* 
 }
 
 static void Cancel(void*, uint64_t id) { native_calls.at(id).cancelled = true; }
-static void Stop(void*, muon_service_stop_completion complete, void* data) {
+static void Stop(void*, const muon_service_stop_info*, muon_service_stop_completion complete, void* data) {
   assert(native_calls.empty());
   ++stops;
   complete(data);

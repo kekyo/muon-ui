@@ -50,11 +50,14 @@ export default defineService({
           });
         },
       },
-      stop: async () => {
+      stop: async (info) => {
         await work;
         const response = await fetch(context.config.origin + '/stop');
         await response.text();
-        await writeFile(context.config.marker!, 'cleanup completed');
+        await writeFile(
+          context.config.marker!,
+          JSON.stringify([context.generation, context.startReason, info.reason])
+        );
       },
     };
   },

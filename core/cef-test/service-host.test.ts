@@ -90,8 +90,9 @@ it.each(["command", "signal", "backpressure"])(
       endpoint,
       "--data-root",
       join(directory, "data"),
+      ...(shutdown === "signal" ? ["--bootstrap", "login"] : []),
     ];
-    const host = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const host = spawn(binary, args, { stdio: ["pipe", "pipe", "pipe"] });
     children.push(host);
     const hostExit = once(host, "exit");
     let diagnostic = "";
@@ -265,6 +266,15 @@ it.each(["command", "signal", "backpressure"])(
       const [code] = await hostExit;
       stalled?.destroy();
       expect(code, diagnostic).toBe(0);
+      const residentStops = diagnostic
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith("resident: lifecycle "));
+      expect(residentStops).toEqual([
+        `resident: lifecycle ${running.generation} ${shutdown === "signal" ? "login-autostart host-stop SIGTERM" : "app-start app-exit"}`,
+      ]);
+      expect(diagnostic).toContain(
+        `borrowed: lifecycle ${JSON.parse(reply).result.generation} acquire reference-released`,
+      );
       expect(
         observations.some(
           (value) => value.id === "resident" && value.state === "stopped",

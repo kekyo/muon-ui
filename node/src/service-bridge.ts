@@ -11,6 +11,7 @@ import {
   type ServiceRuntime,
   type ServiceRuntimeInput,
   type ServiceRuntimeResult,
+  type ServiceStopRequest,
 } from 'muon-plugin-sdk/services';
 import type { Readable, Writable } from 'node:stream';
 import { createMuonNodeFrameDecoder, encodeMuonNodeFrame } from './framing.ts';
@@ -78,6 +79,7 @@ export const createMuonNodeServiceBridge = (
   let identity: ServiceRuntimeInput | undefined;
   let initializing: Promise<unknown> | undefined;
   let ready = false;
+  let startupCancelled = false;
   let stopping = false;
   let ended = false;
   let signaled = false;
@@ -145,7 +147,7 @@ export const createMuonNodeServiceBridge = (
       fail(error);
     }
   };
-  const stop = (reason: string): Promise<void> => {
+  const stop = (request: ServiceStopRequest): Promise<void> => {
     stopping = true;
     cancelCallbacks(undefined);
     stopOperation ??= (async () => {
@@ -158,7 +160,7 @@ export const createMuonNodeServiceBridge = (
           /* Failed initialization has no live instance. */
         }
       }
-      await runtime?.stop(reason);
+      await runtime?.stop(request);
     })();
     return stopOperation;
   };
@@ -177,6 +179,9 @@ export const createMuonNodeServiceBridge = (
       imported.namespace.default as ServiceDefinition<ServiceInterface>
     );
     identity = {
+      startReason: text(
+        params.startReason
+      ) as ServiceRuntimeInput['startReason'],
       id: text(params.id),
       generation: text(params.generation),
       config: record(params.config) as Record<string, string>,
@@ -215,6 +220,7 @@ export const createMuonNodeServiceBridge = (
         });
       },
     });
+    if (startupCancelled) runtime.cancelStart();
     await runtime.start(identity);
     ready = true;
     return {
@@ -228,14 +234,21 @@ export const createMuonNodeServiceBridge = (
     params: Record<string, unknown>
   ): Promise<unknown> => {
     if (command === 'stop') {
-      await stop(
-        typeof params.reason === 'string'
-          ? params.reason
-          : 'Service host requested stop'
-      );
+      await stop({
+        reason: text(params.reason) as ServiceStopRequest['reason'],
+        ...(params.detail === undefined ? {} : { detail: text(params.detail) }),
+        ...(params.remainingMs === undefined
+          ? {}
+          : { remainingMs: Number(params.remainingMs) }),
+      });
       return { stopped: true };
     }
     if (stopping) throw failure('unavailable', 'Service is stopping');
+    if (command === 'cancelStart' && initializing) {
+      startupCancelled = true;
+      runtime?.cancelStart();
+      return {};
+    }
     if (command === 'initialize') {
       if (initializing || runtime)
         throw failure(
@@ -369,7 +382,7 @@ export const createMuonNodeServiceBridge = (
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            stop('Service transport closed'),
+            stop({ reason: 'host-stop', detail: 'Service transport closed' }),
             new Promise<never>((_resolve, reject) => {
               timer = setTimeout(
                 () =>

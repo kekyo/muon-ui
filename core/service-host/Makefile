@@ -10,6 +10,7 @@ OUT := .build
 CPPFLAGS += -I../../sdk/include -I../common/include -I$(COMMON) -I$(YYJSON) -I. -I../cef/src
 CPPFLAGS += -I../../node/native -I../cef/src/platform -DNOMINMAX
 NODE_SOURCES := muon_node_service_host.cpp ../../node/native/node_process.cpp
+SERVICE_API := ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_lifecycle_types.h ../../sdk/include/muon_service_value.h
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wpedantic -Werror
 CFLAGS += -std=c99 -Wall -Wextra -Wpedantic
 LIFECYCLE := $(COMMON)/services/muon_service_lifecycle.cpp $(COMMON)/services/muon_service_controller.cpp
@@ -54,10 +55,10 @@ $(OUT)/libcardio.so: ../../sdk/native/linux-amd64/lib/libcardio.so | $(OUT)
 $(OUT)/sha2.o: ../../deps/sha2/sha2.c | $(OUT)
 	$(CC) -std=c99 -D_DEFAULT_SOURCE -I../../deps/sha2 -c $< -o $@
 
-$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(NODE_SOURCES) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $(QUICKJS_OBJECTS) $(OUT)/yyjson.o $(OUT)/sha2.o $(OUT)/libcardio.so | $(OUT)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(shell pkg-config --cflags libffi) $(filter-out %.so,$^) $(CARDIO_LIBS) $(shell pkg-config --libs libffi) -ldl -lm -Wl,-rpath,'$$ORIGIN' -o $@
+$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_session_monitor.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(NODE_SOURCES) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $(QUICKJS_OBJECTS) $(OUT)/yyjson.o $(OUT)/sha2.o $(OUT)/libcardio.so $(SERVICE_API) $(COMMON)/services/muon_service_reason.h | $(OUT)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(shell pkg-config --cflags libffi) $(filter-out %.h %.so,$^) $(CARDIO_LIBS) $(shell pkg-config --libs libffi) -ldl -lm -Wl,-rpath,'$$ORIGIN' -o $@
 
-$(OUT)/probe-service.so: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(OUT)/libcardio.so | $(OUT)
+$(OUT)/probe-service.so: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(SERVICE_API) $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) -shared $< $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
 
 $(OUT)/client-test: ../common-test/muon_service_client_test.cpp $(COMMON)/services/muon_service_client.cpp $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
@@ -78,7 +79,11 @@ $(OUT)/login-test: muon_service_login_test.cpp muon_service_login.cpp $(OUT)/lib
 $(OUT)/startup-test: muon_service_startup_test.cpp muon_service_policy_linux.cpp $(LOGIN) $(COMMON)/muon_filesystem.cpp $(OUT)/yyjson.o $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(filter-out %.so,$^) $(CARDIO_LIBS) -Wl,-rpath,'$$ORIGIN' -o $@
 
-test: $(OUT)/protocol-test $(OUT)/client-test $(OUT)/login-test $(OUT)/startup-test
+$(OUT)/session-monitor-test: session_monitor_test.cpp muon_service_session_monitor.cpp muon_service_session_monitor.h | $(OUT)
+	$(CXX) $(CXXFLAGS) $(filter %.cpp,$^) $(shell pkg-config --cflags --libs gio-2.0) -o $@
+
+test: $(OUT)/session-monitor-test $(OUT)/protocol-test $(OUT)/client-test $(OUT)/login-test $(OUT)/startup-test
+	dbus-run-session -- $(OUT)/session-monitor-test
 	$(OUT)/protocol-test
 	$(OUT)/client-test
 	$(OUT)/login-test
@@ -130,13 +135,13 @@ $(OUT)/windows-$(1)/node-job.o: ../cef/src/platform/muon_windows_job_process.cpp
 	# Match the CEF job helper's Windows API contract for atomic child ownership.
 	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 -c $$< -o $$@
 
-$(OUT)/windows-$(1)/muon-service-host.exe: $(OUT)/windows-$(1)/node-job.o muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(NODE_SOURCES) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/sha2.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes $$(WIN_$(1)_FFI)/lib/libffi.a
-	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -I$$(WIN_$(1)_FFI)/include -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -lbcrypt -o $$@
+$(OUT)/windows-$(1)/muon-service-host.exe: $(OUT)/windows-$(1)/node-job.o muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(NODE_SOURCES) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/sha2.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes $$(WIN_$(1)_FFI)/lib/libffi.a $(SERVICE_API) $(COMMON)/services/muon_service_reason.h
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -I$$(WIN_$(1)_FFI)/include -D_WIN32_WINNT=0x0601 -municode $(filter-out %.h %/runtimes,$^) $(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -lbcrypt -o $$@
 
-$(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c | $(OUT)/windows-$(1)
+$(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c $(SERVICE_API) | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@
 
-$(OUT)/windows-$(1)/probe-service.dll: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(OUT)/windows-$(1)/runtimes | $(OUT)/windows-$(1)
+$(OUT)/windows-$(1)/probe-service.dll: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(SERVICE_API) $(OUT)/windows-$(1)/runtimes | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -shared $$< $$(WIN_$(1)_LIBS) -lws2_32 -o $$@
 
 $(OUT)/windows-$(1)/session-end.exe: windows_session_test.cpp | $(OUT)/windows-$(1)

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "services/muon_service_reason.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -70,12 +71,26 @@ struct MuonServiceSnapshot {
   size_t client_references = 0;
   /** Last runtime failure, empty after a new start or normal stop. */
   std::string error;
+  muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE; /**< Demand that created the generation. */
+  MuonServiceStopCause stop{}; /**< First accepted stop request. */
+  std::shared_ptr<MuonServiceCancellation> signal{}; /**< Generation-owned startup cancellation. */
 };
+
+/** @param spec Configured runtime inputs. @param state Generation being started.
+ * @return Runtime inputs with this generation's cause and startup cancellation. */
+template<class Spec>
+Spec MuonServiceSpecForGeneration(Spec spec, const MuonServiceSnapshot& state) {
+  spec.start_reason = state.start_reason;
+  spec.signal = state.signal;
+  return spec;
+}
 
 /** Actions and observations produced by the serialized lifecycle manager. */
 enum class MuonServiceEventKind {
   /** Create the runtime identified by snapshot.id and snapshot.generation. */
   Start,
+  /** Notify an in-flight start to cancel while awaiting its actual completion. */
+  CancelStart,
   /** Dispose of that runtime, then report completion. */
   Stop,
   /** Atomically persist autostart for the specified setting operation. */
@@ -143,7 +158,8 @@ class MuonServiceLifecycle final {
    * @throws std::invalid_argument If an identity is empty or duplicated.
    */
   explicit MuonServiceLifecycle(
-      const std::vector<MuonServiceDefinition>& definitions);
+      const std::vector<MuonServiceDefinition>& definitions,
+      muon_service_start_reason resident_reason = MUON_SERVICE_START_APP);
   /** Releases bookkeeping; the host must complete Shutdown first. */
   ~MuonServiceLifecycle();
   /** Lifecycle identities cannot be copied. */
@@ -205,7 +221,7 @@ class MuonServiceLifecycle final {
    *     acquisition can retry, subject to the platform's eligibility checks.
    */
   void RequestRuntimeStop(const std::string& service_id, uint64_t generation,
-                          const std::string& reason);
+                          const std::string& reason, MuonServiceStopCause cause = {MUON_SERVICE_STOP_HOST});
 
   /**
    * Reports an unexpected exit after that generation's resources are gone.
@@ -243,7 +259,7 @@ class MuonServiceLifecycle final {
    * @remarks Rejects new work. A save already issued may finish, but cannot
    *     recreate resident references. Unissued setting requests are cancelled.
    */
-  void Shutdown(const std::string& reason);
+  void Shutdown(const std::string& reason, MuonServiceStopCause cause = {MUON_SERVICE_STOP_HOST});
 
   /**
    * Checks whether an exact reference can invoke its current generation.

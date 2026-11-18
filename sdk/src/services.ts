@@ -53,4 +53,8 @@ export type {
   ServiceRuntimeInput,
   ServiceRuntimeResult,
   ServiceStartContext,
+  ServiceStartReason,
+  ServiceStopInfo,
+  ServiceStopReason,
+  ServiceStopRequest,
 } from './service-runtime.ts';

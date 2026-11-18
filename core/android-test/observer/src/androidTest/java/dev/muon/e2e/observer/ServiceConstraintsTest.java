@@ -149,6 +149,23 @@ public final class ServiceConstraintsTest {
             }
         } finally { shell("pm " + (original ? "grant " : "revoke ") + APP + " " + PERMISSION); }
     }
+    @Test public void receivesDeviceShutdownInTheResidentProcessAfterLeavingTheActivity() throws Exception {
+        assumeTrue("Inject a protected broadcast only on the disposable emulator",
+                shell("getprop ro.kernel.qemu").equals("1") && shell("su 0 id").contains("uid=0"));
+        JSONObject ready = launch("normal");
+        try (Socket alpha = connect(49171)) {
+            int pid = challenge(alpha).getInt("pid");
+            device.pressHome();
+            assertTrue(device.wait(Until.gone(By.pkg(APP)), 60000));
+            String broadcast = shell("su 0 am broadcast -a android.intent.action.ACTION_SHUTDOWN -p " + APP);
+            assertTrue(broadcast, broadcast.contains("Broadcast completed"));
+            assertEquals(-1, alpha.getInputStream().read());
+            String logs = shell("logcat -d --pid=" + pid + " -s MuonNativeService:I");
+            String expected = "alpha.v1-test: lifecycle " + ready.getString("alphaGeneration") + " app-start session-ending shutdown";
+            assertTrue(logs, logs.contains(expected));
+            assertEquals(logs, logs.indexOf(expected), logs.lastIndexOf(expected));
+        }
+    }
     @Test public void acceptsRealOsTimeoutWithoutRestartingOrStoppingOtherServices() throws Exception {
         // Never alter a physical device's duration budget.
         assumeTrue("Timeout configuration is restricted to the disposable emulator", shell("getprop ro.kernel.qemu").equals("1"));
@@ -169,6 +186,9 @@ public final class ServiceConstraintsTest {
                 assertEquals(-1, timed.getInputStream().read());
                 JSONObject failed = inspect("timed", false);
                 assertEquals("failed", failed.getString("state"));
+                String logs = shell("logcat -d --pid=" + other.getInt("pid") + " -s MuonNativeService:I");
+                String expected = "timed: lifecycle " + before.getString("generation") + " autostart-enabled execution-timeout";
+                assertTrue(logs, logs.contains(expected));
                 assertTrue(failed.getString("error"), failed.getString("error").contains("foreground-service deadline"));
                 assertEquals(before.getString("generation"), failed.getString("generation"));
                 assertTrue(failed.getBoolean("autostart"));

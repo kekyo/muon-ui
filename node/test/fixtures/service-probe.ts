@@ -51,6 +51,7 @@ export const start = async (config: Record<string, string>) =>
   await runtime.start({
     id: 'probe',
     generation: '1',
+    startReason: 'acquire',
     dataDirectory: process.cwd(),
     config,
   });
@@ -60,4 +61,4 @@ export const invoke = async (id: string, method: string, args: unknown[]) =>
 /** Returns observed notifications for this small compatibility probe. */
 export const events = () => notifications.splice(0);
 /** Waits for real author cleanup before the outer bridge may be shut down. */
-export const stop = async () => await runtime.stop('host shutdown');
+export const stop = async () => await runtime.stop({ reason: 'app-exit' });

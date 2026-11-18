@@ -670,12 +670,24 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
               entry->interface = ParseMuonServiceInterface(entry->interface_json);
               const auto input = QuickJsOwnedValue(context, JS_NewObject(context));
               Set(context, input.value, "id", JS_NewString(context, entry->spec.id.c_str()));
+              Set(context, input.value, "startReason", JS_NewString(context, MuonServiceReasonName(entry->spec.start_reason)));
               Set(context, input.value, "generation", JS_NewString(context, std::to_string(entry->generation).c_str()));
               Set(context, input.value, "dataDirectory", JS_NewString(context, entry->spec.data_directory.c_str()));
               const auto config = QuickJsOwnedValue(context, JS_NewObjectProto(context, JS_NULL));
               for (const auto& [key, value] : entry->spec.config)
                 Set(context, config.value, key.c_str(), JS_NewStringLen(context, value.data(), value.size()));
               Set(context, input.value, "config", JS_DupValue(context, config.value));
+              if (entry->spec.signal) {
+                const auto cancel = [weak = std::weak_ptr<QuickJsEntry>(entry)] {
+                  const auto current = weak.lock();
+                  if (!current || current->state != QuickJsState::Starting || !current->fault.empty()) return;
+                  try {
+                    const auto result = QuickJsOwnedValue(current->engine->Context(), Call(current, "cancelStart", {}));
+                    Wake(current);
+                  } catch (const std::exception& error) { Fault(current, error.what()); }
+                };
+                if (!entry->spec.signal->Subscribe(cancel)) cancel();
+              }
               Await(entry, Call(entry, "start", {input.value}), [entry](const std::string&, const std::string& error) {
                 if (!error.empty()) { Dispose(entry, error); return; }
                 entry->state = QuickJsState::Running;
@@ -691,7 +703,7 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
   });
 }
 
-void MuonQuickJsServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete) {
+void MuonQuickJsServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete, MuonServiceStopCause cause) {
   if (const auto closing = impl_->closing.find({id, generation}); closing != impl_->closing.end()) {
     closing->second->stopped.push_back(std::move(complete));
     return;
@@ -706,17 +718,23 @@ void MuonQuickJsServiceHost::Stop(const std::string& id, uint64_t generation, st
   if (entry->state == QuickJsState::Stopping || !entry->fault.empty()) return;
   entry->state = QuickJsState::Stopping;
   entry->lifecycle_deadline = std::chrono::steady_clock::now() + impl_->platform.shutdown_timeout;
-  Queue(impl_, [entry] {
+  if (cause.deadline) entry->lifecycle_deadline = std::min(entry->lifecycle_deadline, *cause.deadline);
+  cause.deadline = entry->lifecycle_deadline;
+  Queue(impl_, [entry, cause = std::move(cause)] {
     if (entry->state == QuickJsState::Closed || !entry->fault.empty()) return;
     try {
       Deadline(entry);
-      const auto reason = QuickJsOwnedValue(entry->engine->Context(), JS_NewString(entry->engine->Context(), "Service stopped"));
+      auto* context = entry->engine->Context();
+      const auto info = QuickJsOwnedValue(context, JS_NewObject(context));
+      Set(context, info.value, "reason", JS_NewString(context, MuonServiceReasonName(cause.reason)));
+      if (!cause.detail.empty()) Set(context, info.value, "detail", JS_NewString(context, cause.detail.c_str()));
+      Set(context, info.value, "remainingMs", JS_NewInt64(context, MuonServiceRemainingMs(cause)));
       for (const auto& [id, call] : entry->calls) {
         (void)id;
         call->cancelled = true;
         Complete(entry, call, {{}, "cancelled", "Service stopped"});
       }
-      Await(entry, Call(entry, "stop", {reason.value}), [entry](const std::string&, const std::string& error) {
+      Await(entry, Call(entry, "stop", {info.value}), [entry](const std::string&, const std::string& error) {
         Dispose(entry, error);
       });
       for (const auto& [id, call] : entry->calls) { (void)call; CancelCallbacks(entry, id); }

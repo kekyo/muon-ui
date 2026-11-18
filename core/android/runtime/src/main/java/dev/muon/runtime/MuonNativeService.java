@@ -32,8 +32,10 @@ public abstract class MuonNativeService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) { stopSelf(); return START_NOT_STICKY; }
         long requestedGeneration = intent.getLongExtra("generation", 0);
-        if (process != null && generation == requestedGeneration && !stopped)
+        if (process != null && generation == requestedGeneration && !stopped) {
+            this.startId = startId;
             return START_NOT_STICKY;
+        }
         this.startId = startId;
         generation = requestedGeneration;
         stopped = false;
@@ -71,11 +73,11 @@ public abstract class MuonNativeService extends Service {
         stopSelfResult(startId);
     }
 
-    @Override public void onTimeout(int startId) { timeout("Android short-service deadline"); }
-    @Override public void onTimeout(int startId, int type) { timeout("Android foreground-service deadline: " + type); }
+    @Override public void onTimeout(int startId) { if (startId == this.startId) timeout("Android short-service deadline"); }
+    @Override public void onTimeout(int startId, int type) { if (startId == this.startId) timeout("Android foreground-service deadline: " + type); }
 
     private void timeout(String reason) {
-        if (process != null) process.runtimeStop(serviceId(), generation, reason);
+        if (process != null) process.runtimeStop(serviceId(), generation, reason, true);
         // Android's grace deadline is independent of asynchronous native cleanup.
         stopGeneration(generation);
     }

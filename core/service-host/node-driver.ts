@@ -208,7 +208,7 @@ try {
   assert.equal(host.exitCode, null, diagnostic);
   stopResponse.end('cleanup may finish');
   assert.deepEqual(await exited, [0, null], diagnostic);
-  assert.equal(await readFile(marker, 'utf8'), 'cleanup completed');
+  assert.deepEqual(JSON.parse(await readFile(marker, 'utf8')), [generation, 'app-start', 'development-exit']);
   assert.deepEqual(unexpectedOutput, []);
   assert(diagnostic.includes('Node service author output'));
   console.log(JSON.stringify({ nodeService: true, passed: true }));

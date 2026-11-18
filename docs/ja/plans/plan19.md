@@ -105,7 +105,13 @@ Linux amd64で配布形式のSDKとビルダーをリポジトリ外にインス
 
 C ABIのバージョンを更新し、ホストが把握した理由をサービスの起動・停止を管理する既存のコードから3方式へ伝える。起動理由・停止理由・世代を記録する小さなサービスを動かす。実行期限のある場合は期限内に終了処理を待ち、終了と取り消しをOSごとの入力で検証する。
 
-- [ ] PCでログイン登録からの起動と手動起動を識別できる。Windowsの終了照会と中止、Linuxの `Query End` と通常シグナル、Androidの `ACTION_SHUTDOWN` と `onTimeout` がそれぞれ表のとおりになる。通知の重複、起動と停止の競合、画面を閉じて再接続する場合を含め、サービスが受け取った理由と回数を確認できる。
+- [x] PCでログイン登録からの起動と手動起動を識別できる。Windowsの終了照会と中止、Linuxの `Query End` と通常シグナル、Androidの `ACTION_SHUTDOWN` と `onTimeout` がそれぞれ表のとおりになる。通知の重複、起動と停止の競合、画面を閉じて再接続する場合を含め、サービスが受け取った理由と回数を確認できる。
+
+Linuxの実ホストでは、通常起動とログイン登録の起動引数を使い分け、常駐サービスが受け取った起動理由を確認した。ページからの再接続では世代が変わらず、最後の参照を解放したサービスには参照解放の理由が届いた。実プロセスに送ったSIGTERMはホスト終了として届いた。テスト用のXDGポータルでは、終了照会への応答、取り消し後の継続、終了確定を順に確認した。[Linuxホスト試験](../../../core/cef-test/service-host.test.ts)・[ポータル通知試験](../../../core/service-host/session_monitor_test.cpp)
+
+Windows 11 VMではamd64版とi686版のホストに終了メッセージを送り、照会、取り消し、ログオフ確定を確認した。Android API 37のx86_64エミュレーターでは、OSが実際に発行したforeground serviceの期限通知と、対象アプリだけに送った終了ブロードキャストを区別して記録した。PCのログインとログオフ、Android端末の電源断は試験のために実行していない。[Windows試験](../../../core/service-host/windows-driver.ts)・[Android試験](../../../core/android-test/observer/src/androidTest/java/dev/muon/e2e/observer/ServiceConstraintsTest.java)
+
+C ABI v3とTS SDKの試験では、起動中のキャンセルと再取得、重複する停止要求、後処理に渡す独立したシグナルを確認した。QuickJSとNode.jsでも、サービスが世代と理由を記録して終了した。[SDK試験](../../../sdk/test/service-runtime.test.ts)・[QuickJS試験](../../../core/common-test/muon_quickjs_service_sdk_test.cpp)・[Node.js試験](../../../core/service-host/node-driver.ts)
 
 ### 段階3　終了時に保存したファイルを次回起動で読む
 

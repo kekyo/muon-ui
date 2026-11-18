@@ -1,5 +1,10 @@
 /** Browser and QuickJS-compatible service contracts, values, and RPC client. */
 export type {
+  ServiceHttpClient,
+  ServiceHttpRequest,
+  ServiceHttpResponse,
+} from './service-http.ts';
+export type {
   ServiceFileOptions,
   ServiceFileSystem,
   ServiceIoBridge,

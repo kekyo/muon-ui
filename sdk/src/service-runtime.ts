@@ -1,3 +1,4 @@
+import { createServiceHttp, type ServiceHttpClient } from './service-http.ts';
 import { parseServiceInterface } from './service-interface.ts';
 import {
   createServiceFiles,
@@ -87,6 +88,7 @@ export interface ServiceInvocationContext {
 export interface ServiceStartContext<
   Definition extends ServiceInterface,
 > extends ServiceRuntimeInput {
+  /** Outbound HTTP and HTTPS with per-origin permissions. */ readonly http: ServiceHttpClient;
   /** Permission-checked files, private to the service unless explicitly shared. */ readonly fs: ServiceFileSystem;
   /** Aborted when service shutdown begins, including shutdown during start. */ readonly signal: ServiceCancellationSignal;
   /**
@@ -238,6 +240,9 @@ const commonErrors = new Set([
   'invalid-input',
   'timeout',
   'size-limit',
+  'tls-error',
+  'network-error',
+  'redirect-limit',
 ]);
 const diagnostic = (
   error: unknown,
@@ -421,6 +426,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           dataDirectory: text(input.dataDirectory),
           config,
           signal: source.signal,
+          http: createServiceHttp(io, source.signal),
           fs: createServiceFiles(io, source.signal),
           emit: (
             event: keyof Definition['events'] & string,

@@ -712,7 +712,7 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
   auto entry = std::make_shared<QuickJsEntry>();
   entry->self = entry;
   entry->owner = impl_; entry->spec = spec; entry->generation = generation;
-  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post);
+  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post, impl_->platform.delay);
   entry->lifecycle_deadline = std::min(std::chrono::steady_clock::now() + impl_->platform.shutdown_timeout,
       spec.startup_deadline.value_or(std::chrono::steady_clock::time_point::max()));
   entry->started = std::move(complete);

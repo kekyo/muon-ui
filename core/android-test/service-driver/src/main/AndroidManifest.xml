@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <application android:label="Muon native service driver" android:allowBackup="false"
+    <application android:networkSecurityConfig="@xml/muon_service_network" android:label="Muon native service driver" android:allowBackup="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name="dev.muon.runtime.MuonServiceDriverActivity" android:exported="true">
             <intent-filter>
@@ -50,7 +50,14 @@
         <service android:name="dev.muon.runtime.MuonFixtureQuickStateService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
         </service>
+
         <service android:name="dev.muon.runtime.MuonFixtureNativeStateService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickHttpService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureNativeHttpService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
         </service>
     </application>

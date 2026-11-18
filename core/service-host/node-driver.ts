@@ -5,6 +5,7 @@
 
 // The test suite bundles this observation driver and the SDK fixture before
 // uploading them. Remote machines need only Node and the native host binaries.
+import { createHttpDriver } from './http-driver.ts';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -30,7 +31,9 @@ observer.listen(0, '127.0.0.1');
 await once(observer, 'listening');
 const address = observer.address();
 assert(address && typeof address !== 'string');
+const httpDriver = await createHttpDriver(assets, binaries);
 await writeFile(join(root, 'services.json'), JSON.stringify({ services: {
+  ...httpDriver.services,
   worker: { runtime: 'node', project: assets, entry: './service.mjs',
     executable: process.execPath, bridge: join(assets, 'node-bridge.mjs'), autostart: true,
     config: { origin: `http://127.0.0.1:${address.port}`, marker } },
@@ -85,6 +88,7 @@ try {
     }) };
   };
   const first = await connect();
+  await httpDriver.verify(first.api);
   const service = await first.api.acquire('worker');
   const [workRequest, workResponse] = await workEntered;
   assert.equal(workRequest.url, '/work');
@@ -216,6 +220,7 @@ try {
   for (const socket of sockets) socket.destroy();
   if (ui && ui.exitCode === null && ui.signalCode === null) ui.kill('SIGKILL');
   if (host.exitCode === null && host.signalCode === null) { host.kill('SIGKILL'); await exited; }
+  await httpDriver.close();
   lines.close();
   observer.closeAllConnections();
   await new Promise<void>((resolve) => observer.close(() => resolve()));

@@ -430,7 +430,7 @@ void MuonNativeServiceHost::Start(
   if (!entry->spec.signal) entry->spec.signal = std::make_shared<MuonServiceCancellation>();
   entry->signal = NativeSignal(*entry->spec.signal);
   entry->cleanup_signal = NativeSignal(*entry->cleanup);
-  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post);
+  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post, impl_->platform.delay);
   entry->io_table = {MUON_SERVICE_ABI_VERSION, sizeof(muon_service_io), entry.get(), &RequestIo};
   entry->context = {&entry->host, entry->spec.id.c_str(), generation,
                     entry->spec.data_directory.c_str(),

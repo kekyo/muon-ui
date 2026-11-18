@@ -430,7 +430,7 @@ void MuonNodeServiceHost::Start(const MuonNodeServiceSpec& spec, uint64_t genera
   const auto entry = std::make_shared<NodeServiceEntry>();
   entry->owner = impl_;
   entry->spec = spec;
-  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post);
+  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post, impl_->platform.delay);
   entry->generation = generation;
   entry->child.executable_path = spec.executable;
   entry->child.bridge_path = spec.bridge;

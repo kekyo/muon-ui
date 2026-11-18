@@ -283,3 +283,30 @@ it("packages declared binary assets by logical name and observes changes to thei
     ),
   ).rejects.toThrow(/outside|escapes/iu);
 });
+
+it("limits service HTTP grants to complete, explicit origins", async () => {
+  const { resolveServiceIo } = await import("../common/service-io.ts");
+  await expect(
+    resolveServiceIo(
+      {
+        http: { origins: ["https://Example.org:443", "http://127.0.0.1:5241"] },
+      },
+      ".",
+      undefined,
+      "service",
+    ),
+  ).resolves.toEqual({
+    http: { origins: ["https://example.org", "http://127.0.0.1:5241"] },
+  });
+  for (const url of [
+    "https://*.example.org",
+    "file:///root",
+    "https://example.org/private",
+    "https://user@example.org",
+    "http://a/?b",
+  ]) {
+    await expect(
+      resolveServiceIo({ http: { origins: [url] } }, ".", undefined, "service"),
+    ).rejects.toThrow();
+  }
+});

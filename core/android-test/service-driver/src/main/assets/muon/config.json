@@ -15,6 +15,42 @@
     ]
   },
   "services": {
+    "httpNative": {
+      "runtime": "native",
+      "library": "libmuon_native_http.so",
+      "io": {
+        "http": {
+          "origins": ["http://127.0.0.1:49206", "https://127.0.0.1:49207"]
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureNativeHttpService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "httpNative",
+          "title": "HTTP fixture",
+          "text": "Service HTTP requests"
+        }
+      }
+    },
+    "httpQuick": {
+      "runtime": "quickjs",
+      "asset": "muon/services/httpQuick.js",
+      "io": {
+        "http": {
+          "origins": ["http://127.0.0.1:49206", "https://127.0.0.1:49207"]
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickHttpService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "httpQuick",
+          "title": "HTTP fixture",
+          "text": "Service HTTP requests"
+        }
+      }
+    },
     "stateNative": {
       "runtime": "native",
       "library": "libmuon_native_state.so",

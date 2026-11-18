@@ -6,7 +6,9 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter, on, once } from 'node:events';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { createServer as httpServer } from 'node:http';
+import { createServer as tlsServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -41,6 +43,36 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
     ]);
     const lines = createInterface({ input: logcat.stdout });
     lines.on('line', (line) => events.emit('ready', line));
+    const http = httpServer((req, res) => {
+      if (req.url === '/held') {
+        events.emit('held', res);
+        return;
+      }
+      if (req.url === '/redirect') {
+        res.writeHead(302, { location: 'http://localhost:49206/refused' });
+        res.end();
+        return;
+      }
+      if (req.url === '/large') {
+        res.end(Buffer.alloc(1024 * 1024 + 1));
+        return;
+      }
+      if (req.url === '/text') {
+        res.writeHead(418, { 'x-android': 'yes' });
+        res.end('茶');
+        return;
+      }
+      req.pipe(res);
+    });
+    const tls = tlsServer({
+      key: await readFile(
+        '../android-poc/android/app/src/androidTest/assets/localhost-key.pem'
+      ),
+      cert: await readFile(
+        '../android-poc/android/app/src/androidTest/assets/localhost-cert.pem'
+      ),
+    });
+    const reverse: string[] = [];
     let port: string | undefined;
     let client: Client | undefined;
     let closeMcp: (() => Promise<void>) | undefined;
@@ -110,6 +142,18 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
       await tool('browser_tabs', { action: 'select', index: Number(index) });
     };
     try {
+      for (const [server, devicePort] of [
+        [http, '49206'],
+        [tls, '49207'],
+      ] as const) {
+        server.listen(0, '127.0.0.1');
+        await once(server, 'listening');
+        const target = server.address();
+        if (!target || typeof target === 'string')
+          throw new Error('Missing fixture port');
+        await adb(['reverse', 'tcp:' + devicePort, 'tcp:' + target.port]);
+        reverse.push(devicePort);
+      }
       await adb(['shell', 'am', 'force-stop', app]);
       await adb([
         'shell',
@@ -147,6 +191,37 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
       await server.connect(b);
       await client.connect(a);
       await select(first);
+      const httpId = serviceId === 'quickjs' ? 'httpQuick' : 'httpNative';
+      expect(
+        await evaluate(`globalThis.httpHandle = await muon.services.acquire('${httpId}');
+        globalThis.transfer = async (path, method = 'bytes', extras = {}, signal) => await httpHandle.call(method, [
+          JSON.stringify({url:'http://127.0.0.1:49206' + path, method:'POST', responseType: method === 'describe' ? 'text':'bytes', ...extras}),
+          new Uint8Array([0,128,255])], signal ? {signal} : undefined);
+        const reply = JSON.parse(await transfer('/text','describe'));
+        const errors = [];
+        for (const [path, options] of [['/redirect',{}],['/large',{}],['/',{url:'https://127.0.0.1:49207/'}],['/held',{timeoutMs:250}]]) {
+          try { await transfer(path,'bytes',options); } catch (error) { errors.push(error.code); }
+        }
+        return [Array.from(await transfer('/echo')),reply.status,reply.headers['x-android'],reply.text,errors];`)
+      ).toEqual([
+        [0, 128, 255],
+        418,
+        'yes',
+        '茶',
+        ['permission-denied', 'size-limit', 'tls-error', 'timeout'],
+      ]);
+      const held = once(events, 'held');
+      await evaluate(`globalThis.cancelHttp = new AbortController();
+        globalThis.httpDone = (async () => {try {await transfer('/held','bytes',{},cancelHttp.signal); return '';} catch (e) {return e.code;}})();
+        return true;`);
+      const [heldResponse] = await held;
+      const closed = once(heldResponse, 'close');
+      expect(
+        await evaluate(`const other = await muon.services.acquire('${serviceId}');
+        const echo = await other.call('echo',['independent']); await other.release();
+        cancelHttp.abort(); const cause = await httpDone; await httpHandle.release(); return [echo,cause];`)
+      ).toEqual(['independent', 'cancelled']);
+      await closed;
       expect(
         await evaluate(`const saved = await muon.services.acquire('${stateId}');
         const initial = Array.from(await saved.call('get', []));
@@ -294,6 +369,14 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
       const exited = once(logcat, 'exit');
       logcat.kill();
       await exited;
+      for (const devicePort of reverse)
+        await adb(['reverse', '--remove', 'tcp:' + devicePort]);
+      for (const server of [http, tls]) {
+        const closed = once(server, 'close');
+        server.close();
+        server.closeAllConnections();
+        await closed;
+      }
       if (port) await adb(['forward', '--remove', 'tcp:' + port]);
       await adb(['shell', 'am', 'force-stop', app]);
       for (const result of results)

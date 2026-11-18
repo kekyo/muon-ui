@@ -14,7 +14,7 @@ RPC_SOURCES := $(COMMON)/src/config/muon_glob.cpp \
   $(COMMON)/src/rpc/muon_rpc.cpp \
   $(COMMON)/src/rpc/muon_rpc_host.cpp
 YYJSON_SOURCE_DIR := ../cef/.deps/src/yyjson-0.12.0/src
-SERVICE_VALUES := $(COMMON)/src/services/muon_service_io.cpp $(COMMON)/src/services/muon_service_files.cpp $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/services/muon_service_interface.cpp
+SERVICE_VALUES := $(COMMON)/src/services/muon_service_http.cpp $(COMMON)/src/services/muon_service_io.cpp $(COMMON)/src/services/muon_service_files.cpp $(COMMON)/src/services/muon_service_value.cpp $(COMMON)/src/services/muon_service_interface.cpp
 SERVICE_HEADERS := $(COMMON)/src/services/muon_service_files.h $(COMMON)/src/services/muon_service_io.h ../../sdk/include/muon_service_io.h $(COMMON)/src/services/muon_service_reason.h ../../sdk/include/muon_service_lifecycle_types.h $(COMMON)/src/services/muon_service_execution.h $(COMMON)/src/services/muon_native_service_host.h $(COMMON)/src/services/muon_service_interface.h $(COMMON)/src/services/muon_service_value.h ../../sdk/include/muon_service_api.h ../../sdk/include/muon_service_value.h
 CPPFLAGS += -I$(YYJSON_SOURCE_DIR)
 TESTS := $(OUT)/service-files $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lifetime $(OUT)/plugin-api $(OUT)/service-lifecycle $(OUT)/native-service-host $(OUT)/native-service-calls $(OUT)/native-service-library $(OUT)/service-controller $(OUT)/service-value $(OUT)/service-interface $(OUT)/service-broker

@@ -843,6 +843,7 @@ add_executable(muon_service_host
   ${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp
   ../service-host/muon_service_io_desktop.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_http.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_io.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_files.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp
@@ -869,12 +870,14 @@ set_target_properties(muon_service_host PROPERTIES
   OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
 if(WIN32)
   target_link_libraries(muon_service_desktop PRIVATE muon_windows_path advapi32 shell32 ole32 uuid)
-  target_link_libraries(muon_service_host PRIVATE muon_windows_path muon_windows_job_process advapi32 user32 ole32 bcrypt)
+  target_sources(muon_service_host PRIVATE ../service-host/muon_service_http_windows.cpp)
+  target_link_libraries(muon_service_host PRIVATE winhttp muon_windows_path muon_windows_job_process advapi32 user32 ole32 bcrypt)
   target_compile_definitions(muon_service_desktop PRIVATE _WIN32_WINNT=0x0601)
   target_compile_definitions(muon_service_host PRIVATE _WIN32_WINNT=0x0601 NOMINMAX)
   target_link_options(muon_service_host PRIVATE -municode)
 else()
-  target_sources(muon_service_host PRIVATE ../service-host/muon_service_session_monitor.cpp)
+  target_sources(muon_service_host PRIVATE ../service-host/muon_service_http_linux.cpp ../service-host/muon_service_session_monitor.cpp)
+  target_link_libraries(muon_service_host PRIVATE muon_llhttp)
 endif()
 MUON_APPLY_SANITIZERS(muon_service_host)
 

@@ -4,6 +4,7 @@
  */
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -13,10 +14,19 @@
 /** Runs file work on a platform pool, completing on the owner dispatcher. */
 using MuonServiceIoSubmit = std::function<void(std::function<void()>, std::function<void(std::string)>)>;
 
+struct MuonServiceHttpHop;
+struct MuonServiceHttpResult;
+class MuonServiceIoCancellation;
+/** Performs one bounded HTTP transfer in the platform I/O pool. */
+using MuonServiceHttpTransport = std::function<MuonServiceHttpResult(const MuonServiceHttpHop&, MuonServiceIoCancellation&)>;
+/** Schedules a dispatcher deadline and returns its cancellation callback. */
+using MuonServiceIoDelay = std::function<std::function<void()>(std::chrono::milliseconds, std::function<void()>)>;
+
 /** Immutable policy and platform adapter shared across a service's generations. */
 struct MuonServiceIoSettings {
   std::string policy = "{}"; /**< Normalized per-service permissions from the application registry. */
   MuonServiceIoSubmit submit{}; /**< Platform asynchronous file executor. */
+  MuonServiceHttpTransport http{}; /**< OS HTTP/TLS transport. */
 };
 
 /** Owned buffers for one portable I/O request. */
@@ -38,7 +48,7 @@ struct MuonServiceIoState;
 class MuonServiceIo final {
  public:
   /** @param directory Private data root. @param settings Grants and executor. @param post Queue on the owner dispatcher. */
-  MuonServiceIo(std::string directory, MuonServiceIoSettings settings, std::function<void(std::function<void()>)> post);
+  MuonServiceIo(std::string directory, MuonServiceIoSettings settings, std::function<void(std::function<void()>)> post, MuonServiceIoDelay delay = {});
   /** @param request Owned parameters and bytes. @param complete Deferred result. @return Idempotent cancellation callback. */
   std::function<void()> Run(MuonServiceIoRequest request, std::function<void(MuonServiceIoReply)> complete);
   /** Cancels all pending work and closes admission. @param drained Called after the last completion returns. */

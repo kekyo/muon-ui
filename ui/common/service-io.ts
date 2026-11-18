@@ -9,6 +9,9 @@ import type { MuonServiceInputObserver } from "./service-inputs.ts";
 
 /** Normalized per-service grants and the contents of explicitly packaged files. */
 export interface MuonServiceIoPolicy {
+  /** Exact allowed HTTP and HTTPS origins. */ readonly http?: {
+    readonly origins: readonly string[];
+  };
   /** File areas available through the portable SDK. */
   readonly fs?: {
     /** Private directory access. */ readonly data?: "read" | "read-write";
@@ -55,8 +58,25 @@ export const resolveServiceIo = async (
   label: string,
 ): Promise<MuonServiceIoPolicy | undefined> => {
   if (input === undefined) return undefined;
-  const io = object(input, label, ["fs"]);
-  if (io.fs === undefined) return {};
+  const io = object(input, label, ["fs", "http"]);
+  let http: MuonServiceIoPolicy["http"];
+  if (io.http !== undefined) {
+    const { origins } = object(io.http, label + ".http", ["origins"]);
+    if (!Array.isArray(origins) || origins.length > 128)
+      throw new Error(label + ".http.origins must list at most 128 origins");
+    const normalized = origins.map((value) => {
+      if (
+        typeof value !== "string" ||
+        !/^https?:\/\/[^/?#@*\\\s]+\/?$/iu.test(value)
+      )
+        throw new Error(label + ": invalid HTTP origin");
+      const url = new URL(value);
+      return url.origin;
+    });
+    http = { origins: [...new Set(normalized)] };
+  }
+  const network = http ? { http } : {};
+  if (io.fs === undefined) return network;
   const fs = object(io.fs, label + ".fs", ["data", "assets", "directories"]);
   const directories: Record<
     string,
@@ -114,6 +134,7 @@ export const resolveServiceIo = async (
     assets[name] = bytes.toString("base64");
   }
   return {
+    ...network,
     fs: {
       ...(fs.data === undefined ? {} : { data: access(fs.data, label) }),
       ...(fs.assets === undefined ? {} : { assets }),

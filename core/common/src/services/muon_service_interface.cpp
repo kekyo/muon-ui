@@ -362,6 +362,6 @@ std::string EncodeMuonServiceArguments(const std::vector<MuonServiceType>& types
 
 bool IsMuonServiceFrameworkError(const std::string& code) {
   static const std::set<std::string> errors{"cancelled", "unavailable", "invalid-result", "callback-failed", "resource-exhausted",
-      "permission-denied", "not-found", "io-error", "invalid-input", "timeout", "size-limit"};
+      "permission-denied", "not-found", "io-error", "invalid-input", "timeout", "size-limit", "tls-error", "network-error", "redirect-limit"};
   return errors.contains(code);
 }

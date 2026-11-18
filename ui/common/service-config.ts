@@ -3,7 +3,8 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { observeMuonServiceArtifact } from "./service-inputs.ts";
 import {
   buildMuonNativeService,
@@ -237,8 +238,8 @@ export const resolveMuonServices = async (
       throw new Error(
         `${label}: node services are not supported for ${androidTarget}; use native or quickjs.`,
       );
-    if (value.runtime !== "node" && value.project !== undefined)
-      throw new Error(`${label}.project requires the node runtime.`);
+    if (value.runtime === "native" && value.project !== undefined)
+      throw new Error(`${label}.project requires the quickjs or node runtime.`);
     if (value.runtime !== "native" && value.source !== undefined)
       throw new Error(`${label}.source requires the native runtime.`);
     if (
@@ -337,18 +338,44 @@ export const resolveMuonServices = async (
     } else {
       if (value.artifact !== undefined)
         throw new Error(`${label}.artifact requires the native runtime.`);
-      const entry = resolve(directory, text(value.entry, `${label}.entry`));
       const nativePlugins = plugins.get(id) ?? [];
-      result.push({
-        ...settings,
-        runtime: "quickjs",
-        bundle: await buildMuonQuickJsService(
-          entry,
-          getMuonServicePluginModules(nativePlugins),
-          options?.onInput,
-        ),
-        plugins: nativePlugins,
-      });
+      try {
+        let project: string | undefined;
+        const source = text(value.entry, `${label}.entry`);
+        let entry = resolve(directory, source);
+        if (value.project !== undefined) {
+          project = resolve(directory, text(value.project, `${label}.project`));
+          const manifest = join(project, "package.json");
+          options?.onInput?.({ path: manifest, kind: "file" });
+          options?.onInput?.({
+            path: join(project, "package-lock.json"),
+            kind: "file",
+          });
+          record(JSON.parse(await readFile(manifest, "utf8")), manifest);
+          entry = resolve(project, source);
+          options?.onInput?.({ path: entry, kind: "file" });
+          const path = relative(await realpath(project), await realpath(entry));
+          if (path === ".." || path.startsWith(".." + sep) || isAbsolute(path))
+            throw new Error(
+              "QuickJS service entry must be inside its project.",
+            );
+        }
+        result.push({
+          ...settings,
+          runtime: "quickjs",
+          bundle: await buildMuonQuickJsService(
+            entry,
+            getMuonServicePluginModules(nativePlugins),
+            options?.onInput,
+            project,
+          ),
+          plugins: nativePlugins,
+        });
+      } catch (error) {
+        throw new Error(
+          `${label}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
   }
   return result;

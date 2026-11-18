@@ -142,6 +142,7 @@ export const createMuonServiceInputPlugin = (
       observe?.({ path: path.split("?")[0]!, kind: "file" });
   };
   file(entry);
+  const packageDirectories = new Set<string>();
   for (let path = dirname(entry); ; path = dirname(path)) {
     file(join(path, "package.json"));
     file(join(path, "tsconfig.json"));
@@ -171,6 +172,18 @@ export const createMuonServiceInputPlugin = (
     },
     load: (id) => {
       file(id);
+      // A package can change its exports without touching the currently loaded module.
+      if (observe && isAbsolute(id)) {
+        for (
+          let path = dirname(id);
+          !packageDirectories.has(path);
+          path = dirname(path)
+        ) {
+          packageDirectories.add(path);
+          file(join(path, "package.json"));
+          if (path === dirname(path)) break;
+        }
+      }
       return null;
     },
   };

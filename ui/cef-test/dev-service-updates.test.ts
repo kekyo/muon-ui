@@ -210,15 +210,20 @@ it.each(["native", "dependency", "artifact", "quickjs", "node"] as const)(
         await writeFile(
           join(project, "entry.ts"),
           `import { defineService, defineServiceInterface } from "muon-plugin-sdk/services";
-import { greeting } from ${JSON.stringify(runtime === "quickjs" ? "../shared/greeting.ts" : "./greeting.ts")};
+import { greeting } from ${JSON.stringify(runtime === "quickjs" ? "quickjs-greeting" : "./greeting.ts")};
 export default defineService({ interface: defineServiceInterface({ schemaVersion: 1, methods: {
   echo: { parameters: ["string"], returns: "string", errors: [] }
 }, events: {} }), start: () => ({ methods: { echo: async () => await greeting() }, stop: async () => {} }) });\n`,
         );
         invalidFile = join(project, "greeting.ts");
         if (runtime === "quickjs") {
-          await mkdir(join(root, "shared"));
-          invalidFile = join(root, "shared/greeting.ts");
+          const dependency = join(project, "node_modules/quickjs-greeting");
+          await mkdir(dependency, { recursive: true });
+          await writeFile(
+            join(dependency, "package.json"),
+            '{"name":"quickjs-greeting","type":"module","exports":"./greeting.ts"}',
+          );
+          invalidFile = join(dependency, "greeting.ts");
           changedFile = invalidFile;
           await writeFile(
             changedFile,
@@ -266,9 +271,8 @@ export default defineService({ interface: defineServiceInterface({ schemaVersion
         }
         definition = {
           runtime,
-          ...(runtime === "node"
-            ? { project: "./worker", entry: "./entry.ts" }
-            : { entry: "./worker/entry.ts" }),
+          project: "./worker",
+          entry: "./entry.ts",
           autostart: true,
         };
       }
@@ -511,9 +515,9 @@ export default defineService({ interface: defineServiceInterface({ schemaVersion
         );
         expect(await missing).toContain("service update failed");
         const restored = next("full-reload");
-        await mkdir(join(root, "shared/nested"));
+        await mkdir(join(project, "node_modules/quickjs-greeting/nested"));
         await writeFile(
-          join(root, "shared/nested/value.ts"),
+          join(project, "node_modules/quickjs-greeting/nested/value.ts"),
           'export const value = "New dependency";\n',
         );
         await restored;

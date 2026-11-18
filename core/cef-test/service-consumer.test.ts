@@ -251,10 +251,11 @@ const runWindowsConsumer = async (
     };
     await launch();
     const first = await evaluate(
-      `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
+      `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,base64:await script.call('base64',[new Uint8Array([255,0])]),text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
     );
     expect(first.text).toBe("日本\0🙂");
     expect(first.next).toBe(42);
+    expect(first.base64).toBe("/wA=");
     const firstNode = await evaluate(
       `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
     );
@@ -418,6 +419,7 @@ it.skipIf(
         version: "1.0.0",
         type: "module",
         private: true,
+        workspaces: ["quickjs"],
         scripts: { dependencies: "reskill" },
       }),
     );
@@ -484,8 +486,34 @@ it.skipIf(
         recursive: true,
         force: true,
       });
-    for (const name of ["quickjs-echo.ts", "quickjs-native.ts", "counter.d.ts"])
+    for (const name of ["quickjs-native.ts", "counter.d.ts"])
       await copyFile(join(sdk, "examples/services", name), join(app, name));
+    const quickjs = join(app, "quickjs");
+    await cp(join(sdk, "examples/services/quickjs-project"), quickjs, {
+      recursive: true,
+    });
+    await run("npm", [
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ]);
+    await run("npm", [
+      "run",
+      "typecheck",
+      "--workspace",
+      "quickjs-echo-service",
+    ]);
+    await run("npm", ["test", "--workspace", "quickjs-echo-service"]);
+    const invalid = join(quickjs, "src/invalid.ts");
+    await writeFile(
+      invalid,
+      "import service from './service'; import type { ServiceMethods } from 'muon-plugin-sdk/services'; declare const methods: ServiceMethods<typeof service.interface>; methods.base64({id:'1',signal:null!}, 'wrong');",
+    );
+    await expect(
+      run("npm", ["run", "typecheck", "--workspace", "quickjs-echo-service"]),
+    ).rejects.toThrow(/Uint8Array/);
+    await rm(invalid);
     await mkdir(join(app, "worker"));
     for (const name of ["node-files.ts", "node-greeting.txt"])
       await copyFile(
@@ -530,11 +558,11 @@ export default defineService({
 });`,
     );
     await writeFile(
-      join(app, "resident.ts"),
+      join(quickjs, "resident.ts"),
       `
       import {defineService} from 'muon-plugin-sdk/services';
       import type {} from 'muon-plugin-sdk/service-globals';
-      import original from './quickjs-echo.ts';
+      import original from './src/service.ts';
       export default defineService({...original,start:async context=>{
         const running=await original.start(context); let count=0;
         let timer: ReturnType<typeof setTimeout>; const tick=()=>{console.log('consumer-work:'+JSON.stringify({count:++count,at:Date.now()}));timer=setTimeout(tick,100)};timer=setTimeout(tick,100);
@@ -585,7 +613,12 @@ export default defineService({
             artifact: "artifacts/echo/muon-plugin.json",
             autostart: true,
           },
-          script: { runtime: "quickjs", entry: "resident.ts", autostart: true },
+          script: {
+            runtime: "quickjs",
+            project: "quickjs",
+            entry: "resident.ts",
+            autostart: true,
+          },
           node: {
             runtime: "node",
             project: "worker",
@@ -780,10 +813,11 @@ export default defineService({
     try {
       await launch();
       const first = await evaluate(
-        `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
+        `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,base64:await script.call('base64',[new Uint8Array([255,0])]),text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
       );
       expect(first.text).toBe("日本\0🙂");
       expect(first.next).toBe(42);
+      expect(first.base64).toBe("/wA=");
       const firstNode = await evaluate(
         `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
       );

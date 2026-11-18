@@ -101,7 +101,7 @@ export const launchWindowsTestProcess = async (
   };
 };
 
-export const requiredWindowsAgentProtocolVersion = "2026-09-09.1";
+export const requiredWindowsAgentProtocolVersion = "2026-11-17.2";
 
 export const requiredWindowsAgentFeatureNames = [
   "applications.launch",
@@ -119,6 +119,8 @@ export const requiredWindowsAgentFeatureNames = [
   "process.kill",
   "process.launchManaged",
   "process.list",
+  "process.managedProcesses",
+  "process.managedRunning",
   "process.managedSnapshot",
   "process.releaseManaged",
   "process.snapshot",

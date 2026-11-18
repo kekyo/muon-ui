@@ -71,7 +71,9 @@ Use the actual tgz version. Before passing `--plugins`, run `npm test --workspac
 
 Windows binary e2e tests require a Windows 11 (amd64) machine running the [agent-rover](https://github.com/kekyo/agent-rover/) remote agent. A virtual machine is also supported. Node.js must be on the remote agent's PATH; Node.js 24 is tested. Restart agent-rover after installing Node.js to pick up the updated PATH.
 
-Connections use agent-rover 0.10.0's standard configuration. Follow the [official connection configuration guide](https://github.com/kekyo/agent-rover/blob/0.10.0/README.md#connection-configuration) to register test machines in `~/.agent-rover` in the home directory of the user running the tests. If they are already registered, there is no need to copy hosts or tokens into environment variables.
+Connections use agent-rover 0.11.0's standard configuration. Follow the [official connection configuration guide](https://github.com/kekyo/agent-rover/blob/0.11.0/README.md#connection-configuration) to register test machines in `~/.agent-rover` in the home directory of the user running the tests. If they are already registered, there is no need to copy hosts or tokens into environment variables.
+
+Use version 0.11.0 for the agent running on Windows as well. When upgrading from 0.10.0, stop the agent on Windows, replace the distribution files, and restart it. See the [official update instructions](https://github.com/kekyo/agent-rover/blob/0.11.0/README.md#updating-the-windows-agent).
 
 Example `~/.agent-rover`:
 

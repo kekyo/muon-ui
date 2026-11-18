@@ -15,6 +15,7 @@ struct MuonServiceProcessOptions {
   std::string endpoint; /**< Unix socket path or Windows named pipe name. */
   std::string data_root; /**< Private persistent service data directory. */
   std::string startup{}; /**< Trusted login command metadata, empty for standalone drivers. */
+  bool connect_only = false; /**< An external supervisor owns this host; never launch a replacement. */
 };
 
 /** Non-owning startup connection; destroying it never kills resident services. */

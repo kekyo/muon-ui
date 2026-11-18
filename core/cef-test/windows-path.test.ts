@@ -47,6 +47,13 @@ const run = async (path: string, args: string[]) => {
       stdout: await process.stdoutText(),
       stderr: await process.stderrText(),
     };
+  } catch (error) {
+    const [snapshot] = await Promise.allSettled([process.snapshot()]);
+    console.error(
+      "Windows path process at failure:",
+      JSON.stringify(snapshot, null, 2),
+    );
+    throw error;
   } finally {
     await process.releaseAsync();
   }

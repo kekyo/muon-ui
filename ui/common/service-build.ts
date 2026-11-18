@@ -3,14 +3,84 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { isBuiltin } from "node:module";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createRequire, isBuiltin } from "node:module";
 import { dirname, join } from "node:path";
 import { runScriptOnceToText } from "funcity";
+import type { buildService, MuonPluginTarget } from "muon-plugin-sdk";
+import type { MuonServiceBuildOptions } from "./service-plugins.ts";
+import {
+  createMuonServiceInputPlugin,
+  observeMuonNativeSource,
+  type MuonServiceInputObserver,
+} from "./service-inputs.ts";
+
+/**
+ * Builds an explicitly selected native factory with the application's SDK.
+ * @param id - Validated logical service identity.
+ * @param configPath - Absolute SDK source configuration path.
+ * @param targets - Native targets required by the application.
+ * @param sysroot - Explicit target sysroot, or undefined for the SDK default.
+ * @param options - Application-owned output root and build environment.
+ * @returns Absolute service artifact manifest path, ready for verification.
+ * @remarks Builds never overwrite the producer's directory or a running host's
+ * staged files. Changed factory configurations use a separate artifact directory.
+ */
+export const buildMuonNativeService = async (
+  id: string,
+  configPath: string,
+  targets: readonly MuonPluginTarget[],
+  sysroot: string | undefined,
+  options: MuonServiceBuildOptions,
+): Promise<string> => {
+  options.onInput?.({ path: configPath, kind: "file" });
+  const require = createRequire(join(options.root, "package.json"));
+  let authoring: { buildService: typeof buildService };
+  try {
+    authoring = require("muon-plugin-sdk");
+  } catch (error) {
+    throw new Error(
+      `services.${id} requires the authoring SDK. Run npm install -D muon-plugin-sdk in ${options.root}. ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const identity = createHash("sha256")
+    .update(configPath)
+    .update("\0")
+    .update(await readFile(configPath))
+    .digest("hex");
+  const outputDirectory = join(
+    options.root,
+    ".muon/service-build",
+    id,
+    identity,
+  );
+  await observeMuonNativeSource(
+    configPath,
+    options.root,
+    targets,
+    outputDirectory,
+    options.onInput,
+  );
+  for (const target of targets)
+    await authoring.buildService({
+      configPath,
+      outputDirectory,
+      target,
+      environment: options.environment,
+      ...(sysroot === undefined ? {} : { sysroot }),
+      ...(options.androidSdkPath === undefined
+        ? {}
+        : { androidSdkPath: options.androidSdkPath }),
+    });
+  return join(outputDirectory, "muon-plugin.json");
+};
 
 /**
  * Bundles one declared TS/JS service with its portable runtime adapter.
  * @param entry - Absolute author entry exporting a service definition.
  * @param modules - Explicitly granted host module specifiers.
+ * @param onInput - Optional observer for source inputs, including failed builds.
  * @returns Self-contained ESM source, evaluated only by the service host.
  * @remarks Requires Vite 8 and the author's muon-plugin-sdk installation.
  * Node builtins and external chunks are rejected for the QuickJS runtime.
@@ -18,6 +88,7 @@ import { runScriptOnceToText } from "funcity";
 export const buildMuonQuickJsService = async (
   entry: string,
   modules: readonly string[],
+  onInput?: MuonServiceInputObserver,
 ): Promise<string> => {
   const vite = await import("vite");
   if (Number(vite.version.split(".")[0]) < 8)
@@ -46,6 +117,7 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
     publicDir: false,
     logLevel: "warn",
     plugins: [
+      createMuonServiceInputPlugin(entry, onInput),
       {
         name: "muon-quickjs-service",
         enforce: "pre",

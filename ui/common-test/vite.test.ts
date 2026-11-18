@@ -76,15 +76,22 @@ const wait = async (predicate: () => boolean): Promise<void> => {
   throw new Error("Timed out waiting for condition");
 };
 
-const createCapturingLogger = (): { logger: Logger; warnings: string[] } => {
+const createCapturingLogger = (): {
+  logger: Logger;
+  warnings: string[];
+  firstWarning: Promise<void>;
+} => {
   const warnings: string[] = [];
   const logger = createViteLogger("silent");
   const originalWarn = logger.warn.bind(logger);
-  logger.warn = (message, options): void => {
-    warnings.push(message);
-    originalWarn(message, options);
-  };
-  return { logger, warnings };
+  const firstWarning = new Promise<void>((resolve) => {
+    logger.warn = (message, options): void => {
+      warnings.push(message);
+      originalWarn(message, options);
+      resolve();
+    };
+  });
+  return { logger, warnings, firstWarning };
 };
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
@@ -2564,45 +2571,48 @@ describe("muon Vite plugin", () => {
     ).rejects.toThrow("muon capability import is not allowed");
   });
 
-  it("rejects a Node project inside outDir before a direct Vite build deletes it", async () => {
-    const root = await createTemporaryDirectory("muon-vite-node-outdir-");
-    const packageDirectory = await createFakePackageDirectory(root);
-    const backendDirectory = join(root, "web-dist", "backend");
-    const markerPath = await writeNodeProjectSource(
-      backendDirectory,
-      "vite-outdir-source",
-    );
-    await writeBasicViteProject(root);
-    await writeFile(
-      join(root, "package.json"),
-      `${JSON.stringify({ name: "vite-outdir-app", type: "module" })}\n`,
-    );
-    await writeFile(
-      join(root, "muon.json"),
-      `${JSON.stringify({ node: { project: backendDirectory } }, null, 2)}\n`,
-    );
+  it.each([false, true])(
+    "rejects a Node project inside outDir before a direct Vite build deletes it (service=%s)",
+    async (service) => {
+      const root = await createTemporaryDirectory("muon-vite-node-outdir-");
+      const packageDirectory = await createFakePackageDirectory(root);
+      const backendDirectory = join(root, "web-dist", "backend");
+      const markerPath = await writeNodeProjectSource(
+        backendDirectory,
+        "vite-outdir-source",
+      );
+      await writeBasicViteProject(root);
+      await writeFile(
+        join(root, "package.json"),
+        `${JSON.stringify({ name: "vite-outdir-app", type: "module" })}\n`,
+      );
+      await writeFile(
+        join(root, "muon.json"),
+        `${JSON.stringify(service ? { services: { worker: { runtime: "node", project: backendDirectory, entry: "./entry.ts" } } } : { node: { project: backendDirectory } }, null, 2)}\n`,
+      );
 
-    await expect(
-      viteBuild({
-        root,
-        logLevel: "silent",
-        build: {
-          outDir: "web-dist",
-        },
-        plugins: [
-          muon({
-            build: {
-              packageDirectory,
-              targets: ["linux-amd64"],
-            },
-          }),
-        ],
-      }),
-    ).rejects.toThrow("muon Node project");
-    await expect(readFile(markerPath, "utf8")).resolves.toBe(
-      "preserve source\n",
-    );
-  });
+      await expect(
+        viteBuild({
+          root,
+          logLevel: "silent",
+          build: {
+            outDir: "web-dist",
+          },
+          plugins: [
+            muon({
+              build: {
+                packageDirectory,
+                targets: ["linux-amd64"],
+              },
+            }),
+          ],
+        }),
+      ).rejects.toThrow("muon Node project");
+      await expect(readFile(markerPath, "utf8")).resolves.toBe(
+        "preserve source\n",
+      );
+    },
+  );
 
   it.each([
     ["is the Vite publicDir", "."],
@@ -2816,10 +2826,14 @@ describe("muon Vite plugin", () => {
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
     expect(overrideConfig).toEqual({
+      serviceHost: { development: true },
       cdp: {
         enable: true,
       },
       browser: {
+        profilePath: expect.stringContaining(
+          join(root, ".muon", "development", "linux-amd64", "session-"),
+        ),
         startPage: baseUrl,
         keybind: {
           devtools: "f12",
@@ -3192,10 +3206,11 @@ export default {
       const cefDirectory = await writeFakeCefDirectory();
       await writeBasicViteProject(root);
       await writeProjectMuonConfig(root);
-      await writeFakeFailingMuonSource(muonDirectory, "kill -TRAP $$");
+      // Avoid waiting for an OS crash reporter to finish writing a core dump.
+      await writeFakeFailingMuonSource(muonDirectory, "kill -TERM $$");
       process.env.MUON_CACHE_DIR =
         await createTemporaryDirectory("muon-vite-cache-");
-      const { logger, warnings } = createCapturingLogger();
+      const { logger, warnings, firstWarning } = createCapturingLogger();
       const originalExitCode = process.exitCode;
       process.exitCode = undefined;
 
@@ -3213,11 +3228,11 @@ export default {
           undefined,
           logger,
         );
-        await wait(() => warnings.length > 0);
+        await firstWarning;
 
-        expect(warnings.join("\n")).toContain("signal SIGTRAP");
+        expect(warnings.join("\n")).toContain("signal SIGTERM");
         expect(warnings.join("\n")).toContain(
-          "retained diagnostic: kill -TRAP $$",
+          "retained diagnostic: kill -TERM $$",
         );
         expect(server.httpServer?.listening).toBe(true);
         expect(process.exitCode).toBeUndefined();
@@ -3518,7 +3533,7 @@ export default {
     expect(warnings.join("\n")).toContain("generated Vite config only");
   });
 
-  it("warns and ignores an invalid project config during Vite dev startup", async () => {
+  it("reports an invalid project config without launching a partial Vite application", async () => {
     const root = await createTemporaryDirectory("muon-vite-invalid-config-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -3538,19 +3553,21 @@ export default {
         stagePath: undefined,
         enableDebugger: undefined,
         open: undefined,
+        exitWithServer: false,
       },
       undefined,
       logger,
     );
-    await wait(() => existsSync(join(outputDirectory, "override.json")));
-
-    const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
-      .trim()
-      .split("\n");
-    const overrideConfigPath = args[1];
-    expect(args).toEqual(["-c", overrideConfigPath]);
+    await wait(
+      () =>
+        warnings.some((warning) => warning.includes("muon startup failed")) ||
+        existsSync(join(outputDirectory, "override.json")),
+    );
     expect(warnings.join("\n")).toContain(join(root, "muon.json"));
-    expect(warnings.join("\n")).toContain("will be ignored");
+    expect(warnings.join("\n")).toContain("muon startup failed");
+    await expect(
+      access(join(outputDirectory, "override.json")),
+    ).rejects.toThrow();
   });
 
   it("uses the Vite base URL as the muon start page when server.open is a string", async () => {
@@ -4199,6 +4216,7 @@ describe("muon run CLI", () => {
     expect(devResult.assetSourcePath).toBe(assetsPath);
     expect(devResult.stagePath).toBe(join(root, ".muon", "linux-amd64"));
     expect(overrideConfig).toEqual({
+      serviceHost: { development: true },
       asset: {
         sourcePath: assetsPath,
       },
@@ -4206,6 +4224,9 @@ describe("muon run CLI", () => {
         enable: true,
       },
       browser: {
+        profilePath: expect.stringContaining(
+          join(root, ".muon", "development", "linux-amd64", "session-"),
+        ),
         keybind: {
           devtools: "f12",
           recycle: "ctrl+f12",

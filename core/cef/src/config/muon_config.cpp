@@ -3026,15 +3026,57 @@ static bool ReadServiceHostConfig(yyjson_val* root,
                                   std::string* error_message) {
   const auto value = yyjson_obj_get(root, "serviceHost");
   if (!value) return true;
-  const auto registry = yyjson_obj_get(value, "registry");
-  if (!yyjson_is_obj(value) || yyjson_obj_size(value) != 1 ||
-      !yyjson_is_str(registry) || yyjson_get_len(registry) == 0 ||
-      std::strlen(yyjson_get_str(registry)) != yyjson_get_len(registry) ||
-      TrimAscii(yyjson_get_str(registry)).empty()) {
-    *error_message = "muon.json serviceHost must contain only a nonempty registry path without NUL";
+  if (!yyjson_is_obj(value)) {
+    *error_message = "muon.json serviceHost must be an object";
     return false;
   }
-  config->service_registry = FilesystemPathFromUtf8(ReadJsonString(registry));
+  size_t index, count;
+  yyjson_val *key, *field;
+  yyjson_obj_foreach(value, index, count, key, field) {
+    (void)field;
+    const auto name = ReadJsonString(key);
+    if (name != "registry" && name != "development" && name != "endpoint") {
+      *error_message = "Unknown muon.json serviceHost option: " + name;
+      return false;
+    }
+  }
+  const auto development = yyjson_obj_get(value, "development");
+  if (development && !yyjson_is_bool(development)) {
+    *error_message = "muon.json serviceHost.development must be boolean";
+    return false;
+  }
+  config->service_development = yyjson_get_bool(development);
+  const auto valid_text = [](yyjson_val* text) {
+    return yyjson_is_str(text) && yyjson_get_len(text) != 0 &&
+        std::strlen(yyjson_get_str(text)) == yyjson_get_len(text) &&
+        !TrimAscii(yyjson_get_str(text)).empty();
+  };
+  const auto registry = yyjson_obj_get(value, "registry");
+  if ((registry && !valid_text(registry)) || (!registry && !config->service_development)) {
+    *error_message = "muon.json serviceHost requires a nonempty registry path without NUL, or development mode";
+    return false;
+  }
+  if (registry) config->service_registry = FilesystemPathFromUtf8(ReadJsonString(registry));
+  const auto endpoint = yyjson_obj_get(value, "endpoint");
+  if (endpoint) {
+    if (!config->service_development || !valid_text(endpoint)) {
+      *error_message = "muon.json serviceHost.endpoint requires development mode and a nonempty local endpoint";
+      return false;
+    }
+    config->service_endpoint = ReadJsonString(endpoint);
+#if defined(_WIN32)
+    const auto prefix = std::string("\\\\.\\pipe\\muon-service-");
+    const auto valid = config->service_endpoint.starts_with(prefix) &&
+        config->service_endpoint.size() > prefix.size() && config->service_endpoint.size() <= 256 &&
+        config->service_endpoint.find('\\', prefix.size()) == std::string::npos;
+#else
+    const auto valid = FilesystemPathFromUtf8(config->service_endpoint).is_absolute();
+#endif
+    if (!valid) {
+      *error_message = "muon.json serviceHost.endpoint must identify a local absolute service endpoint";
+      return false;
+    }
+  }
   return true;
 }
 

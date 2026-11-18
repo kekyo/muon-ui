@@ -8,6 +8,7 @@
 #include "muon_service_policy.h"
 #include "muon_service_startup.h"
 #include "muon_service_plugins.h"
+#include "muon_node_service_host.h"
 #include "muon_cardio_post.h"
 #include "services/muon_quickjs_service_plugins.h"
 #include "muon_filesystem.h"
@@ -129,9 +130,9 @@ class ServiceProcess final {
  public:
   ServiceProcess(cardio::dispatcher_group& group,
                  cardio::dispatcher_host_win32_auto& dispatcher,
-                 std::wstring endpoint, std::filesystem::path data_root, bool bootstrap)
+                 std::wstring endpoint, std::filesystem::path data_root, bool bootstrap, bool development)
       : group_(group), dispatcher_(dispatcher), endpoint_(std::move(endpoint)),
-        data_root_(std::move(data_root)), bootstrap_live_(bootstrap) {
+        data_root_(std::move(data_root)), bootstrap_live_(bootstrap), development_(development) {
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = WindowProcedure;
     window_class.hInstance = GetModuleHandleW(nullptr);
@@ -147,6 +148,7 @@ class ServiceProcess final {
     protocol_.reset();
     broker_.reset();
     controller_.reset();
+    node_.reset();
     quickjs_.reset();
     plugin_startup_.reset();
     plugins_.reset();
@@ -177,13 +179,13 @@ class ServiceProcess final {
       yyjson_val *key, *value;
       yyjson_obj_foreach(services, index, count, key, value) {
         const auto id = StringValue(key);
-        if (!ValidId(id) || specs_.contains(id) || scripts_.contains(id))
+        if (!ValidId(id) || specs_.contains(id) || scripts_.contains(id) || nodes_.contains(id))
           throw std::invalid_argument("Invalid or duplicate service identity: " + id);
         const auto runtime_value = yyjson_obj_get(value, "runtime");
         const auto runtime = runtime_value ? StringValue(runtime_value) : "native";
-        if (runtime != "native" && runtime != "quickjs")
+        if (runtime != "native" && runtime != "quickjs" && runtime != "node")
           throw std::invalid_argument("Unsupported service runtime: " + runtime);
-        const auto source_key = runtime == "native" ? "library" : "script";
+        const auto source_key = runtime == "native" ? "library" : runtime == "node" ? "project" : "script";
         const auto library = muon_internal::FilesystemPathToUtf8(
             muon_internal::ResolveFilesystemPath(config.parent_path(),
                 muon_internal::FilesystemPathFromUtf8(StringValue(yyjson_obj_get(value, source_key)))));
@@ -206,7 +208,11 @@ class ServiceProcess final {
         if (session_ending_) { FinishLoop(); co_return; }
         definitions.push_back({id, yyjson_get_bool(autostart), preference});
         if (yyjson_arr_size(yyjson_obj_get(value, "plugins"))) plugin_services_.insert(id);
-        if (runtime == "native") specs_.emplace(id, std::move(spec));
+        const auto resolve_node_path = [&](const char* name) { return muon_internal::FilesystemPathToUtf8(muon_internal::ResolveFilesystemPath(config.parent_path(), muon_internal::FilesystemPathFromUtf8(StringValue(yyjson_obj_get(value, name))))); };
+        if (runtime == "node") nodes_.emplace(id, MuonNodeServiceSpec{
+            id, library, StringValue(yyjson_obj_get(value, "entry")),
+            resolve_node_path("executable"), resolve_node_path("bridge"), spec.data_directory, std::move(spec.config)});
+        else if (runtime == "native") specs_.emplace(id, std::move(spec));
         else scripts_.emplace(id, MuonQuickJsServiceSpec{
             id, spec.library_path, {}, spec.data_directory, std::move(spec.config)});
       }
@@ -245,15 +251,19 @@ class ServiceProcess final {
                                    : MuonQuickJsServiceExtension{};
           }};
       if (plugins_) plugin_startup_ = std::make_unique<MuonQuickJsServicePlugins>(*plugins_, quickjs_platform.delay);
+      node_ = std::make_unique<MuonNodeServiceHost>(MuonNodeServicePlatform{
+          post, quickjs_platform.delay, quickjs_platform.log, quickjs_platform.exited, std::chrono::seconds(10)});
       quickjs_ = std::make_unique<MuonQuickJsServiceHost>(std::move(quickjs_platform));
       controller_ = std::make_unique<MuonServiceController>(definitions, MuonServiceBackend{
           [this](const MuonServiceSnapshot& state, auto complete) {
-            if (scripts_.contains(state.id))
+            if (nodes_.contains(state.id)) node_->Start(nodes_.at(state.id), state.generation, std::move(complete));
+            else if (scripts_.contains(state.id))
               cardio::fire_and_forget(StartScript(state, std::move(complete)));
             else native_->Start(specs_.at(state.id), state.generation, std::move(complete));
           },
           [this](const MuonServiceSnapshot& state, auto complete) {
-            if (scripts_.contains(state.id)) quickjs_->Stop(state.id, state.generation, std::move(complete));
+            if (nodes_.contains(state.id)) node_->Stop(state.id, state.generation, std::move(complete));
+            else if (scripts_.contains(state.id)) quickjs_->Stop(state.id, state.generation, std::move(complete));
             else native_->Stop(state.id, state.generation, std::move(complete));
           },
           [this](const std::string& id, bool enabled, auto complete) {
@@ -265,8 +275,8 @@ class ServiceProcess final {
               std::cout << SerializeMuonServiceSnapshot(event.snapshot) << std::endl;
           }, post});
       broker_ = std::make_unique<MuonServiceBroker>(*controller_, RouteMuonServiceExecutions(
-          {native_->Execution(), quickjs_->Execution()},
-          [this](const std::string& id) { return scripts_.contains(id) ? size_t{1} : size_t{0}; }));
+          {native_->Execution(), quickjs_->Execution(), node_->Execution()},
+          [this](const std::string& id) { return nodes_.contains(id) ? size_t{2} : scripts_.contains(id) ? size_t{1} : size_t{0}; }));
       protocol_ = std::make_unique<MuonServiceProtocol>(*controller_,
           [this](const std::string& owner, const std::string& json) { Send(owner, json); },
           MuonServiceUiPolicy{[this] { return login_->UiEnabled(); },
@@ -543,6 +553,15 @@ class ServiceProcess final {
         const auto size = co_await cardio::win32::read(bootstrap_->value,
             std::as_writable_bytes(std::span(bytes)), transport_cancellation_.get_cancellation());
         if (size == 0) break;
+        if (development_) {
+          // Release the UI startup guard while retaining EOF ownership. The
+          // supervisor may disappear without sending an administrative RPC.
+          for (size_t index = 0; index < size; ++index)
+            if (bytes[index] != 'd') throw std::invalid_argument("Invalid development session command");
+          bootstrap_live_ = false;
+          ever_connected_ = true;
+          MaybeFinish();
+        }
       }
     } catch (const cardio::canceled_exception&) {
     } catch (const std::system_error& error) {
@@ -556,6 +575,7 @@ class ServiceProcess final {
     }
     bootstrap_live_ = false;
     ever_connected_ = true;
+    if (development_) controller_->Shutdown("Development session ended");
     --io_count_;
     MaybeFinish();
   }
@@ -563,7 +583,7 @@ class ServiceProcess final {
   void MaybeFinish() {
     if (!initialized_ || finishing_ || policy_jobs_ != 0) return;
     if (!controller_->IsShuttingDown()) {
-      if (!bootstrap_live_ && ever_connected_ && peers_.empty() && controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && (!plugins_ || plugins_->IsIdle()) &&
+      if (!bootstrap_live_ && ever_connected_ && peers_.empty() && controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && node_->IsIdle() && (!plugins_ || plugins_->IsIdle()) &&
           (!plugin_startup_ || plugin_startup_->IsIdle()) && runtime_jobs_ == 0)
         controller_->Shutdown("No service references remain");
       else return;
@@ -573,7 +593,7 @@ class ServiceProcess final {
       transport_stopping_ = true;
       transport_cancellation_.cancel();
     }
-    if (controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && (!plugins_ || plugins_->IsIdle()) &&
+    if (controller_->IsQuiescent() && native_->IsIdle() && quickjs_->IsIdle() && node_->IsIdle() && (!plugins_ || plugins_->IsIdle()) &&
           (!plugin_startup_ || plugin_startup_->IsIdle()) && runtime_jobs_ == 0 && posted_.empty()) {
       std::vector<std::shared_ptr<Peer>> peers;
       for (const auto& [owner, peer] : peers_) {
@@ -597,6 +617,8 @@ class ServiceProcess final {
   std::shared_ptr<Handle> bootstrap_;
   std::map<std::string, MuonNativeServiceSpec> specs_;
   std::map<std::string, MuonQuickJsServiceSpec> scripts_;
+  std::map<std::string, MuonNodeServiceSpec> nodes_;
+  std::unique_ptr<MuonNodeServiceHost> node_;
   std::unique_ptr<MuonQuickJsServiceHost> quickjs_;
   std::unique_ptr<MuonServicePluginPool> plugins_;
   std::unique_ptr<MuonQuickJsServicePlugins> plugin_startup_;
@@ -623,6 +645,7 @@ class ServiceProcess final {
   bool session_ending_ = false;
   bool loop_finished_ = false;
   bool bootstrap_live_ = false;
+  bool development_ = false;
 };
 
 int wmain(int argc, wchar_t** argv) {
@@ -631,9 +654,10 @@ int wmain(int argc, wchar_t** argv) {
     for (int index = 1; index + 1 < argc; index += 2)
       arguments.emplace(argv[index], argv[index + 1]);
     const auto bootstrap = arguments.contains(L"--bootstrap");
+    const auto development = bootstrap && arguments.at(L"--bootstrap") == L"development";
     const auto count = 3 + static_cast<int>(bootstrap) + static_cast<int>(arguments.contains(L"--startup"));
     if (argc != count * 2 + 1 || arguments.size() != static_cast<size_t>(count) ||
-        (bootstrap && arguments.at(L"--bootstrap") != L"stdin") || !arguments.contains(L"--config") ||
+        (bootstrap && !development && arguments.at(L"--bootstrap") != L"stdin") || !arguments.contains(L"--config") ||
         !arguments.contains(L"--endpoint") || !arguments.contains(L"--data-root"))
       throw std::invalid_argument("Usage: muon-service-host --config FILE --endpoint PIPE --data-root DIR [--bootstrap stdin]");
     const auto& endpoint = arguments.at(L"--endpoint");
@@ -650,7 +674,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     cardio::dispatcher_group group;
     cardio::dispatcher_host_win32_auto dispatcher(group);
-    ServiceProcess process(group, dispatcher, endpoint, arguments.at(L"--data-root"), bootstrap);
+    ServiceProcess process(group, dispatcher, endpoint, arguments.at(L"--data-root"), bootstrap, development);
     cardio::fire_and_forget(process.Run(arguments.at(L"--config"), arguments.contains(L"--startup") ?
         muon_internal::FilesystemPathToUtf8(arguments.at(L"--startup")) : ""));
     dispatcher.park();

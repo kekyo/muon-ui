@@ -28,8 +28,9 @@ import type { MuonPluginTarget } from "muon-plugin-sdk";
 import {
   buildMuonApp,
   resolveMuonNodeProjectForBuildConfig,
+  resolveMuonNodeServiceProjectsForBuildConfig,
   type MuonBuildOptions,
-} from "./build.js";
+} from "./build.ts";
 import {
   createMuonCapabilityModuleResolver,
   type MuonCapabilityModuleResolver,
@@ -444,10 +445,11 @@ export interface MuonVitePluginOptions {
   allowInsecureLocalhost?: boolean;
 
   /**
-   * Close the Vite dev server when the launched muon process exits.
+   * Close the Vite dev server when the launched UI and its services have exited.
    *
    * @remarks Vite build and `muon run` ignore this option. Recycle exits keep
-   * the Vite dev server running so muon can restart.
+   * the Vite dev server running so muon can restart. Resident services keep
+   * the development session alive after the UI closes.
    * @defaultValue `true`
    */
   exitWithServer?: boolean;
@@ -692,8 +694,13 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       resolvedConfig = config;
       await refreshPluginAccess(config);
       let nodeProject: ResolvedMuonNodeProject | undefined = undefined;
+      let serviceProjects: readonly ResolvedMuonNodeProject[] = [];
       try {
         nodeProject = await resolveMuonNodeProjectForBuildConfig(
+          config.root,
+          resolveMuonConfigPathForViteCommand(config, options),
+        );
+        serviceProjects = await resolveMuonNodeServiceProjectsForBuildConfig(
           config.root,
           resolveMuonConfigPathForViteCommand(config, options),
         );
@@ -707,6 +714,10 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
       }
       nodeVirtualModuleEnabled =
         resolvedPluginAccess?.mode === "validate" && nodeProject !== undefined;
+      const nodeProjects = [
+        ...(nodeProject === undefined ? [] : [nodeProject]),
+        ...serviceProjects,
+      ];
       if (
         process.env[muonBuildSequenceSuppressViteBuildEnvironmentKey] !== "1"
       ) {
@@ -715,13 +726,13 @@ const muon = (options: MuonVitePluginOptions = {}): Plugin => {
             ? config.build.outDir
             : resolve(config.root, config.build.outDir);
           await assertMuonNodeProjectViteBuildIsSafe(
-            nodeProject,
+            nodeProjects,
             outputDirectory,
             config.publicDir,
           );
         } else {
           await assertMuonNodeProjectVitePublicDirectoryIsSafe(
-            nodeProject,
+            nodeProjects,
             config.publicDir,
           );
         }

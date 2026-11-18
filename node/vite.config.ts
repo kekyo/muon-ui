@@ -32,6 +32,9 @@ export default defineConfig({
     sourcemap: false,
     target: 'node20',
     rolldownOptions: {
+      // Required formatting and type checking dominate this small bundle.
+      // prettier-max reports their timings; retain output correctness checks.
+      checks: { bundlerTimings: false },
       external: [/^node:/],
       output: {
         codeSplitting: false,

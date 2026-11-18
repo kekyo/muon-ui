@@ -567,6 +567,10 @@ struct MuonNotificationsConfig {
 struct MuonConfig {
   /** Resolved generated service registry path; empty when services are absent. */
   std::filesystem::path service_registry;
+  /** Development sessions never register a command for OS login startup. */
+  bool service_development = false;
+  /** Supervisor-owned endpoint; nonempty only in development configuration. */
+  std::string service_endpoint;
   /** Application-owned local notification settings. */
   MuonNotificationsConfig notifications;
   /**

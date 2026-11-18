@@ -156,6 +156,13 @@ export const createWindowsNotificationDriver = async (
       if (result.root.exitCode !== 0)
         throw new Error(`${path}: ${await process.stderrText()}`);
       return (await process.stdoutText()).trim();
+    } catch (error) {
+      const [snapshot] = await Promise.allSettled([process.snapshot()]);
+      console.error(
+        "Windows notification observer at failure:",
+        JSON.stringify({ path, args, snapshot }, null, 2),
+      );
+      throw error;
     } finally {
       await process.releaseAsync();
     }

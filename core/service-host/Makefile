@@ -8,6 +8,8 @@ COMMON := ../common/src
 YYJSON := ../cef/.deps/src/yyjson-0.12.0/src
 OUT := .build
 CPPFLAGS += -I../../sdk/include -I../common/include -I$(COMMON) -I$(YYJSON) -I. -I../cef/src
+CPPFLAGS += -I../../node/native -I../cef/src/platform -DNOMINMAX
+NODE_SOURCES := muon_node_service_host.cpp ../../node/native/node_process.cpp
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wpedantic -Werror
 CFLAGS += -std=c99 -Wall -Wextra -Wpedantic
 LIFECYCLE := $(COMMON)/services/muon_service_lifecycle.cpp $(COMMON)/services/muon_service_controller.cpp
@@ -52,7 +54,7 @@ $(OUT)/libcardio.so: ../../sdk/native/linux-amd64/lib/libcardio.so | $(OUT)
 $(OUT)/sha2.o: ../../deps/sha2/sha2.c | $(OUT)
 	$(CC) -std=c99 -D_DEFAULT_SOURCE -I../../deps/sha2 -c $< -o $@
 
-$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $(QUICKJS_OBJECTS) $(OUT)/yyjson.o $(OUT)/sha2.o $(OUT)/libcardio.so | $(OUT)
+$(OUT)/muon-service-host: muon_service_host_linux.cpp muon_service_policy_linux.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(NODE_SOURCES) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $(QUICKJS_OBJECTS) $(OUT)/yyjson.o $(OUT)/sha2.o $(OUT)/libcardio.so | $(OUT)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CARDIO_CFLAGS) $(shell pkg-config --cflags libffi) $(filter-out %.so,$^) $(CARDIO_LIBS) $(shell pkg-config --libs libffi) -ldl -lm -Wl,-rpath,'$$ORIGIN' -o $@
 
 $(OUT)/probe-service.so: ../android-test/service-driver/src/main/cpp/muon_service_fixture.cpp $(OUT)/libcardio.so | $(OUT)
@@ -124,8 +126,12 @@ $$(WIN_$(1)_FFI)/lib/libffi.a:
 $(OUT)/windows-$(1)/sha2.o: ../../deps/sha2/sha2.c | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CC) -std=c99 -D_DEFAULT_SOURCE -I../../deps/sha2 -c $$< -o $$@
 
-$(OUT)/windows-$(1)/muon-service-host.exe: muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/sha2.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes $$(WIN_$(1)_FFI)/lib/libffi.a
-	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -I$$(WIN_$(1)_FFI)/include -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -o $$@
+$(OUT)/windows-$(1)/node-job.o: ../cef/src/platform/muon_windows_job_process.cpp ../cef/src/platform/muon_windows_job_process.h | $(OUT)/windows-$(1)
+	# Match the CEF job helper's Windows API contract for atomic child ownership.
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) -D_WIN32_WINNT=0x0A00 -c $$< -o $$@
+
+$(OUT)/windows-$(1)/muon-service-host.exe: $(OUT)/windows-$(1)/node-job.o muon_service_host_windows.cpp muon_service_policy_windows.cpp muon_service_protocol.cpp $(LOGIN) $(LIFECYCLE) $(NATIVE) $(NODE_SOURCES) $(QUICKJS_SOURCES) $(PLUGIN_SOURCES) $$(WIN_$(1)_QUICKJS) $(OUT)/windows-$(1)/yyjson.o $(OUT)/windows-$(1)/sha2.o $(OUT)/windows-$(1)/windows-path.o $(OUT)/windows-$(1)/runtimes $$(WIN_$(1)_FFI)/lib/libffi.a
+	$$(WIN_$(1)_CXX) $(CPPFLAGS) $(CXXFLAGS) $$(WIN_$(1)_FLAGS) -I$$(WIN_$(1)_FFI)/include -D_WIN32_WINNT=0x0601 -municode $$(filter-out %/runtimes,$$^) $$(WIN_$(1)_LIBS) -lwinpthread -ladvapi32 -luser32 -lole32 -lbcrypt -o $$@
 
 $(OUT)/windows-$(1)/simple-service.dll: ../common-test/muon_service_fixture.c | $(OUT)/windows-$(1)
 	$$(WIN_$(1)_CC) $(CPPFLAGS) $(CFLAGS) -Werror -shared $$< -o $$@

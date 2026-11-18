@@ -71,16 +71,13 @@ it("resolves one factory into independent logical service definitions", async ()
   expect(alpha.artifact.manifest.kind).toBe("service");
 });
 
-it.each(["node", "unknown"])(
-  "rejects the unavailable %s runtime",
-  async (runtime) => {
-    await expect(
-      resolveMuonServices({ worker: { runtime, artifact } }, root, [
-        "linux-amd64",
-      ]),
-    ).rejects.toThrow(/runtime/);
-  },
-);
+it.each(["unknown"])("rejects the unavailable %s runtime", async (runtime) => {
+  await expect(
+    resolveMuonServices({ worker: { runtime, artifact } }, root, [
+      "linux-amd64",
+    ]),
+  ).rejects.toThrow(/runtime/);
+});
 
 it.each([
   ["../escape", {}],
@@ -89,6 +86,8 @@ it.each([
   ["worker", { config: null }],
   ["worker", { config: { value: "with\0nul" } }],
   ["worker", { start: true }],
+  ["worker", { source: "./native/muon-plugin.build.json" }],
+  ["worker", { sysroot: "./sysroot" }],
 ] as const)("rejects invalid service definition %s %j", async (id, extra) => {
   await expect(
     resolveMuonServices(

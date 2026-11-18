@@ -149,6 +149,11 @@ it.each(["simple", "validate"] as const)(
         expect(finished.root.exitCode, await child.stderrText()).toBe(0);
         return await child.stdoutText();
       } catch (error) {
+        const [snapshot] = await Promise.allSettled([child.snapshot()]);
+        console.error(
+          "Windows service test helper at failure:",
+          JSON.stringify(snapshot, null, 2),
+        );
         throw new Error(
           `${String(error)}\nstdout: ${await child.stdoutText()}\nstderr: ${await child.stderrText()}`,
           { cause: error },

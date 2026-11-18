@@ -797,7 +797,10 @@ bool MuonApp::RequestShutdown(int32_t exit_code) {
   if (!shutdown_requested_) {
     exit_code_ = static_cast<int>(exit_code);
     shutdown_requested_ = true;
-    RequestMuonBuiltinServicesShutdown();
+    // A development recycle replaces only the UI. Its supervisor retains the
+    // service host, saved preferences, and any resident service generations.
+    if (!config_.service_development || exit_code != kMuonRecycleExitCode)
+      RequestMuonBuiltinServicesShutdown();
   }
   return true;
 }

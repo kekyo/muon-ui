@@ -11,6 +11,11 @@ import {
   type ResolvedPluginArtifact,
 } from "muon-plugin-sdk/artifact";
 import type { MuonPluginTarget, buildPlugin } from "muon-plugin-sdk";
+import {
+  observeMuonNativeSource,
+  observeMuonServiceArtifact,
+  type MuonServiceInputObserver,
+} from "./service-inputs.ts";
 import type { MuonPluginAccessEntryOptions } from "./plugin-access.js";
 import {
   selectMuonPluginFunctionPaths,
@@ -35,6 +40,7 @@ export interface ResolveMuonNativePluginsOptions {
   /** Environment for explicitly requested source builds. */ readonly environment: NodeJS.ProcessEnv;
   /** Android SDK selected by the application. */ readonly androidSdkPath?: string;
   /** Separate source-build directory for an independent runtime host. */ readonly outputDirectory?: string;
+  /** Optional service development input observer. */ readonly onInput?: MuonServiceInputObserver;
 }
 
 /**
@@ -88,6 +94,13 @@ export const resolveMuonNativePlugins = async (
       );
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(plugin.name))
         throw new Error(`Invalid native plugin name: ${plugin.name}`);
+      await observeMuonNativeSource(
+        resolve(options.directory, reference.source),
+        options.root,
+        options.targets,
+        output,
+        options.onInput,
+      );
       const androidSdkPath =
         reference.androidSdkPath === undefined
           ? options.androidSdkPath
@@ -120,7 +133,9 @@ export const resolveMuonNativePlugins = async (
         );
       }
     } else path = resolve(options.directory, reference.manifest!);
+    options.onInput?.({ path, kind: "file" });
     const artifact = await readPluginArtifact(path, options.targets);
+    observeMuonServiceArtifact(artifact, options.targets, options.onInput);
     if (artifact.manifest.name !== plugin.name)
       throw new Error(
         `Plugin registration name mismatch: requested ${plugin.name}, artifact declares ${artifact.manifest.name}.`,

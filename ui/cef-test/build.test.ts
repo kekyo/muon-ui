@@ -1081,6 +1081,61 @@ describe("muon build", () => {
     );
   });
 
+  it("packages a service-only Node project with a bridge and a required launcher runtime", async () => {
+    const root = await createTemporaryDirectory("muon-build-node-service-");
+    const packageDirectory = await createFakeMuonPackageDist(root);
+    const project = join(root, "settings/worker");
+    await mkdir(project, { recursive: true });
+    await mkdir(join(root, "assets"));
+    await writeFile(join(root, "assets/index.html"), "<!doctype html>");
+    await writeFile(
+      join(project, "package.json"),
+      JSON.stringify({
+        name: "service-project",
+        type: "module",
+        engines: { node: "^24" },
+      }),
+    );
+    await writeFile(
+      join(project, "entry.ts"),
+      'export default (): string => "service-only";',
+    );
+    await writeFile(
+      join(root, "settings/muon.json"),
+      JSON.stringify({
+        services: {
+          worker: { runtime: "node", project: "./worker", entry: "./entry.ts" },
+        },
+      }),
+    );
+    const result = await buildMuonApp({
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"],
+      configPath: "settings/muon.json",
+      assetSourcePath: "assets",
+    });
+    const output = join(root, "dist-muon/linux-amd64");
+    const registry = JSON.parse(
+      await readFile(join(output, "muon-services.json"), "utf8"),
+    );
+    expect(registry.services.worker).toMatchObject({
+      runtime: "node",
+      project: "./services/node/worker",
+      executable: "./runtimes/node/bin/node",
+      bridge: "./plugins/node-bridge.mjs",
+    });
+    expect(
+      await readFakeLauncherEmbeddedConfig(result.targets[0]!.launcherPath),
+    ).toMatchObject({
+      launcher: { nodeRuntime: { required: true, engineRange: "^24" } },
+    });
+    expect(result.targets[0]!.embeddedConfig).not.toHaveProperty("node");
+    expect(
+      await readFile(join(output, "plugins/node-bridge.mjs"), "utf8"),
+    ).toContain("bridgeFixture");
+  });
+
   it("requires a staged Node runtime in validate plugin mode", async () => {
     const root = await createTemporaryDirectory(
       "muon-build-node-validate-mode-",

@@ -70,6 +70,10 @@ export const resolveAndroidServices = async (
 ): Promise<readonly MuonAndroidPackagedService[]> => {
   const services: MuonAndroidPackagedService[] = [];
   for (const definition of definitions) {
+    if (definition.runtime === "node")
+      throw new Error(
+        `Service ${definition.id}: node services are not supported on Android.`,
+      );
     if (definition.android === undefined)
       throw new Error(
         `Service ${definition.id} requires Android foreground settings.`,

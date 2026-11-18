@@ -288,8 +288,10 @@ const stageRemoteMuonPackCli = async (
   );
   for (const packageName of [
     "adm-zip",
+    "chokidar",
     "commander",
     "funcity",
+    "readdirp",
     "tar-vern",
   ] as const) {
     await copyLocalDirectoryToRemote(

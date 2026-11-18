@@ -5,7 +5,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { constants, writeFileSync } from "node:fs";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -18,13 +18,25 @@ import { ensureMuonGitignoreEntry } from "../common/gitignore.js";
 import { getDefaultMuonPrepareTarget, runMuonPrepare } from "./prepare.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
 import type { MuonVitePluginOptions } from "../common/vite.js";
+import { resolveMuonServices } from "../common/service-config.ts";
+import type { MuonServiceInput } from "../common/service-inputs.ts";
+import {
+  createMuonDevelopmentServiceWatcher,
+  type MuonDevelopmentServiceWatcher,
+} from "./development-service-watch.ts";
+import {
+  startMuonDevelopmentServices,
+  type MuonDevelopmentServiceConfig,
+  type MuonDevelopmentServices,
+} from "./development-services.ts";
 import {
   assertMuonNodeHostArtifacts,
   assertMuonNodeProjectStagingIsSafe,
   createMuonNodeRuntimeRequirement,
   resolveMuonNodeProject,
   stageMuonNodeProject,
-} from "./node-project.js";
+  type ResolvedMuonNodeProject,
+} from "./node-project.ts";
 
 export interface MuonLaunchScriptOptions {
   muonExecutablePath: string;
@@ -53,6 +65,7 @@ interface MuonProjectConfigResolution {
 }
 
 interface MuonOverrideConfig {
+  serviceHost: MuonDevelopmentServiceConfig["serviceHost"];
   config?: Record<string, string>;
   node?: {
     project: string;
@@ -61,6 +74,7 @@ interface MuonOverrideConfig {
     enable: true;
   };
   browser: {
+    profilePath: string;
     startPage: string;
     titleBarType?: "native" | "muon";
     initialTitleBarVisibility?: boolean;
@@ -315,9 +329,11 @@ const createMuonOverrideConfig = (
   config: Readonly<Record<string, string>> | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig,
   nodeProjectPath: string | undefined,
+  serviceConfig: MuonDevelopmentServiceConfig,
 ): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
+    serviceHost: serviceConfig.serviceHost,
     ...(config === undefined ? {} : { config: { ...config } }),
     ...(nodeProjectPath === undefined
       ? {}
@@ -334,6 +350,7 @@ const createMuonOverrideConfig = (
         }
       : {}),
     browser: {
+      ...serviceConfig.browser,
       startPage: startUrl,
       ...(enableDebugger
         ? {
@@ -367,6 +384,7 @@ const writeMuonOverrideConfig = (
   pluginOptions: MuonVitePluginOptions,
   runtimePluginConfig: MuonRuntimePluginConfig,
   nodeProjectPath: string | undefined,
+  serviceConfig: MuonDevelopmentServiceConfig,
 ): boolean => {
   const startUrl = getBaseUrl(server);
   if (startUrl === undefined) {
@@ -383,6 +401,7 @@ const writeMuonOverrideConfig = (
         pluginOptions.dev?.config,
         runtimePluginConfig,
         nodeProjectPath,
+        serviceConfig,
       ),
       null,
       2,
@@ -433,13 +452,9 @@ const resolveProjectConfig = async (
         config: parsed,
       };
     } catch (error) {
-      server.config.logger.warn(
-        `muon project config will be ignored because it could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
+      throw new Error(
+        `muon project config could not be read or parsed: ${candidatePath}: ${getErrorMessage(error)}`,
       );
-      return {
-        path: undefined,
-        config: undefined,
-      };
     }
   }
 
@@ -548,6 +563,210 @@ export const startMuonViteBrowserBridge = async ({
   let closing = false;
   let serverCloseRequested = false;
   let supervisorPromise: Promise<void> | undefined = undefined;
+  let serviceSession: MuonDevelopmentServices | undefined;
+  let serviceWatcher: MuonDevelopmentServiceWatcher | undefined;
+  let updatePromise: Promise<void> | undefined;
+  let updateTimer: ReturnType<typeof setTimeout> | undefined;
+  let restartRequested = false;
+  let activeRuntime: string | undefined;
+  let uiRuntime: string | undefined;
+  let activeRequirement: string | undefined;
+  let activeSettings: string | undefined;
+  let activeNodeProject: ResolvedMuonNodeProject | undefined;
+  let activeNodeProjectPath: string | undefined;
+  let activeInputs = new Map<string, MuonServiceInput>();
+  const changedPaths = new Set<string>();
+  const runtimeDirectories = new Set<string>();
+  const configPaths = defaultProjectConfigFileNames.map((name) =>
+    resolve(server.config.root, name),
+  );
+  const cancellation = new AbortController();
+
+  const serviceSettings = (project: MuonProjectConfigResolution): string =>
+    JSON.stringify({
+      services: project.config?.services,
+      node: project.config?.node,
+    });
+  const collectInputs = (): Map<string, MuonServiceInput> =>
+    new Map(
+      configPaths.map((path) => ["file:" + path, { path, kind: "file" }]),
+    );
+  const prepareServices = async (
+    project: MuonProjectConfigResolution,
+    inputs: Map<string, MuonServiceInput>,
+  ) => {
+    const onInput = (input: MuonServiceInput): void => {
+      inputs.set(input.kind + ":" + input.path, input);
+    };
+    const directory =
+      project.path === undefined ? server.config.root : dirname(project.path);
+    const services = await resolveMuonServices(
+      project.config?.services,
+      directory,
+      [target],
+      { root: server.config.root, environment, onInput },
+    );
+    const nodeProject = await resolveMuonNodeProject(project.config, directory);
+    if (nodeProject)
+      onInput({
+        path: join(nodeProject.sourcePath, "package.json"),
+        kind: "file",
+      });
+    const nodeProjects = [
+      ...(nodeProject === undefined ? [] : [nodeProject]),
+      ...services.flatMap((service) =>
+        service.runtime === "node" ? [service.project] : [],
+      ),
+    ];
+    await assertMuonNodeProjectStagingIsSafe(nodeProjects, stagePath);
+    const requirement = createMuonNodeRuntimeRequirement(nodeProjects, true);
+    const key = JSON.stringify([requirement, nodeProject?.sourcePath]);
+    let runtime = activeRuntime;
+    let allocated: string | undefined;
+    let nodeProjectPath = activeNodeProjectPath;
+    try {
+      if (runtime === undefined || activeRequirement !== key) {
+        let destination = stagePath;
+        if (runtime !== undefined) {
+          const base = join(
+            server.config.root,
+            ".muon/development-runtimes",
+            target,
+          );
+          await mkdir(base, { recursive: true });
+          allocated = await mkdtemp(join(base, "runtime-"));
+          destination = allocated;
+          runtimeDirectories.add(allocated);
+        }
+        await assertMuonNodeProjectStagingIsSafe(nodeProjects, destination);
+        const prepared = await runMuonPrepare({
+          muonPath,
+          cefPath,
+          stageDir: destination,
+          target,
+          cacheDir: environment.MUON_CACHE_DIR,
+          nodeRuntimeRequirement: requirement,
+          force: false,
+          quiet: false,
+          prepareExecutablePath: undefined,
+          environment,
+          cwd: server.config.root,
+        });
+        if (prepared.stagePath === undefined)
+          throw new Error("muon-builder did not return a staged runtime path.");
+        runtime = prepared.stagePath;
+        nodeProjectPath = await stageMuonNodeProject(nodeProject, runtime);
+      }
+      if (nodeProjects.length)
+        await assertMuonNodeHostArtifacts(runtime, platform);
+      return {
+        runtime,
+        services,
+        nodeProject,
+        nodeProjectPath,
+        key,
+        allocated,
+        onInput,
+      };
+    } catch (error) {
+      if (allocated) {
+        await rm(allocated, { recursive: true, force: true });
+        runtimeDirectories.delete(allocated);
+      }
+      throw error;
+    }
+  };
+
+  const retireRuntimes = async (): Promise<void> => {
+    for (const directory of runtimeDirectories)
+      if (directory !== activeRuntime && directory !== uiRuntime) {
+        await rm(directory, { recursive: true, force: true });
+        runtimeDirectories.delete(directory);
+      }
+  };
+
+  const processUpdates = async (): Promise<void> => {
+    while (!closing && changedPaths.size) {
+      const changed = [...changedPaths];
+      changedPaths.clear();
+      const inputs = collectInputs();
+      let candidate: Awaited<ReturnType<typeof prepareServices>> | undefined;
+      try {
+        const project = await resolveProjectConfig(server);
+        const settings = serviceSettings(project);
+        if (
+          changed.every((path) => configPaths.includes(path)) &&
+          settings === activeSettings
+        )
+          continue;
+        candidate = await prepareServices(project, inputs);
+        if (closing) return;
+        const previousEndpoint = serviceSession!.config.serviceHost.endpoint;
+        const previousRuntime = activeRuntime;
+        await serviceSession!.update(
+          candidate.runtime,
+          candidate.services,
+          candidate.onInput,
+        );
+        if (closing) return;
+        activeRuntime = candidate.runtime;
+        activeRequirement = candidate.key;
+        activeSettings = settings;
+        activeNodeProject = candidate.nodeProject;
+        activeNodeProjectPath = candidate.nodeProjectPath;
+        activeInputs = inputs;
+        await serviceWatcher?.replace([...inputs.values()]);
+        if (closing) return;
+        // Adding the first host or changing Node runtimes also changes the CEF
+        // process configuration. Recycle that process after services are ready.
+        if (
+          currentChild &&
+          (previousEndpoint !== serviceSession!.config.serviceHost.endpoint ||
+            previousRuntime !== activeRuntime)
+        ) {
+          restartRequested = true;
+          currentChild.kill();
+        } else server.ws.send({ type: "full-reload", path: "*" });
+        server.config.logger.info("muon services updated");
+        await retireRuntimes();
+      } catch (error) {
+        if (candidate?.allocated && candidate.runtime !== activeRuntime) {
+          await rm(candidate.allocated, { recursive: true, force: true });
+          runtimeDirectories.delete(candidate.allocated);
+        }
+        if (!closing) {
+          // Keep both the current inputs and newly discovered failing inputs.
+          // Creating or repairing a dependency must be enough to retry.
+          activeInputs = new Map([...activeInputs, ...inputs]);
+          await serviceWatcher?.replace([...activeInputs.values()]);
+          const message = `muon service update failed: ${getErrorMessage(error)}`;
+          server.config.logger.warn(message);
+          server.ws.send({ type: "error", err: { message, stack: "" } });
+        }
+      }
+    }
+  };
+
+  const scheduleUpdate = (path: string): void => {
+    if (closing) return;
+    changedPaths.add(path);
+    if (updatePromise) return;
+    clearTimeout(updateTimer);
+    updateTimer = setTimeout(async () => {
+      updateTimer = undefined;
+      updatePromise = processUpdates();
+      try {
+        await updatePromise;
+      } catch (error) {
+        if (!closing)
+          server.config.logger.warn(
+            `muon service update failed: ${getErrorMessage(error)}`,
+          );
+      } finally {
+        updatePromise = undefined;
+      }
+    }, 75);
+  };
 
   const setCurrentChild = (child: ChildProcess | undefined): void => {
     currentChild = child;
@@ -561,41 +780,40 @@ export const startMuonViteBrowserBridge = async ({
     ) {
       try {
         const projectConfig = await resolveProjectConfig(server);
-        const nodeProject = await resolveMuonNodeProject(
-          projectConfig.config,
-          projectConfig.path === undefined
-            ? server.config.root
-            : dirname(projectConfig.path),
-        );
-        await assertMuonNodeProjectStagingIsSafe(nodeProject, stagePath);
         const runtimePluginConfig = await refreshRuntimePluginConfig();
-        const preparedRuntime = await runMuonPrepare({
-          muonPath,
-          cefPath,
-          stageDir: stagePath,
-          target,
-          cacheDir: environment.MUON_CACHE_DIR,
-          nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(
-            nodeProject,
-            true,
-          ),
-          force: false,
-          quiet: false,
-          prepareExecutablePath: undefined,
-          environment,
-          cwd: server.config.root,
-        });
-        if (preparedRuntime.stagePath === undefined) {
-          throw new Error("muon-builder did not return a staged runtime path.");
-        }
-        const nodeProjectPath = await stageMuonNodeProject(
-          nodeProject,
-          preparedRuntime.stagePath,
-        );
-        if (nodeProjectPath !== undefined) {
-          await assertMuonNodeHostArtifacts(
-            preparedRuntime.stagePath,
-            platform,
+        if (serviceSession === undefined) {
+          const inputs = collectInputs();
+          const candidate = await prepareServices(projectConfig, inputs);
+          serviceSession = await startMuonDevelopmentServices(
+            server.config.root,
+            target,
+            candidate.runtime,
+            candidate.services,
+            environment,
+            cancellation.signal,
+            candidate.onInput,
+          );
+          activeRuntime = candidate.runtime;
+          activeRequirement = candidate.key;
+          activeSettings = serviceSettings(projectConfig);
+          activeNodeProject = candidate.nodeProject;
+          activeNodeProjectPath = candidate.nodeProjectPath;
+          activeInputs = inputs;
+          if (!closing && server.config.server.watch !== null)
+            serviceWatcher = await createMuonDevelopmentServiceWatcher(
+              [...inputs.values()],
+              scheduleUpdate,
+              (error) =>
+                server.config.logger.warn(
+                  `muon service watch failed: ${getErrorMessage(error)}`,
+                ),
+            );
+        } else {
+          // A UI recycle can copy its page-owned Node project after that UI has
+          // exited. The service runtime and its snapshots remain immutable.
+          activeNodeProjectPath = await stageMuonNodeProject(
+            activeNodeProject,
+            activeRuntime!,
           );
         }
         const configWritten = writeMuonOverrideConfig(
@@ -603,15 +821,14 @@ export const startMuonViteBrowserBridge = async ({
           paths.overrideConfigPath,
           pluginOptions,
           runtimePluginConfig,
-          nodeProjectPath,
+          activeNodeProjectPath,
+          serviceSession.config,
         );
         if (!configWritten || closing) {
           return;
         }
-        const executablePath = getMuonExecutablePath(
-          preparedRuntime.stagePath,
-          platform,
-        );
+        const executablePath = getMuonExecutablePath(activeRuntime!, platform);
+        uiRuntime = activeRuntime;
         result = await waitForMuonProcess(
           executablePath,
           createMuonConfigArguments(
@@ -621,6 +838,17 @@ export const startMuonViteBrowserBridge = async ({
           environment,
           setCurrentChild,
         );
+        uiRuntime = undefined;
+        await retireRuntimes();
+        if (restartRequested) {
+          restartRequested = false;
+          result = {
+            ...result,
+            code: muonRecycleExitCode,
+            signal: null,
+            error: undefined,
+          };
+        }
         if (
           !closing &&
           (result.error !== undefined ||
@@ -634,6 +862,9 @@ export const startMuonViteBrowserBridge = async ({
               process.exitCode = 1;
             }
           }
+          await serviceSession.stop();
+        } else if (!closing && result.code !== muonRecycleExitCode) {
+          await serviceSession.waitForExit();
         }
       } catch (error) {
         if (!closing) {
@@ -645,6 +876,13 @@ export const startMuonViteBrowserBridge = async ({
               process.exitCode = 1;
             }
           }
+        }
+        try {
+          await serviceSession?.stop();
+        } catch (cleanupError) {
+          server.config.logger.warn(
+            `muon service cleanup failed: ${getErrorMessage(cleanupError)}`,
+          );
         }
         return;
       }
@@ -658,9 +896,23 @@ export const startMuonViteBrowserBridge = async ({
     }
     cleanupPromise = (async () => {
       closing = true;
+      clearTimeout(updateTimer);
+      cancellation.abort();
       currentChild?.kill();
+      await serviceWatcher?.close();
+      await updatePromise;
       await supervisorPromise;
-      await rm(paths.temporaryDirectory, { recursive: true, force: true });
+      // The initial scan can finish after the first close above observed no
+      // watcher. Await supervisor startup before reclaiming that late monitor.
+      await serviceWatcher?.close();
+      try {
+        await serviceSession?.stop();
+      } finally {
+        for (const directory of runtimeDirectories)
+          await rm(directory, { recursive: true, force: true });
+        runtimeDirectories.clear();
+        await rm(paths.temporaryDirectory, { recursive: true, force: true });
+      }
     })();
     return cleanupPromise;
   };

@@ -32,7 +32,10 @@ export {
   getDefaultMuonBuildTarget,
   normalizeMuonBuildTarget,
 } from "./build-config.js";
-export { resolveMuonNodeProjectForBuildConfig } from "../cef/build.js";
+export {
+  resolveMuonNodeProjectForBuildConfig,
+  resolveMuonNodeServiceProjectsForBuildConfig,
+} from "../cef/build.ts";
 
 /**
  * Builds the explicitly selected desktop and/or Android applications.

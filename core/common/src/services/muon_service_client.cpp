@@ -241,3 +241,4 @@ cardio::promise<std::string> MuonServiceClient::Call(std::string operation, std:
 }
 
 cardio::promise<void> MuonServiceClient::Close() { return ::Close(impl_); }
+bool MuonServiceClient::IsClosed() const { return impl_->closed; }

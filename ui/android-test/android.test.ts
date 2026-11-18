@@ -75,12 +75,12 @@ describe("public Android builds", () => {
       "muon.services.rpc",
     ]);
   });
-  it("validates service declarations before invoking the APK builder", async () => {
+  it("rejects Node.js services before invoking the APK builder", async () => {
     const root = await project({
       services: { worker: { runtime: "node", entry: "worker.ts" } },
     });
     await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
-      /services.*runtime/,
+      /services\.worker: node services are not supported for android-arm64-v8a/,
     );
     expect(buildAndroid).not.toHaveBeenCalled();
   });

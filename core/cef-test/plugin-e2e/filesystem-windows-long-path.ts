@@ -51,6 +51,13 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
     try {
       const result = await process.waitForExit({ timeoutMs: 30000 });
       expect(result.root.exitCode, await process.stderrText()).toBe(0);
+    } catch (error) {
+      const [snapshot] = await Promise.allSettled([process.snapshot()]);
+      console.error(
+        "Windows filesystem process at failure:",
+        JSON.stringify(snapshot, null, 2),
+      );
+      throw error;
     } finally {
       await process.releaseAsync();
     }
@@ -556,7 +563,14 @@ describeMuonPluginBridge("Windows long path filesystem API", () => {
       catch (error) { return String(error); }
     `);
     expect(error).toContain("readdir failed");
-    expect(error).toContain(join(directory, "data"));
+    // The temporary root can exceed the prefix retained in the diagnostic.
+    const shortenedPath =
+      /^Error: readdir failed for (.+)\.\.\.(.+): Windows filesystem error 3$/u.exec(
+        error,
+      );
+    expect(shortenedPath, error).not.toBeNull();
+    expect(missing.startsWith(shortenedPath![1]!)).toBe(true);
+    expect(missing.endsWith(shortenedPath![2]!)).toBe(true);
     expect(error).toContain("missing-不存在😀");
     expect(error).toContain("...");
     expect(error).toContain("Windows filesystem error 3");

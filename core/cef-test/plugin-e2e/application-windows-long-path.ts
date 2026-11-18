@@ -223,6 +223,13 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
         await server.close();
       }
     } catch (error) {
+      if (process !== undefined) {
+        const [snapshot] = await Promise.allSettled([process.snapshot()]);
+        console.error(
+          "Windows application process at failure:",
+          JSON.stringify(snapshot, null, 2),
+        );
+      }
       throw new Error(
         `${String(error)}\n${process === undefined ? "" : await process.stderrText()}`,
       );

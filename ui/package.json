@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "adm-zip": ">=0.5.0",
+    "chokidar": "^4.0.3",
     "commander": ">=14.0.0",
     "funcity": "^1.5.0",
     "json5": ">=2.2.0",
@@ -64,7 +65,7 @@
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
     "@types/semver": ">=7.7.0",
-    "agent-rover": "^0.10.0",
+    "agent-rover": "^0.11.0",
     "async-primitives": ">=1.7.0",
     "muon-plugin-sdk": "0.0.1",
     "prettier-max": ">=1.16.0",

@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { exerciseConsumerNetwork } from "./service-consumer-network.ts";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFile, readdir, writeFile } from "node:fs/promises";
@@ -25,6 +26,7 @@ import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.ts";
  * @param root - Local diagnostic directory retained by the enclosing test.
  * @param target - Consumer target; development runs on Linux or Windows amd64.
  * @param port - CDP port reserved by the consumer fixture.
+ * @param servicePorts - Loopback ports in native, QuickJS, Node.js order.
  * @returns Completion after both development commands and their children exit.
  */
 export const runServiceConsumerDevelopment = async (
@@ -32,6 +34,7 @@ export const runServiceConsumerDevelopment = async (
   root: string,
   target: string,
   port: number,
+  servicePorts: readonly number[],
 ): Promise<void> => {
   if (target === "windows-i686") return;
   const windows = target === "windows-amd64";
@@ -139,6 +142,9 @@ export const runServiceConsumerDevelopment = async (
       let client: Client | undefined;
       let closeMcp: (() => Promise<void>) | undefined;
       let remote: RemoteManagedProcess | undefined;
+      let remoteSocket: RemoteManagedProcess | undefined;
+      let localSocket: ReturnType<typeof spawn> | undefined;
+      let socketExit: Promise<unknown[]> | undefined;
       let local: ReturnType<typeof spawn> | undefined;
       let exited: Promise<unknown[]> | undefined;
       let diagnostics = "";
@@ -243,7 +249,59 @@ export const runServiceConsumerDevelopment = async (
           native: "development",
           script: "development",
         });
+        expect(await evaluate(exerciseConsumerNetwork(servicePorts))).toBe(
+          true,
+        );
         if (command === "vite") {
+          await evaluate(
+            "globalThis.heldListener=await api.acquire('quickListener');return heldListener.generation;",
+          );
+          // A process outside the UI keeps its socket open across the page reload.
+          const socketProgram = `
+            import {once} from 'node:events';
+            const socket=new WebSocket('ws://127.0.0.1:${servicePorts[1]}/echo',
+              ['muon.auth','muon.bearer.'+Buffer.from('local-service').toString('base64url')]);
+            await once(socket,'open');
+            const closed=once(socket,'close');const echo=once(socket,'message');
+            socket.send('before update');
+            if((await echo)[0].data!=='before update')throw new Error('Unexpected WebSocket reply');
+            console.log('socket ready');
+            await closed;
+          `;
+          let socketOutput = "";
+          if (agent)
+            remoteSocket = await agent.processes.launchManaged({
+              path: node,
+              arguments: ["--input-type=module", "-e", socketProgram],
+              captureStdout: true,
+              captureStderr: true,
+              createNoWindow: true,
+            });
+          else {
+            localSocket = spawn(
+              node,
+              ["--input-type=module", "-e", socketProgram],
+              { stdio: ["ignore", "pipe", "pipe"] },
+            );
+            socketExit = once(localSocket, "exit");
+            localSocket.stdout!.on("data", (chunk) => {
+              socketOutput += String(chunk);
+            });
+            localSocket.stderr!.on("data", (chunk) => {
+              socketOutput += String(chunk);
+            });
+          }
+          await vi.waitUntil(
+            async () => {
+              if (remoteSocket && !(await remoteSocket.rootSnapshot()).running)
+                throw new Error(await remoteSocket.stderrText());
+              if (localSocket?.exitCode != null) throw new Error(socketOutput);
+              return (
+                remoteSocket ? await remoteSocket.stdoutText() : socketOutput
+              ).includes("socket ready");
+            },
+            { timeout: 15000, interval: 100 },
+          );
           if (agent)
             await agent.files.writeFile(
               win32.join(directory, "worker/node-greeting.txt"),
@@ -266,6 +324,21 @@ export const runServiceConsumerDevelopment = async (
               }
             },
             { timeout: 30000, interval: 100 },
+          );
+          if (remoteSocket) {
+            const state = await remoteSocket.waitForExit({ timeoutMs: 15000 });
+            expect(state.root.exitCode, await remoteSocket.stderrText()).toBe(
+              0,
+            );
+          } else {
+            await vi.waitUntil(() => localSocket!.exitCode !== null, {
+              timeout: 15000,
+            });
+            await socketExit;
+            expect(localSocket!.exitCode, socketOutput).toBe(0);
+          }
+          expect(await evaluate(exerciseConsumerNetwork(servicePorts))).toBe(
+            true,
           );
           const identity = await evaluate(
             `const handle=await api.acquire('node');try{return await handle.call('identity',[])}finally{await handle.release()}`,
@@ -299,6 +372,17 @@ export const runServiceConsumerDevelopment = async (
           })(),
           (async () => {
             await closeMcp?.();
+          })(),
+          (async () => {
+            await remoteSocket?.releaseAsync();
+            if (
+              localSocket &&
+              localSocket.exitCode === null &&
+              localSocket.signalCode === null
+            ) {
+              localSocket.kill();
+              await socketExit;
+            }
           })(),
           (async () => {
             if (remote) {

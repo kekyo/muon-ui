@@ -336,7 +336,8 @@ const launchHost = (
       );
   };
   const stop = async (updating = false) => {
-    if (updating && !stopping && !host.stdin!.writableEnded) host.stdin!.write("u");
+    if (updating && !stopping && !host.stdin!.writableEnded)
+      host.stdin!.write("u");
     beginStop();
     await checkExit();
   };

@@ -46,8 +46,7 @@ The muon package includes the following:
 - TypeScript type definitions for muon built-in plugins
 - Platform-specific muon binary assets
 
-The CEF binary itself and the Node.js runtime used by the optional Node.js integration are not included in the NPM package.
-CEF is downloaded from the official CDN when it becomes necessary, while the Node.js runtime is downloaded from the official Node.js distribution site only when a Node.js project is configured through `node.project`, regardless of plugin mode.
+Muon downloads CEF from the official CDN when needed. For desktop apps that define Node.js services, it also downloads the Node.js runtime from the official distribution site.
 
 ## Configure the muon Vite plugin
 
@@ -149,8 +148,7 @@ npm run build
 > Note: This is an alias for `vite build` defined in the `scripts` section of `package.json`.
 
 The files output to Vite's `build.outDir` are collected into `assets.zip`.
-When a Node.js project is configured, that project, the bridge to muon, and the required Node.js version constraint are also included in the distribution directory.
-The Node.js runtime itself is not included at build time. Only when the runtime requirement is required for execution does the muon launcher prepare it on first launch at the distribution destination.
+When the app defines Node.js services, the distribution includes their code and runtime dependencies. On first launch, the muon launcher prepares a Node.js version that meets the services’ requirements.
 By default, muon builds all supported targets and outputs them under the `dist-muon/` directory:
 
 ```text
@@ -287,9 +285,7 @@ The key difference is the entry point for developer-authored application code an
 - In muon, the muon-core process initializes CEF.
   The CEF browser process manages the application lifecycle, windows, and muon plugin runtime, while the primary entry point for developer-authored application code is the page loaded into a CEF renderer process.
   muon plugin functions are exposed to the page as asynchronous APIs over CEF IPC.
-- Node.js integration is enabled only when a Node.js project is configured through `node.project`.
-  Each `createNode()` call starts one separate Node.js sidecar process, and calls through that instance's `importModule()` are relayed to it. Multiple instances are isolated from one another.
-  The sidecar neither creates nor owns the UI; it is an option for offloading work or using functionality from the Node.js ecosystem.
+- Desktop apps can run [Node.js services](./services.md) in separate processes. The page calls the methods each service exposes.
 
 Electron:
 
@@ -322,10 +318,9 @@ Internally, configuration, policies, the plugin runtime, and other components ar
 This page-centered model lets developers who know web development start building muon apps directly.
 
 This does not mean that all processing must be implemented in JavaScript within the page.
-For example, while domain logic and data repository implementations are included in the page’s bundle, you can decouple responsibilities to remote Web APIs, [Node.js sidecars](./nodejs-sidecar.md), external applications, and [Muon plugin implementations](./muon-plugin-develop.md) as needed.
+For example, a page can delegate data access or storage to remote web APIs, [services](./services.md), external programs, or [muon plugins](./muon-plugin-develop.md).
 
 - Consider whether you should implement these as cloud services or Web APIs running on hosted virtual machines.
-- By using a Node.js sidecar, you can configure Node.js code unrelated to the UI as a standard Node.js project running in a separate process.
-  You can also use more feature-rich NPM libraries supported by Node.js.
+- A desktop Node.js service can use Node.js built-in modules and npm packages.
 - Using the [`muon.executor` plugin](./muon-built-in-plugin-reference.md), you can call external programs to perform processing.
 - If you want to tightly integrate with OS-native features, you can also implement a Muon plugin.

@@ -10,7 +10,7 @@ Windows版の`muon.fs`は、従来の`MAX_PATH`（終端文字を含め260文字
 | --- | --- |
 | CEFを実行するruntime、プロファイル、一時ディレクトリ | 短い通常表記のパスを使用してください。内部ファイル名を追加する余裕も必要です。長いデータパスへアクセスできることは、CEF自体を同じ場所から起動できる保証にはなりません。 |
 | `browser.profilePath` | 解決後のパスが260以上、または`\\?\`で始まる場合は起動を拒否します。保存先を別の場所へ自動変更することはありません。 |
-| launcherのruntime、`muon.executor`の`cwd`、`node.project` | Windowsの作業ディレクトリとして使うパスは260未満が必要です。Node.jsで深い階層のモジュールを使う場合は、短いプロジェクトルートから相対パスで読み込んでください。 |
+| launcherのruntime、`muon.executor`の`cwd`、Node.jsサービスのプロジェクト | Windowsの作業ディレクトリとして使うパスは260 UTF-16コード単位未満で指定します。サービスで深い階層のモジュールを使う場合は、短いプロジェクトルートから相対パスで読み込みます。 |
 | NSISとショートカット | インストール先は同梱ファイル名を含めた長さで制限されます。[インストール先の説明](./package-install-location-advanced-topics.md)を参照してください。 |
 | 自動起動 | 引用符を含むRunキーの登録コマンド全体が260以内である必要があります。 |
 
@@ -37,7 +37,7 @@ muonプラグインのvirtual moduleインポートのフィルタ機能は、�
 
 ## Android WebViewバックエンド
 
-公開CLIによるAPKの作成方法と検証済み環境は[Androidアプリのビルド・配布](./android.md)を参照してください。公開アプリでは[QuickJSサービス](services.md)を利用できます。FCMは未提供です。以下の`muon.node.createNode()`によるQuickJS機能は試作host専用で、公開サービスAPIとは異なります。
+公開CLIによるAPKの作成方法と検証済み環境は[Androidアプリのビルド・配布](./android.md)を参照してください。Androidアプリには[QuickJSサービス](services.md)を組み込めます。FCMは未対応です。
 
 Android WebViewバックエンドは、WebViewの通常ネットワーク通信をMuonで包括的にinterceptしません。CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`は共通の`muon.json`へ残せますが、AndroidではWebViewの通信を許可または拒否する条件として適用されず、明示設定時に警告されます。
 
@@ -49,9 +49,7 @@ validateモードの`sources`・`packages`はViteによる直接importの検査�
 
 公開APKのアセットoriginは`https://main.asset.muon.invalid`に固定しています。このhostはMuonがローカルで処理し、存在しないアセットも外部ネットワークへ転送しません。複数アセットhostや独自hostへの変更は公開ビルドでは未対応です。過去の構成案と検証の経緯は[ネットワークフィルタ検証記録](../../filter-limitation.md)を参照してください。
 
-現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は未対応です。`muon.launcher`、`muon.executor`、desktop用Node.js sidecarも公開しません。外部ネイティブプラグインはAPKへ同梱したものをsimple・validateの両モードで使えますが、インストール後にAPK外から追加する機能はありません。[外部プラグインの設定](./android.md#事前ビルド済みネイティブプラグイン)
-
-Android試作hostの`muon.node.createNode()`は、別process Serviceの組み込みQuickJSを生成し、限定したNode.js風moduleを提供します。Node.js、npm package、CommonJS、標準library全体との互換性はありません。利用可能なplugin関数の一覧は[Android API対応方針](../../android-api-compatibility.md)、QuickJSのmodule、ネットワーク境界、資源上限は[Android試作host](../../core/android-poc/README.md)を参照してください。
+現在のAndroid版`muon.fs`は、Android OSが許可する実際のfilesystem pathだけを扱います。`content://` URIの直接指定と`muon.fs.dialogs`は未対応です。`muon.launcher`と`muon.executor`も公開しません。外部ネイティブプラグインはAPKへ同梱したものをsimple・validateの両モードで使えますが、インストール後にAPK外から追加する機能はありません。[外部プラグインの設定](./android.md#事前ビルド済みネイティブプラグイン)
 
 ## LinuxにおけるCEF sandboxの有効化制限
 

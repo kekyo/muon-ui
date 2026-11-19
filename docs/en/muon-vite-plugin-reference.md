@@ -44,9 +44,7 @@ export default defineConfig({
 - When `muonPath`, `cefPath`, or `stagePath` is a relative path, it is resolved relative to the Vite project root.
 - When `muonPath` is omitted, the bundled `runtime/<public-target>` from the installed muon package is used.
 - When `cefPath` is omitted, muon-builder downloads and caches the tested CEF artifact based on the runtime information in `muonPath`.
-- When `node.project` is configured, `vite dev` passes the project's normalized Node runtime requirement to muon-builder regardless of plugin mode.
-  muon-builder prepares CEF and the required official Node.js runtime, placing Node.js at `runtimes/node/bin/node` under the stage directory (`runtimes/node/bin/node.exe` on Windows). When both downloads are needed, they run concurrently.
-  There is no Vite plugin option for a Node.js executable path. The Node plugin starts this staged executable by its absolute path and does not fall back to an environment variable or `PATH`.
+- If a desktop app defines Node.js services, `vite dev` prepares the required Node.js runtime along with CEF.
 - When `stagePath` is omitted, `.muon/<public-target>` under the Vite project root is used.
 - When `enableDebugger` is enabled, CDP is enabled through development-launch override settings, muon DevTools can be opened with `F12`, and muon can be recycle-restarted with `Ctrl+F12`.
   To enable muon DevTools in distribution builds, configure `cdp` and `browser.keybind` in `muon.json` instead of the Vite plugin argument.
@@ -117,7 +115,7 @@ Specify Vite options such as the port before `--`. Arguments after `--` are not 
 vite dev --port 3000 -- --no-muon
 ```
 
-`--no-muon` disables only development runtime preparation and the muon launch for `vite dev`, and takes precedence over `muon({ open: true })`. It therefore does not download or install a Node.js runtime or start the sidecar. Other muon Vite plugin behavior, including virtual modules, watch settings, and muon configuration loading, remains enabled, and the muon output entries in `.gitignore` are still updated. It does not affect `vite build`.
+`--no-muon` disables only development runtime preparation and the muon launch for `vite dev`, and takes precedence over `muon({ open: true })`. Other muon Vite plugin behavior, including virtual modules, watch settings, and muon configuration loading, remains enabled, and the muon output entries in `.gitignore` are still updated. It does not affect `vite build`.
 
 When the `package.json` script is `"dev": "vite dev"`, pass the end-of-options separator through npm as follows.
 
@@ -145,8 +143,6 @@ npm run dev:vite -- --no-muon
 When omitted, the `plugin` setting from `muon.json` is used as-is, and an omitted `plugin.mode` is treated as `"validate"`.
 Validate mode does not expose `window.muon`; applications import permitted virtual modules. Importers are checked at build time, while the native host checks capabilities and allowed functions. These checks do not prevent other code in the same page from using an obtained capability.
 Android also supports validate mode. External plugins require ABI-specific libraries and metadata; page conditions and available functions have Android-specific limits. See [Android configuration](./android.md#import-with-validate-mode).
-On desktop, configuring `node.project` prepares the Node.js runtime in validate mode and starts a sidecar when `createNode()` is called through `muon:node`. This module requires no `pluginAccess.plugins[].imports` entry or allow setting. Public Android APKs do not provide Node.js. QuickJS is available through [services](services.md).
-For the development server, the Node project and `engines.node` range are preflighted during Vite config resolution, and a failure may be reported as a warning. During a build, validation failures are errors.
 
 ```ts
 muon({
@@ -193,10 +189,7 @@ In this state, `muon build` and `muon pack` also fail, and distribution builds a
 When `build` is an object, additional options are passed to the muon distribution build after `vite build`.
 When `build` is `true` or omitted, it is treated as equivalent to `{}`.
 
-For an application with `node.project`, `muon build` and `muon pack` embed the target platform's `node.so` or `node.dll`, `node-bridge.mjs`, the Node project, and the normalized Node runtime requirement into the output.
-They do not include a Node.js executable, distribution archive, or download cache.
-The distribution `muon-launcher` prepares CEF and the Node.js runtime required by `node.project` at startup.
-For a portable distribution, preparation occurs directly in the extracted directory, and runtime Node.js is always started from `runtimes/node/bin/node` (`.exe` on Windows). There is no hot replacement of a running Node.js runtime and no fallback to an environment variable or `PATH`.
+When an app defines Node.js services, `muon build` and `muon pack` include the service code and its runtime dependencies. The distribution launcher prepares a compatible Node.js version at startup. See [service configuration](./services.md).
 
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |

@@ -85,7 +85,7 @@ I/O、待受、接続はサービスIDと実行世代に属する。起動時に
 
 サーバーのHTTP・WebSocket処理と待受をCEFへの依存から分け、ページ用とサービス用の両方から使う。サービスのハンドラーにはHTTP要求やWebSocketのメッセージをSDKの型で渡す。ページが作ったサーバーはページを閉じた時点で終了し、常駐サービスが作ったサーバーはそのサービスの停止時に終了する。Android版でもサービスホストから待ち受けられるようにする。通信に必要な `INTERNET` 権限とAndroidの平文通信・証明書の設定を適用する。[ページとサービスが使うサーバー実装](../../../core/common/src/server/muon_server_service.cpp)・[Androidの通信権限](https://developer.android.com/develop/connectivity/network-ops/connecting)・[Androidのネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
 
-Androidの試作版にはQuickJS用のファイル、HTTP、ソケットの実装例がある。入出力や試験例を参考にし、同期ファイル操作をJSの `async` 関数で包む実装は製品の非同期I/Oへ置き換える。独自プロトコル用のTCP接続は将来の拡張候補とし、plan19のネットワークI/OはHTTP・HTTPSクライアントとローカルのHTTP・WebSocketサーバーまでとする。[試作版の対応範囲](../../../core/android-poc/README.md)・[試作版のJS](../../../core/android-poc/android/app/src/main/assets/muon-javascript/runtime.js)・[試作版のファイル処理](../../../core/android-poc/android/app/src/main/cpp/muon_javascript_runtime_jni.cpp)
+サービスのファイル、HTTP、ソケットの操作には非同期I/Oを使う。独自プロトコルとの通信にはTCP・UDPを利用する。
 
 ## 実装段階と完了条件
 

@@ -2,7 +2,7 @@
 
 The muon-ui npm package can build Android APKs containing your web assets. Use Vite and the public CLI without editing Gradle or JNI sources. Installed applications do not need a development server.
 
-This release supports debug APKs and signed release APKs. [Background services](services.md) can use C/C++ or JS/TS hosted by QuickJS. FCM, the Node.js sidecar, and public CLI generation of AABs are not available.
+The public CLI builds debug APKs and signed release APKs. [Background services](services.md) can use C/C++ or JS/TS hosted by QuickJS. FCM and AAB generation through the public CLI are unsupported.
 
 ## Requirements
 

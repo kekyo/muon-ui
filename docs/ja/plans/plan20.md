@@ -51,7 +51,7 @@ apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
 
 ### 段階1　現在のビルドで確認できる権限をガイドにまとめる
 
-- [ ] 日本語版と英語版に権限の節を追加する。サービスなしで明示した `INTERNET`、サービスの通信設定による自動追加、通知だけを有効にした場合、サービスの種類に応じた宣言を、ガイドの手順で生成したAPKと照合する。この段階では現在利用できる機能を記載する。
+- [x] 日本語版と英語版に権限の節を追加した。ブート受信の実装前に3種類のdebug APKを生成し、`apkanalyzer manifest permissions` で照合した。WebView用に明示した場合は `INTERNET`、通知だけを有効にした場合は `POST_NOTIFICATIONS` を確認した。HTTPS接続先を指定した `dataSync` サービスには、この2権限に加えて `FOREGROUND_SERVICE` と `FOREGROUND_SERVICE_DATA_SYNC` が含まれた。
 
 ### 段階2　配布APKのサービスを画面なしで起動する
 

@@ -60,19 +60,49 @@ it('gives the author the HTTP status, headers and owned binary or text, includin
 });
 
 it('identifies portable I/O errors by code and diagnostic', async () => {
-  const {isServiceIoError} = await import('../src/services.ts');
-  expect(isServiceIoError(Object.assign(new Error('certificate'), {code:'tls-error'}))).toBe(true);
-  expect(isServiceIoError({code:'tls-error'})).toBe(false);
-  expect(isServiceIoError({code:'other',message:'author error'})).toBe(false);
+  const { isServiceIoError } = await import('../src/services.ts');
+  expect(
+    isServiceIoError(
+      Object.assign(new Error('certificate'), { code: 'tls-error' })
+    )
+  ).toBe(true);
+  expect(isServiceIoError({ code: 'tls-error' })).toBe(false);
+  expect(isServiceIoError({ code: 'other', message: 'author error' })).toBe(
+    false
+  );
 });
 
 it('rejects an oversized outbound body before crossing the service bridge', async () => {
-  const runtime = createServiceRuntime(defineService({
-    interface:{schemaVersion:1,methods:{},events:{}},start:async context=>{
-      await expect(context.http.request({url:'https://example.test',method:'POST',body:new Uint8Array(1024*1024+1)})).rejects.toMatchObject({code:'size-limit'});
-      return {methods:{},stop:()=>{}};
-    },
-  }),{emit:()=>{},callback:async()=>{throw new Error('Unexpected callback');},io:async()=>{throw new Error('Oversized data crossed the bridge');}});
-  await runtime.start({id:'http',generation:'1',config:{},dataDirectory:'/private',startReason:'acquire'});
-  await runtime.stop({reason:'reference-released'});
+  const runtime = createServiceRuntime(
+    defineService({
+      interface: { schemaVersion: 1, methods: {}, events: {} },
+      start: async (context) => {
+        await expect(
+          context.http.request({
+            url: 'https://example.test',
+            method: 'POST',
+            body: new Uint8Array(1024 * 1024 + 1),
+          })
+        ).rejects.toMatchObject({ code: 'size-limit' });
+        return { methods: {}, stop: () => {} };
+      },
+    }),
+    {
+      emit: () => {},
+      callback: async () => {
+        throw new Error('Unexpected callback');
+      },
+      io: async () => {
+        throw new Error('Oversized data crossed the bridge');
+      },
+    }
+  );
+  await runtime.start({
+    id: 'http',
+    generation: '1',
+    config: {},
+    dataDirectory: '/private',
+    startReason: 'acquire',
+  });
+  await runtime.stop({ reason: 'reference-released' });
 });

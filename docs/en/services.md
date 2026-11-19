@@ -10,6 +10,8 @@ Muon services run work that can continue after a window closes. The CEF backend 
 
 Declare named services in `muon.json`. An application can have several services, and pages acquire them by name before calling methods. Ending a service does not close an open UI.
 
+A generation lasts from service startup through shutdown. Enabling autostart keeps a resident reference after the last page releases its own reference.
+
 ## Your first TS service
 
 Add the SDK to an existing Muon application. Building QuickJS and Node.js services requires Vite 8 or later.
@@ -75,6 +77,92 @@ try {
 ```
 
 In `validate` mode, grant the importing source `muon.services.*` through the normal plugin policy and import `acquire` and other operations from `muon:services`. Service declarations and page access permissions are separate settings.
+
+## Developing a QuickJS service as an npm project
+
+Set `project` and `entry` in the application's `muon.json` to manage service dependencies independently. The builder resolves `project` relative to `muon.json` and `entry` relative to the project. An entry without a project is relative to `muon.json`.
+
+```json
+{
+  "services": {
+    "worker": {
+      "runtime": "quickjs",
+      "project": "./services/worker",
+      "entry": "src/service.ts"
+    }
+  }
+}
+```
+
+The SDK example includes its dependencies, lockfile, TypeScript configuration and Vitest tests. From the application directory, copy the example and run its checks. From the application root, the same definition works with `npx muon run`, `npx vite dev` and `npx muon build --target linux-amd64`.
+
+```sh
+mkdir -p services
+cp -R node_modules/muon-plugin-sdk/examples/services/quickjs-project services/worker
+cd services/worker
+npm install
+npm run typecheck
+npm test
+```
+
+Use `"strict": true`, `"lib": ["ES2022"]` and `"types": ["muon-plugin-sdk/service-globals"]` in `compilerOptions`. Import service types from `muon-plugin-sdk/services`. The builder resolves dependencies from the service project and bundles them into its JS. Choose dependencies that run in QuickJS. The build identifies imports that require Node builtins or native addons.
+
+## Observing startup and shutdown
+
+Each new generation calls `start(context)`. Its `context.startReason` tells the service what started the generation. A page reconnecting to a running service can call the same instance.
+
+| Start reason | Trigger |
+| --- | --- |
+| `acquire` | A page acquired a reference. |
+| `app-start` | The application started normally with autostart enabled for the service. |
+| `login-autostart` | The desktop's login registration started the application. |
+| `autostart-enabled` | The user enabled service autostart while the application was running. |
+| `development-update` | The development host applied a service update. |
+
+When stopping begins, the host cancels the generation's `context.signal` and outstanding calls' signals. A successfully started generation receives `stop(info)` once. The first accepted stop reason is available as `info.reason`. Pass `info.signal` when saving state in this handler. If the host knows the deadline, `info.remainingMs` gives the time remaining in milliseconds.
+
+| Stop reason | Trigger |
+| --- | --- |
+| `reference-released` | The last reference was released. |
+| `app-exit` | The application requested an explicit exit. |
+| `session-ending` | The desktop session is ending, or the Android host received a device shutdown notification. |
+| `development-update`, `development-exit` | A service update or development command exit. |
+| `execution-timeout` | The OS notified the service of its execution deadline. |
+| `host-stop` | The host received a general termination request. |
+
+On Windows and Linux the service keeps running when a session-end query is cancelled. Linux session notifications require a desktop portal that supports session monitoring. Android delivers notifications to a running service host. A process crash or power loss can prevent the host from calling `stop`. [Windows session notification](https://learn.microsoft.com/en-us/windows/win32/shutdown/wm-endsession) · [Linux session monitoring](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Inhibit.html) · [Android shutdown broadcast](https://developer.android.com/reference/android/content/Intent#ACTION_SHUTDOWN)
+
+## Service files, outgoing requests and local listeners
+
+Give each service its own `io` grants in `muon.json`. Page permissions apply separately. This example grants private storage, a packaged initial value, one outgoing HTTP origin and a loopback listener. An origin identifies a scheme, host and port.
+
+```json
+{
+  "services": {
+    "worker": {
+      "runtime": "quickjs",
+      "project": "./services/worker",
+      "entry": "src/service.ts",
+      "io": {
+        "fs": { "data": "read-write", "assets": { "initial": "assets/initial.bin" } },
+        "http": { "origins": ["https://api.example.org"] },
+        "server": { "listen": true }
+      }
+    }
+  }
+}
+```
+
+- Use `context.fs.readBytes` and `writeBytes` for `Uint8Array` data, or `readText` and `writeText` for UTF-8. Paths are relative to an area. The default area, `data`, is private to the service. A write replaces the destination atomically. Failure before replacement preserves its previous contents. The API also provides `mkdir`, `list` and `rename`. Each file is limited to 1 MiB.
+- Read the packaged initial value with `context.fs.readBytes('initial', { area: 'assets' })`. An asset key is its logical name and the value is its project-relative source. To grant another directory, add a named entry such as `{"path":"/absolute/path","access":"read"}` to `fs.directories`. Use `read-write` to allow writes. The API rejects paths and links outside the granted area.
+- `context.http.request({ url, method, headers, body, responseType, signal })` returns `status`, lowercase `headers` and `body`. The default body is binary. Select `responseType: 'text'` for UTF-8. Responses with a 4xx or 5xx status carry ordinary response data. Each redirect must target an allowed origin, with a maximum of five redirects. HTTPS uses the operating system's certificate trust and hostname checks. The request and response body limits are each 1 MiB. A generation can have eight requests in flight. `timeoutMs` covers the whole request including redirects. It defaults to 30000 and accepts values from 1 through 120000.
+- `context.server.listen({ name, port, fetch, websocket, allowedOrigins, bearerToken })` binds to `127.0.0.1` on ports 1025 through 65535. The `fetch` handler receives the request's `method`, `url`, `headers` and binary `body`, and returns the status, headers and optional text or binary body. Use `websocket.accept` to accept upgrades and `message` to receive text or bytes. The host validates Host and Origin, and checks credentials when you supply a Bearer token. The returned listener's `close()` closes its connections. A resident service can continue listening after its page closes. Stopping its generation releases the listener.
+
+For HTTP requests to a listener with a Bearer token, send an Authorization header containing `Bearer <token>`. A browser WebSocket client can offer the `muon.auth` subprotocol together with `muon.bearer.` followed by the Base64URL-encoded token. [WebSocket authentication example (Japanese)](../ja/local-server.md#ブラウザーからのwebsocket認証)
+
+Use `isServiceIoError(error)` to narrow a caught value. Its `code` identifies failures such as `permission-denied`, `tls-error`, `size-limit`, `timeout` or `cancelled`. Native code and Node standard libraries retain the OS permissions of their process. The Android builder adds the `INTERNET` permission when a service uses networking and puts permitted cleartext hosts in the network security configuration. [Android networking permission](https://developer.android.com/develop/connectivity/network-ops/connecting) · [Android network security configuration](https://developer.android.com/privacy-and-security/security-config)
+
+With C ABI v3, start the same operations through `muon_service_context.io->request`. For example, `fs.write` takes JSON area and path fields plus a binary payload. Each completion runs once on the service dispatcher. The returned buffers remain valid for the duration of the callback. C++20 services can include `muon_service_io_cpp.h` and await `muon::request_service_io` in a `cardio` coroutine to receive an owned result. The SDK's `examples/services` directory contains C and TS examples of shutdown persistence, outgoing HTTP requests and local listeners.
 
 ## References and autostart
 
@@ -241,7 +329,7 @@ Services do not inherit page permissions. Services sharing a plugin must agree o
 
 Each service has a separate JS environment. Alongside standard JavaScript, it provides `setTimeout`, `clearTimeout`, and `console`. Add `import type {} from 'muon-plugin-sdk/service-globals'` for optional host declarations.
 
-The host does not supply DOM, `window.muon`, Node builtins, `fetch`, or `setInterval`. Use explicitly granted native plugins for filesystem and network I/O. The builder produces a single JS bundle and rejects undeclared external modules and separate assets.
+The host does not supply DOM, `window.muon`, Node builtins, `fetch`, or `setInterval`. Use the service’s granted file and network APIs for I/O. The builder produces a single JS bundle and packages declared assets with the service.
 
 Current limits are 8 MiB per JS bundle, 64 MiB per JS heap, a 1 MiB stack, 2 seconds per JS execution turn, and 10 seconds each for startup and shutdown. Waiting for asynchronous I/O differs from CPU execution time. Runtime errors and exceeded limits are reported as service failures. Unresponsive native cleanup or a process crash can affect other services in the same process.
 

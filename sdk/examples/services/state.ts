@@ -1,6 +1,7 @@
 import {
   defineService,
   defineServiceInterface,
+  isServiceIoError,
 } from 'muon-plugin-sdk/services';
 
 /** Loads the packaged default on first use and saves the latest bytes on shutdown. */
@@ -18,7 +19,7 @@ export default defineService({
     try {
       state = await context.fs.readBytes('state.bin');
     } catch (error) {
-      if ((error as { code?: string }).code !== 'not-found') throw error;
+      if (!isServiceIoError(error) || error.code !== 'not-found') throw error;
       state = await context.fs.readBytes('initial', { area: 'assets' });
     }
     return {

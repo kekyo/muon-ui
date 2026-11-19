@@ -24,11 +24,12 @@ export const createHttpDriver = async (assets: string, binaries: string) => {
   server.on('request', async (req, res) => {
     if (req.url === '/held') { entered?.(res); return; }
     if (req.url === '/follow') { res.writeHead(303, {location: '/text'}); res.end(); return; }
+    if (req.url === '/directory/relative') { res.writeHead(303, {location: '.././text?next=/../'}); res.end(); return; }
     if (req.url === '/redirect') { res.writeHead(302, { location: origin.replace('127.0.0.1', 'localhost') + '/forbidden' }); res.end(); return; }
     if (req.url === '/forbidden') ++forbiddenVisits;
     if (req.url === '/loop') { res.writeHead(307, {location:'/loop'}); res.end(); return; }
     if (req.url === '/large') { req.resume(); res.end(Buffer.alloc(1024 * 1024 + 1)); return; }
-    if (req.url === '/text') { res.writeHead(418, { 'x-answer': 'yes' }); res.end('茶'); return; }
+    if (req.url === '/text' || req.url === '/text?next=/../') { res.writeHead(418, { 'x-answer': 'yes' }); res.end('茶'); return; }
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     res.writeHead(200, {'x-request': String(req.headers['x-request'])});
@@ -54,6 +55,8 @@ export const createHttpDriver = async (assets: string, binaries: string) => {
           const reply = JSON.parse(await client.call('describe',args) as string);
           assert.equal(reply.status,418); assert.equal(reply.headers['x-answer'],'yes'); assert.equal(reply.text,'茶');
           assert.equal(JSON.parse(await client.call('describe', [JSON.stringify({url:origin + '/follow',responseType:'text'}),new Uint8Array()]) as string).text,'茶');
+          const relative = JSON.parse(await client.call('describe', [JSON.stringify({url:origin + '/directory/relative',responseType:'text'}),new Uint8Array()]) as string);
+          assert.equal(relative.status,418);assert.equal(relative.text,'茶');
           for (const [path,code] of [['/redirect','permission-denied'],['/large','size-limit'],['/loop','redirect-limit']]) {
             await assert.rejects(call(path),{code});
           }

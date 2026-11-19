@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <charconv>
 #include <set>
+#include <string_view>
 
 void MuonServiceIoCancellation::Cancel(bool timeout) {
   std::function<void()> interrupt;
@@ -56,6 +57,32 @@ static auto Document(const std::string& json) {
   return doc;
 }
 
+// Resolve URI dot segments in the path only. Empty segments and the query retain their
+// meaning on the server (RFC 3986 section 5.2.4), including a trailing directory slash.
+static std::string NormalizeHttpTarget(std::string target) {
+  if (target.find("/.") == std::string::npos) return target;
+  const std::string_view original(target);
+  const auto path = original.substr(0, original.find('?'));
+  std::vector<std::string_view> segments;
+  for (size_t start = 1; start <= path.size();) {
+    const auto end = path.find('/', start);
+    const auto segment = path.substr(start, end - start);
+    if (segment == "." || segment == "..") {
+      if (segment == ".." && !segments.empty()) segments.pop_back();
+      if (end == std::string_view::npos) segments.emplace_back();
+    } else {
+      segments.push_back(segment);
+    }
+    if (end == std::string_view::npos) break;
+    start = end + 1;
+  }
+  std::string result;
+  result.reserve(target.size());
+  for (const auto segment : segments) { result += '/'; result += segment; }
+  result += original.substr(path.size());
+  return result;
+}
+
 MuonServiceHttpHop ParseMuonServiceHttpUrl(const std::string& url) {
   if (url.empty() || url.size() > 8192 || std::any_of(url.begin(), url.end(), [](unsigned char c) {
     return c <= 32 || c >= 127 || c == '\\';
@@ -89,6 +116,7 @@ MuonServiceHttpHop ParseMuonServiceHttpUrl(const std::string& url) {
   const auto hash = url.find('#', start);
   result.target = end == std::string::npos ? "/" : url.substr(end, hash - end);
   if (result.target.empty() || result.target.front() == '?') result.target.insert(0, "/");
+  result.target = NormalizeHttpTarget(std::move(result.target));
   return result;
 }
 

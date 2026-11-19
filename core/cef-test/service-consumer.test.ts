@@ -33,9 +33,23 @@ import {
   type WindowsTestProcess,
 } from "./plugin-e2e/windows-agent.ts";
 import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.ts";
+import { exerciseConsumerNetwork } from "./service-consumer-network.ts";
 import { runServiceConsumerDevelopment } from "./service-consumer-development.ts";
 
 const target = process.env.MUON_SERVICE_CONSUMER_TARGET ?? "linux-amd64";
+
+// Hold all three page references until the UI closes. Each runtime saves its own bytes.
+const savedServiceValues = (next: number[] | undefined) => `
+  globalThis.fileHandles = [];
+  const values = [];
+  for (const name of ['nativeState','quickState','nodeState']) {
+    const handle = await api.acquire(name);
+    fileHandles.push(handle);
+    values.push(Array.from(await handle.call('get', [])));
+    if (${JSON.stringify(next !== undefined)}) await handle.call('set', [new Uint8Array(${JSON.stringify(next ?? [])})]);
+  }
+  return values;
+`;
 
 const cleanupResources = async (actions: (() => Promise<unknown>)[]) => {
   const results = await Promise.allSettled(
@@ -80,6 +94,7 @@ const runWindowsConsumer = async (
   distribution: string,
   launcherName: string,
   port: number,
+  servicePorts: readonly number[],
   root: string,
 ) => {
   const environment = resolveWindowsE2eEnvironment(process.env);
@@ -251,10 +266,15 @@ const runWindowsConsumer = async (
     };
     await launch();
     const first = await evaluate(
-      `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
+      `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,base64:await script.call('base64',[new Uint8Array([255,0])]),text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
     );
     expect(first.text).toBe("日本\0🙂");
     expect(first.next).toBe(42);
+    expect(first.base64).toBe("/wA=");
+    expect(await evaluate(exerciseConsumerNetwork(servicePorts))).toBe(true);
+    expect(await evaluate(savedServiceValues([5, 128, 1]))).toEqual(
+      Array(3).fill([0, 255]),
+    );
     const firstNode = await evaluate(
       `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
     );
@@ -286,6 +306,9 @@ const runWindowsConsumer = async (
     const reopened = await evaluate(
       `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');await api.setAutostart('extension',false);return {native:native.generation,script:script.generation,extension:extension.generation,next:await extension.call('next',[99]),autostart:(await api.getState('extension')).autostart};`,
     );
+    expect(await evaluate(savedServiceValues([0, 17, 240]))).toEqual(
+      Array(3).fill([5, 128, 1]),
+    );
     expect(reopened).toEqual({
       native: first.native,
       script: first.script,
@@ -311,6 +334,9 @@ const runWindowsConsumer = async (
         `const handle=await api.acquire('node');try{return await handle.call('saved',[])}finally{await handle.release()}`,
       ),
     ).toBe("packaged again");
+    expect(await evaluate(savedServiceValues(undefined))).toEqual(
+      Array(3).fill([0, 17, 240]),
+    );
     await evaluate(
       "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
     );
@@ -418,6 +444,7 @@ it.skipIf(
         version: "1.0.0",
         type: "module",
         private: true,
+        workspaces: ["quickjs"],
         scripts: { dependencies: "reskill" },
       }),
     );
@@ -467,7 +494,24 @@ it.skipIf(
       "--language",
       "c",
     ]);
-    for (const name of ["echo", "counter"]) {
+    for (const name of ["state", "http", "server"]) {
+      await run(process.execPath, [
+        sdkCli,
+        "init",
+        "producer/" + name,
+        "--name",
+        name,
+        "--kind",
+        "service",
+        "--language",
+        "c",
+      ]);
+      await copyFile(
+        join(sdk, "examples/services/native-" + name + ".c"),
+        join(app, "producer", name, "service.c"),
+      );
+    }
+    for (const name of ["echo", "counter", "state", "http", "server"]) {
       await run(process.execPath, [
         sdkCli,
         "build",
@@ -479,14 +523,86 @@ it.skipIf(
       ]);
     }
     await rm(join(app, "producer"), { recursive: true });
-    for (const name of ["echo", "counter"])
+    for (const name of ["echo", "counter", "state", "http", "server"])
       await rm(join(app, "artifacts", name, ".build"), {
         recursive: true,
         force: true,
       });
-    for (const name of ["quickjs-echo.ts", "quickjs-native.ts", "counter.d.ts"])
+    for (const name of ["quickjs-native.ts", "counter.d.ts"])
       await copyFile(join(sdk, "examples/services", name), join(app, name));
+    const quickjs = join(app, "quickjs");
+    await cp(join(sdk, "examples/services/quickjs-project"), quickjs, {
+      recursive: true,
+    });
+    await run("npm", [
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ]);
+    await run("npm", [
+      "run",
+      "typecheck",
+      "--workspace",
+      "quickjs-echo-service",
+    ]);
+    await run("npm", ["test", "--workspace", "quickjs-echo-service"]);
+    const invalid = join(quickjs, "src/invalid.ts");
+    await writeFile(
+      invalid,
+      "import service from './service'; import type { ServiceMethods } from 'muon-plugin-sdk/services'; declare const methods: ServiceMethods<typeof service.interface>; methods.base64({id:'1',signal:null!}, 'wrong');",
+    );
+    await expect(
+      run("npm", ["run", "typecheck", "--workspace", "quickjs-echo-service"]),
+    ).rejects.toThrow(/Uint8Array/);
+    await rm(invalid);
     await mkdir(join(app, "worker"));
+    for (const directory of [app, quickjs, join(app, "worker")])
+      await writeFile(join(directory, "initial.bin"), new Uint8Array([0, 255]));
+    for (const directory of [quickjs, join(app, "worker")])
+      for (const name of ["state", "http", "server"])
+        await copyFile(
+          join(sdk, "examples/services", name + ".ts"),
+          join(directory, name + ".ts"),
+        );
+    // Include the actual service entry points in the standalone ES2022-only type check.
+    const compiler = JSON.parse(
+      await readFile(join(quickjs, "tsconfig.json"), "utf8"),
+    );
+    compiler.include.push("http.ts", "state.ts", "server.ts");
+    await writeFile(join(quickjs, "tsconfig.json"), JSON.stringify(compiler));
+    await run("npm", [
+      "run",
+      "typecheck",
+      "--workspace",
+      "quickjs-echo-service",
+    ]);
+    await writeFile(
+      invalid,
+      [
+        "import type { ServiceStartContext, ServiceStopReason, ServiceInterface } from 'muon-plugin-sdk/services';",
+        "declare const context: ServiceStartContext<ServiceInterface>;",
+        "const stop: ServiceStopReason = 'bad-stop-reason';",
+        "context.fs.writeBytes('file', 'bad-file-bytes');",
+        "context.server.listen({name:'test',port:23456,fetch:()=>({body:123})});",
+        "context.server.listen({name:'test',port:23456,fetch:()=>({}),websocket:{accept:()=>true,message:()=>{}}});",
+        "context.http.request({url:'http://localhost',responseType:'invalid-representation'});",
+      ].join("\n"),
+    );
+    let errors = "";
+    try {
+      await run("npm", [
+        "run",
+        "typecheck",
+        "--workspace",
+        "quickjs-echo-service",
+      ]);
+    } catch (error) {
+      errors = error instanceof Error ? error.message : String(error);
+    }
+    for (const line of [3, 4, 5, 6, 7])
+      expect(errors).toContain("invalid.ts(" + line + ",");
+    await rm(invalid);
     for (const name of ["node-files.ts", "node-greeting.txt"])
       await copyFile(
         join(sdk, "examples/services", name),
@@ -530,11 +646,11 @@ export default defineService({
 });`,
     );
     await writeFile(
-      join(app, "resident.ts"),
+      join(quickjs, "resident.ts"),
       `
       import {defineService} from 'muon-plugin-sdk/services';
       import type {} from 'muon-plugin-sdk/service-globals';
-      import original from './quickjs-echo.ts';
+      import original from './src/service.ts';
       export default defineService({...original,start:async context=>{
         const running=await original.start(context); let count=0;
         let timer: ReturnType<typeof setTimeout>; const tick=()=>{console.log('consumer-work:'+JSON.stringify({count:++count,at:Date.now()}));timer=setTimeout(tick,100)};timer=setTimeout(tick,100);
@@ -569,6 +685,52 @@ export default defineService({
         include: ["src", "*.ts"],
       }),
     );
+    const servicePorts: number[] = [];
+    const reservations = Array.from({ length: 3 }, () => createServer());
+    try {
+      for (const server of reservations) {
+        server.listen(0, "127.0.0.1");
+        await once(server, "listening");
+        const addr = server.address();
+        if (!addr || typeof addr === "string")
+          throw new Error("Missing service listener port");
+        servicePorts.push(addr.port);
+      }
+    } finally {
+      for (const server of reservations) {
+        const closed = once(server, "close");
+        server.close();
+        await closed;
+      }
+    }
+    const networkServices: Record<string, unknown> = {};
+    for (const [index, name] of ["native", "quick", "node"].entries()) {
+      for (const [suffix, example] of [
+        ["Http", "http"],
+        ["Listener", "server"],
+      ] as const) {
+        const source =
+          name === "native"
+            ? {
+                runtime: "native",
+                artifact: "artifacts/" + example + "/muon-plugin.json",
+              }
+            : {
+                runtime: name === "quick" ? "quickjs" : "node",
+                project: name === "quick" ? "quickjs" : "worker",
+                entry: example + ".ts",
+              };
+        const port = servicePorts[index]!;
+        networkServices[name + suffix] = {
+          ...source,
+          config: { port: String(port), bearerToken: "local-service" },
+          io:
+            suffix === "Http"
+              ? { http: { origins: ["http://127.0.0.1:" + port] } }
+              : { server: { listen: true } },
+        };
+      }
+    }
     const listener = createServer();
     listener.listen(0, "127.0.0.1");
     await once(listener, "listening");
@@ -580,12 +742,41 @@ export default defineService({
       join(app, "muon.json"),
       JSON.stringify({
         services: {
+          ...networkServices,
+          nativeState: {
+            runtime: "native",
+            artifact: "artifacts/state/muon-plugin.json",
+            io: {
+              fs: { data: "read-write", assets: { initial: "initial.bin" } },
+            },
+          },
+          quickState: {
+            runtime: "quickjs",
+            project: "quickjs",
+            entry: "state.ts",
+            io: {
+              fs: { data: "read-write", assets: { initial: "initial.bin" } },
+            },
+          },
+          nodeState: {
+            runtime: "node",
+            project: "worker",
+            entry: "state.ts",
+            io: {
+              fs: { data: "read-write", assets: { initial: "initial.bin" } },
+            },
+          },
           native: {
             runtime: "native",
             artifact: "artifacts/echo/muon-plugin.json",
             autostart: true,
           },
-          script: { runtime: "quickjs", entry: "resident.ts", autostart: true },
+          script: {
+            runtime: "quickjs",
+            project: "quickjs",
+            entry: "resident.ts",
+            autostart: true,
+          },
           node: {
             runtime: "node",
             project: "worker",
@@ -622,7 +813,13 @@ export default defineService({
       }),
     );
     const guards = join(root, "no-native-build");
-    await runServiceConsumerDevelopment(app, root, target, address.port);
+    await runServiceConsumerDevelopment(
+      app,
+      root,
+      target,
+      address.port,
+      servicePorts,
+    );
     await mkdir(guards);
     for (const name of [
       "gcc",
@@ -680,6 +877,7 @@ export default defineService({
         distribution,
         basename(launcher),
         address.port,
+        servicePorts,
         root,
       );
       return;
@@ -780,10 +978,15 @@ export default defineService({
     try {
       await launch();
       const first = await evaluate(
-        `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
+        `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');return {native:native.generation,script:script.generation,extension:extension.generation,base64:await script.call('base64',[new Uint8Array([255,0])]),text:await native.call('echo',['日本\\0🙂']),next:await extension.call('next',[41])};`,
       );
       expect(first.text).toBe("日本\0🙂");
       expect(first.next).toBe(42);
+      expect(first.base64).toBe("/wA=");
+      expect(await evaluate(exerciseConsumerNetwork(servicePorts))).toBe(true);
+      expect(await evaluate(savedServiceValues([5, 128, 1]))).toEqual(
+        Array(3).fill([0, 255]),
+      );
       const firstNode = await evaluate(
         `globalThis.nodeService=await api.acquire('node');return {generation:nodeService.generation,identity:await nodeService.call('identity',[]),greeting:await nodeService.call('greet',['packaged'])};`,
       );
@@ -811,6 +1014,9 @@ export default defineService({
       await launch();
       const reopened = await evaluate(
         `globalThis.native=await api.acquire('native');globalThis.script=await api.acquire('script');globalThis.extension=await api.acquire('extension');await api.setAutostart('extension',false);return {native:native.generation,script:script.generation,extension:extension.generation,next:await extension.call('next',[99]),autostart:(await api.getState('extension')).autostart};`,
+      );
+      expect(await evaluate(savedServiceValues([0, 17, 240]))).toEqual(
+        Array(3).fill([5, 128, 1]),
       );
       expect(reopened).toEqual({
         native: first.native,
@@ -842,6 +1048,9 @@ export default defineService({
           `const handle=await api.acquire('node');try{return await handle.call('saved',[])}finally{await handle.release()}`,
         ),
       ).toBe("packaged again");
+      expect(await evaluate(savedServiceValues(undefined))).toEqual(
+        Array(3).fill([0, 17, 240]),
+      );
       await evaluate(
         "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
       );

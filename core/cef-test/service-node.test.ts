@@ -18,6 +18,8 @@ beforeAll(async () => {
     "-C",
     "../service-host",
     ".build/muon-service-host",
+    ".build/http-service.so",
+    ".build/server-service.so",
   ]);
 }, 600000);
 
@@ -38,6 +40,8 @@ it("owns a Node service independently of UI and drains asynchronous stop", async
         minify: false,
         lib: {
           entry: {
+            "server-node": resolve("../../sdk/examples/services/server.ts"),
+            "http-node": resolve("../../sdk/examples/services/http.ts"),
             "node-driver": resolve("../service-host/node-driver.ts"),
             service: resolve("../../node/test/fixtures/node-service.ts"),
             lifecycle: resolve(
@@ -53,6 +57,23 @@ it("owns a Node service independently of UI and drains asynchronous stop", async
         rolldownOptions: { external: [/^node:/] },
       },
     });
+    await promisify(execFile)(process.execPath, [
+      "../../sdk/scripts/build-service-runtime-fixture.mjs",
+      join(root, "http-quick.js"),
+      "--entry",
+      "../../sdk/examples/services/http.ts",
+    ]);
+    await promisify(execFile)(process.execPath, [
+      "../../sdk/scripts/build-service-runtime-fixture.mjs",
+      join(root, "server-quick.js"),
+      "--entry",
+      "../../sdk/examples/services/server.ts",
+    ]);
+    for (const name of ["localhost-cert.pem", "localhost-key.pem"])
+      await copyFile(
+        join("../android-poc/android/app/src/androidTest/assets", name),
+        join(root, name),
+      );
     await copyFile(
       resolve("../../node/dist/node-bridge.mjs"),
       join(root, "node-bridge.mjs"),

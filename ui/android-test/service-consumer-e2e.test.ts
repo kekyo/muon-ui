@@ -9,6 +9,7 @@ import { EventEmitter, on } from "node:events";
 import {
   chmod,
   copyFile,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -124,6 +125,7 @@ it.skipIf(
         version: "1.0.0",
         type: "module",
         private: true,
+        workspaces: ["quickjs"],
         scripts: { dependencies: "reskill" },
       }),
     );
@@ -151,21 +153,24 @@ it.skipIf(
     ]);
     const sdk = join(app, "node_modules/muon-plugin-sdk");
     const sdkCli = join(sdk, "dist/cli.mjs");
-    await run(process.execPath, [
-      sdkCli,
-      "init",
-      "producer/echo",
-      "--name",
-      "echo",
-      "--kind",
-      "service",
-      "--language",
-      "c",
-    ]);
-    await copyFile(
-      join(sdk, "examples/services/native-echo.c"),
-      join(app, "producer/echo/service.c"),
-    );
+    const serviceExamples = ["echo", "state", "http", "server"];
+    for (const name of serviceExamples) {
+      await run(process.execPath, [
+        sdkCli,
+        "init",
+        "producer/" + name,
+        "--name",
+        name,
+        "--kind",
+        "service",
+        "--language",
+        "c",
+      ]);
+      await copyFile(
+        join(sdk, "examples/services/native-" + name + ".c"),
+        join(app, "producer", name, "service.c"),
+      );
+    }
     await run(process.execPath, [
       sdkCli,
       "init",
@@ -175,7 +180,7 @@ it.skipIf(
       "--language",
       "c",
     ]);
-    for (const name of ["echo", "counter"])
+    for (const name of [...serviceExamples, "counter"])
       for (const target of ["android-arm64-v8a", "android-x86_64"])
         await run(process.execPath, [
           sdkCli,
@@ -187,19 +192,33 @@ it.skipIf(
           `artifacts/${name}`,
         ]);
     await rm(join(app, "producer"), { recursive: true });
-    for (const name of ["echo", "counter"])
+    for (const name of [...serviceExamples, "counter"])
       await rm(join(app, "artifacts", name, ".build"), {
         recursive: true,
         force: true,
       });
-    for (const name of ["quickjs-echo.ts", "quickjs-native.ts", "counter.d.ts"])
+    const project = join(app, "quickjs");
+    await cp(join(sdk, "examples/services/quickjs-project"), project, {
+      recursive: true,
+    });
+    await run("npm", [
+      "install",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ]);
+    for (const name of ["state.ts", "http.ts", "server.ts"])
+      await copyFile(join(sdk, "examples/services", name), join(project, name));
+    for (const directory of [project, app])
+      await writeFile(join(directory, "initial.bin"), new Uint8Array([0, 255]));
+    for (const name of ["quickjs-native.ts", "counter.d.ts"])
       await copyFile(join(sdk, "examples/services", name), join(app, name));
     await writeFile(
-      join(app, "resident.ts"),
+      join(project, "resident.ts"),
       `
       import {defineService,defineServiceInterface} from 'muon-plugin-sdk/services';
       import type {} from 'muon-plugin-sdk/service-globals';
-      import original from './quickjs-echo.ts';
+      import original from './src/service.ts';
       export default defineService({interface:defineServiceInterface({...original.interface,methods:{...original.interface.methods,
         report:{parameters:['string'],returns:'void',errors:[]}}}),start:async context=>{
         const running=await original.start(context);let count=0;
@@ -210,6 +229,7 @@ it.skipIf(
           stop:async reason=>{clearTimeout(timer);await running.stop(reason)}};
       }});`,
     );
+    const ports = [49231, 49232];
     await mkdir(join(app, "src"));
     await writeFile(
       join(app, "index.html"),
@@ -245,7 +265,22 @@ it.skipIf(
           const subscription=await script.subscribe('progress',value=>received(value));
           await script.call('notify',['event😀']);const notification=await event;await subscription.close();
           if(session===2)for(const id of managed){await api.setAutostart(id,false);await api.setAutostart(id,false)}
-          result={session,initial,enabled,
+          const io=[];
+          for(const [index,name] of ['native','quick'].entries()){
+            const state=await api.acquire(name+'State');
+            const previous=Array.from(await state.call('get',[]) as Uint8Array);
+            await state.call('set',[new Uint8Array([0,128,session])]);await state.release();
+            await waitState(name+'State','stopped');
+            const listener=await api.acquire(name+'Listener');const client=await api.acquire(name+'Http');
+            try{
+              const url='http://127.0.0.1:'+${JSON.stringify(ports)}[index]+'/echo';
+              const headers={authorization:'Bearer local-service'};
+              const bytes=await client.call('bytes',[JSON.stringify({url,headers,method:'POST'}),new Uint8Array([0,128,255])]) as Uint8Array;
+              const reply=JSON.parse(await client.call('describe',[JSON.stringify({url,headers,responseType:'text'}),new Uint8Array()]) as string);
+              io.push({previous,bytes:Array.from(bytes),status:reply.status,owned:reply.text===listener.generation && reply.headers['x-service-generation']===listener.generation});
+            }finally{await client.release();await listener.release()}
+          }
+          result={session,initial,enabled,io,encoded:await script.call('base64',[new Uint8Array([0,128,255])]),
             native:await native.call('echo',['native\\0日本語😀']),script:await script.call('echo',['script\\0日本語😀']),
             extension:await extension.call('next',[41]),event:notification,
             generations:[native.generation,script.generation,extension.generation],
@@ -313,6 +348,35 @@ it.skipIf(
         text: "Processing",
       },
     };
+    const services: Record<string, unknown> = {};
+    for (const [index, name] of ["native", "quick"].entries()) {
+      for (const [suffix, sample] of [
+        ["State", "state"],
+        ["Http", "http"],
+        ["Listener", "server"],
+      ] as const) {
+        const source =
+          name === "native"
+            ? {
+                runtime: "native",
+                artifact: "artifacts/" + sample + "/muon-plugin.json",
+              }
+            : { runtime: "quickjs", project: "quickjs", entry: sample + ".ts" };
+        const port = ports[index]!;
+        const io =
+          sample === "state"
+            ? { fs: { data: "read-write", assets: { initial: "initial.bin" } } }
+            : sample === "http"
+              ? { http: { origins: ["http://127.0.0.1:" + port] } }
+              : { server: { listen: true } };
+        services[name + suffix] = {
+          ...source,
+          android,
+          io,
+          config: { port: String(port), bearerToken: "local-service" },
+        };
+      }
+    }
     const configuration = {
       browser: {
         startPage: `asset://main/index.html?close=0&consumer=${nonce}`,
@@ -328,6 +392,7 @@ it.skipIf(
         },
       },
       services: {
+        ...services,
         native: {
           runtime: "native",
           artifact: "artifacts/echo/muon-plugin.json",
@@ -336,6 +401,7 @@ it.skipIf(
         },
         script: {
           runtime: "quickjs",
+          project: "quickjs",
           entry: "resident.ts",
           autostart: true,
           config: { nonce },
@@ -564,6 +630,7 @@ it.skipIf(
       throw observerError ?? new Error("Observer log ended");
     };
     const expected = {
+      encoded: "AID/",
       native: "native\0日本語😀",
       script: "script\0日本語😀",
       extension: 42,
@@ -631,7 +698,17 @@ it.skipIf(
       if (evaluated.isError) throw new Error(text);
       const resultText = /### Result\n([\s\S]*?)(?:\n### |$)/u.exec(text)?.[1];
       expect(resultText).toBeDefined();
-      expect(JSON.parse(resultText!)).toMatchObject(expected);
+      const expectedIo = (session: number) =>
+        Array.from({ length: 2 }, () => ({
+          previous: session === 0 ? [0, 255] : [0, 128, session - 1],
+          bytes: [0, 128, 255],
+          status: 200,
+          owned: true,
+        }));
+      expect(JSON.parse(resultText!)).toMatchObject({
+        ...expected,
+        io: expectedIo(0),
+      });
       await client.close();
       await mcp.close();
       client = undefined;
@@ -685,7 +762,10 @@ it.skipIf(
           const result = JSON.parse(
             report.split(`consumer-result:${nonce}:`)[1]!,
           );
-          expect(result).toMatchObject(expected);
+          expect(result).toMatchObject({
+            ...expected,
+            io: expectedIo(session),
+          });
           expect(result.session).toBe(session);
           if (generations && session < 3)
             expect(result.generations).toEqual(generations);

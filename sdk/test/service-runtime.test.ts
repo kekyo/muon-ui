@@ -1,4 +1,4 @@
-import { expect, expectTypeOf, it } from 'vitest';
+import { expect, expectTypeOf, it, vi } from 'vitest';
 import {
   createServiceRuntime,
   defineService,
@@ -33,11 +33,106 @@ const input = {
   id: 'worker.v1',
   generation: '18446744073709551615',
   config: { hello: '日本語😀' },
+  startReason: 'acquire' as const,
   dataDirectory: '/private/worker',
 };
 const unavailable = async (): Promise<ServiceRuntimeResult> => {
   throw new Error('Unexpected callback');
 };
+
+it('delivers the generation start reason and independent cleanup signal when shutdown races startup', async () => {
+  const entered = deferred<void>();
+  const observed: unknown[] = [];
+  const runtime = createServiceRuntime(
+    defineService({
+      interface: defineServiceInterface({
+        schemaVersion: 1,
+        methods: {},
+        events: {},
+      }),
+      start: async (context) => {
+        observed.push(context.startReason);
+        const cancelled = new Promise<void>((resolve) =>
+          context.signal.addEventListener('abort', () => resolve(), {
+            once: true,
+          })
+        );
+        entered.resolve();
+        await cancelled;
+        return {
+          methods: {},
+          stop: (info) => {
+            observed.push(
+              info.reason,
+              info.detail,
+              context.signal.aborted,
+              info.signal.aborted
+            );
+          },
+        };
+      },
+    }),
+    { callback: unavailable, emit: () => {} }
+  );
+  const starting = runtime.start({ ...input, startReason: 'login-autostart' });
+  await entered.promise;
+  const stopping = runtime.stop({ reason: 'session-ending', detail: 'logoff' });
+  await Promise.all([starting, stopping, runtime.stop({ reason: 'app-exit' })]);
+  expect(observed).toEqual([
+    'login-autostart',
+    'session-ending',
+    'logoff',
+    true,
+    false,
+  ]);
+});
+
+it.each([false, true])(
+  'cancels cleanup once at the deadline even when timers are exhausted (%s)',
+  async (exhausted) => {
+    vi.useFakeTimers();
+    const entered = deferred<void>();
+    const observations: string[] = [];
+    try {
+      const runtime = createServiceRuntime(
+        defineService({
+          interface: { schemaVersion: 1, methods: {}, events: {} },
+          start: (context) => ({
+            methods: {},
+            stop: async (info) => {
+              expect(context.signal.aborted).toBe(true);
+              entered.resolve();
+              if (!info.signal.aborted) {
+                await new Promise<void>((resolve) =>
+                  info.signal.addEventListener('abort', resolve, { once: true })
+                );
+              }
+              observations.push(info.reason);
+            },
+          }),
+        }),
+        { callback: unavailable, emit: () => {} }
+      );
+      await runtime.start(input);
+      if (exhausted)
+        vi.spyOn(globalThis, 'setTimeout').mockImplementationOnce(() => {
+          throw new Error('Timer capacity exhausted');
+        });
+      const stopped = runtime.stop({
+        reason: 'execution-timeout',
+        remainingMs: 10,
+      });
+      expect(runtime.stop({ reason: 'app-exit' })).toBe(stopped);
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(10);
+      await stopped;
+      expect(observations).toEqual(['execution-timeout']);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  }
+);
 
 it('maps Unicode, bigint, bytes and typed events through the service interface', async () => {
   const emitted: unknown[] = [];
@@ -61,7 +156,7 @@ it('maps Unicode, bigint, bytes and typed events through the service interface',
           work: async (_call, callback) => await callback('hello'),
         },
         stop: (reason) => {
-          stopped = reason;
+          stopped = reason.reason;
         },
       };
     },
@@ -82,10 +177,10 @@ it('maps Unicode, bigint, bytes and typed events through the service interface',
     value: ['A\0日本語😀', '18446744073709551615', '255'],
   });
   expect(emitted).toEqual([['progress', '18446744073709551615']]);
-  const stopping = runtime.stop('released');
-  expect(runtime.stop('shutdown')).toBe(stopping);
+  const stopping = runtime.stop({ reason: 'reference-released' });
+  expect(runtime.stop({ reason: 'app-exit' })).toBe(stopping);
   await stopping;
-  expect(stopped).toBe('released');
+  expect(stopped).toBe('reference-released');
   expect(
     await runtime.invoke('2', 'echo', ['late', '1', 'AA=='])
   ).toMatchObject({ status: 'error', code: 'unavailable' });
@@ -124,7 +219,7 @@ it('permits reentrant calls while a callback is pending and expires cached callb
     value: 'returned',
   });
   await expect(cached!('late')).rejects.toMatchObject({ code: 'cancelled' });
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('notifies cancellation immediately but drains the real handler and callback before stop', async () => {
@@ -173,7 +268,7 @@ it('notifies cancellation immediately but drains the real handler and callback b
   await entered.promise;
   runtime.cancel('1');
   expect(aborted).toBe(true);
-  const stopping = runtime.stop('shutdown');
+  const stopping = runtime.stop({ reason: 'app-exit' });
   releaseHandler.resolve();
   await Promise.resolve();
   expect(stopped).toBe(false);
@@ -218,7 +313,7 @@ it('keeps stop pending while an asynchronous start is still acquiring resources'
   );
   const started = runtime.start(input);
   await entered.promise;
-  const stopped = runtime.stop('shutdown');
+  const stopped = runtime.stop({ reason: 'app-exit' });
   expect(abort).toBe(true);
   release.resolve();
   await started;
@@ -284,7 +379,7 @@ it('rejects malformed values, undeclared errors and excess callback concurrency'
   expect(calls).toBe(32);
   release.resolve({ status: 'ok', value: 'ok' });
   expect(await result).toEqual({ status: 'ok', value: 'drained' });
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('bounds simultaneous invocations and admits new work after a real completion', async () => {
@@ -321,7 +416,7 @@ it('bounds simultaneous invocations and admits new work after a real completion'
     status: 'ok',
     value: [],
   });
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('refuses new callbacks after cancellation without completing the pending handler', async () => {
@@ -368,7 +463,7 @@ it('refuses new callbacks after cancellation without completing the pending hand
   expect(callbackCalls).toBe(0);
   expect(cancelled).toBe(true);
   runtime.cancel('1');
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('preserves declared errors and checks callback results against their signature', async () => {
@@ -401,7 +496,7 @@ it('preserves declared errors and checks callback results against their signatur
     status: 'error',
     code: 'invalid-result',
   });
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('encodes large bytes and rejects aggregate argument overflow before author code', async () => {
@@ -442,7 +537,7 @@ it('encodes large bytes and rejects aggregate argument overflow before author co
     await runtime.invoke('2', 'pair', ['a'.repeat(700000), 'b'.repeat(700000)])
   ).toMatchObject({ status: 'error', code: 'invalid-result' });
   expect(called).toBe(0);
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('rechecks callback admission when argument encoding reenters cancellation', async () => {
@@ -491,7 +586,7 @@ it('rechecks callback admission when argument encoding reenters cancellation', a
     code: 'cancelled',
   });
   expect(delivered).toBe(0);
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('rechecks event admission when value encoding reenters stop', async () => {
@@ -510,7 +605,7 @@ it('rechecks event admission when value encoding reenters stop', async () => {
           work: () => {
             const values = Object.defineProperty([0], '0', {
               get: () => {
-                stopped = runtime.stop('released');
+                stopped = runtime.stop({ reason: 'reference-released' });
                 return 7;
               },
             });
@@ -576,7 +671,7 @@ it('reports an early method completion only after its outstanding callback drain
     code: 'invalid-result',
   });
   await callback;
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });
 
 it('rejects duplicate or excessive callback tokens before author code', async () => {
@@ -622,5 +717,5 @@ it('rejects duplicate or excessive callback tokens before author code', async ()
     status: 'ok',
     value: 1024,
   });
-  await runtime.stop('released');
+  await runtime.stop({ reason: 'reference-released' });
 });

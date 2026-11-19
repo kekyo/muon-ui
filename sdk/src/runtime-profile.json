@@ -1,6 +1,6 @@
 {
   "pluginAbi": 1,
-  "serviceAbi": 2,
+  "serviceAbi": 3,
   "ndkVersion": "29.0.14206865",
   "androidApi": 24,
   "cardioHeaderSha256": "9c479b0487588cee284dc0f525916008e2277132a81052a9a7291212ee202af4",

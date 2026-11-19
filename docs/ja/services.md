@@ -8,7 +8,9 @@ muonのサービスは画面を閉じた後も必要な処理を続けるため�
 | `quickjs` | JS/TSと、アプリが明示的に許可したnativeプラグイン | CEF・Android |
 | `node` | JS/TS、Node.jsの組み込みAPI、npm依存 | CEF |
 
-サービスは`muon.json`に名前を付けて登録します。同じアプリに複数登録でき、画面から名前で取得してメソッドを呼び出します。サービスの終了だけで画面が閉じることはありません。
+サービスは`muon.json`に名前を付けて登録します。同じアプリに複数登録でき、画面から名前で取得してメソッドを呼び出します。サービスを起動してから停止するまでを一つの実行世代と呼びます。常駐設定（`autostart`）が有効なサービスは、画面が参照を解放した後も実行を続けます。サービスの終了だけで画面が閉じることはありません。
+
+画面から文字を保存し、ページを開き直して読み戻す例を、[QuickJSでメモサービスを作る](quickjs-service-tutorial.md)で試せます。
 
 ## 最初のTSサービス
 
@@ -76,6 +78,162 @@ try {
 
 `validate`モードでは、通常のプラグイン権限設定に従って呼び出し元へ`muon.services.*`を許可し、`muon:services`から`acquire`などをimportします。サービスの定義と、画面に与える操作権限は別の設定です。
 
+## QuickJSサービスをnpmプロジェクトにする
+
+サービスごとに依存関係を管理するには、アプリの `muon.json` で `project` と `entry` を指定します。`project` は `muon.json` のあるディレクトリから、`entry` はそのプロジェクトからの相対パスです。`entry` だけを指定したサービスでは `muon.json` の位置が基準になります。
+
+```json
+{
+  "services": {
+    "worker": {
+      "runtime": "quickjs",
+      "project": "./services/worker",
+      "entry": "src/service.ts"
+    }
+  }
+}
+```
+
+SDKに同梱したサンプルには、依存関係、ロックファイル、型検査、Vitestの設定があります。アプリにインストールしたSDKからコピーし、サービスのディレクトリで試せます。アプリのルートに戻ると、同じ定義を `npx muon run`、`npx vite dev`、`npx muon build --target linux-amd64` で使えます。
+
+```sh
+mkdir -p services
+cp -R node_modules/muon-plugin-sdk/examples/services/quickjs-project services/worker
+cd services/worker
+npm install
+npm run typecheck
+npm test
+```
+
+`tsconfig.json` の `compilerOptions` には `"strict": true`、`"lib": ["ES2022"]`、`"types": ["muon-plugin-sdk/service-globals"]` を指定します。サービスの型は `muon-plugin-sdk/services` からインポートできます。ビルダーはサービスが使うnpm依存をプロジェクトから解決してJSにまとめます。QuickJSには、JSだけで動く依存を選んでください。Node.jsの組み込みモジュールやネイティブアドオンを必要とする依存を取り込むと、ビルド時に診断が出ます。
+
+## 起動と終了の理由を受け取る
+
+`start(context)` は新しい実行世代ごとに呼ばれます。`context.startReason` はその世代を開始した理由です。実行中に画面が再接続すると、同じ世代が呼び出しに応答します。
+
+| 起動理由 | 契機 |
+| --- | --- |
+| `acquire` | 画面からの参照取得 |
+| `app-start` | 通常のアプリ起動時に有効だった常駐設定 |
+| `login-autostart` | PCのログイン登録からの起動 |
+| `autostart-enabled` | 利用中に常駐設定を有効にした操作 |
+| `development-update` | 開発中のサービス更新 |
+
+停止が始まると `context.signal` と実行中の呼び出しの `signal` がキャンセルされます。起動に成功した世代の `stop(info)` は一度だけ呼ばれ、最初に受理した理由が `info.reason` に入ります。終了処理でファイルを保存するときは `info.signal` を渡してください。期限を取得できた場合は `info.remainingMs` で残りのミリ秒数を確認できます。
+
+| 停止理由 | 契機 |
+| --- | --- |
+| `reference-released` | 最後の参照を解放した |
+| `app-exit` | アプリ全体の終了を要求した |
+| `session-ending` | PCのユーザーセッションの終了が確定した、またはAndroidで端末終了の通知を受け取った |
+| `development-update`、`development-exit` | 開発中のサービス更新、または開発コマンドの終了 |
+| `execution-timeout` | OSがサービスの実行期限を通知した |
+| `host-stop` | ホストが一般の終了要求を受けた |
+
+例えば、PCのログイン時にサービスが起動した時刻と、セッションの終了通知を受けた時刻を別々に記録できます。この例ではサービスの `io.fs.data` に `read-write` を指定します。ログイン時の起動を試すには、サービスの常駐設定を有効にしてください。
+
+```ts
+import { defineService, defineServiceInterface } from 'muon-plugin-sdk/services';
+
+export default defineService({
+  interface: defineServiceInterface({ schemaVersion: 1, methods: {}, events: {} }),
+  start: async (context) => {
+    if (context.startReason === 'login-autostart') {
+      await context.fs.writeText('login-start.txt', new Date().toISOString(), {
+        signal: context.signal,
+      });
+    }
+    return {
+      methods: {},
+      stop: async (info) => {
+        if (info.reason === 'session-ending') {
+          await context.fs.writeText('session-end.txt', new Date().toISOString(), {
+            signal: info.signal,
+          });
+        }
+      },
+    };
+  },
+});
+```
+
+WindowsとLinuxではセッション終了の照会が取り消されるとサービスは動作を続けます。Linuxのセッション通知には対応するデスクトップポータルが必要です。Androidでは稼働中のサービスホストが受け取った通知を扱います。クラッシュや電源断など、ホストが終了を通知できない場合には `stop` は呼ばれません。[Windowsの終了通知](https://learn.microsoft.com/en-us/windows/win32/shutdown/wm-endsession)・[Linuxのセッション通知](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Inhibit.html)・[Androidの終了通知](https://developer.android.com/reference/android/content/Intent#ACTION_SHUTDOWN)
+
+## サービスのファイル、HTTP、ローカルサーバー
+
+サービスごとに、使用する操作を `muon.json` の `io` で許可します。画面の権限は引き継ぎません。次の例は専用領域への読み書き、プロジェクト内の初期値の読み取り、ひとつのオリジンへのHTTP通信、ループバックでの待受を許可します。オリジンはスキーム、ホスト名、ポートの組み合わせです。
+
+```json
+{
+  "services": {
+    "worker": {
+      "runtime": "quickjs",
+      "project": "./services/worker",
+      "entry": "src/service.ts",
+      "io": {
+        "fs": { "data": "read-write", "assets": { "initial": "assets/initial.bin" } },
+        "http": { "origins": ["https://api.example.org"] },
+        "server": { "listen": true }
+      }
+    }
+  }
+}
+```
+
+- `context.fs` の `readBytes`、`writeBytes` は `Uint8Array`、`readText`、`writeText` はUTF-8テキストを扱います。ファイル名は領域内の相対パスです。既定の領域 `data` はサービス専用で、書き込みはファイルを原子的に置き換えます。置き換え前に失敗すると元の内容が残ります。`mkdir`、`list`、`rename` も使えます。ファイル1件の上限は1 MiBです。
+- `context.fs.readBytes('initial', { area: 'assets' })` で同梱した初期値を読みます。`assets` のキーが論理名、値がプロジェクト内のファイルです。追加の領域は `fs.directories` に名前ごとに `{"path":"/absolute/path","access":"read"}` のように指定します。`read-write` は書き込みも許可します。共通APIは領域の外を指すパスやリンクを拒否します。
+
+  「初期値に戻す」メソッドの例では同梱アセットを読み、サービス専用のファイルを置き換えます。`context` は `start` の引数、`call` は公開メソッドの第1引数です。
+
+  ```ts
+  const initial = await context.fs.readBytes('initial', {
+    area: 'assets',
+    signal: call.signal,
+  });
+  await context.fs.writeBytes('state.bin', initial, { signal: call.signal });
+  ```
+
+- `context.http.request({ url, method, headers, body, responseType, signal })` は `status`、小文字の名前を使う `headers`、`body` を返します。本文は既定でバイナリー、`responseType: 'text'` でUTF-8テキストになります。4xx・5xxもHTTP応答として読めます。リダイレクトは5回までで、移動先も許可済みオリジンに限ります。HTTPSではOSの信頼設定で証明書とホスト名を検証します。要求・応答の本文は各1 MiB、同時要求は1世代8件までです。`timeoutMs` はリダイレクトを含む期限で、既定値は30000、指定範囲は1から120000です。
+
+  このメソッドはGETでステータスを取得し、200なら本文を文字列で返します。メソッドの宣言で `errors: ['http-status']` を指定すると、それ以外のステータスを画面側でエラーとして受け取れます。試すときは `url` を実際のAPIのURLに変更し、そのオリジンを `io.http.origins` に指定してください。画面が呼び出しを取り消すと、同じ `signal` を渡したHTTP要求もキャンセルされます。
+
+  ```ts
+  const reply = await context.http.request({
+    url: 'https://api.example.org/status',
+    responseType: 'text',
+    timeoutMs: 5000,
+    signal: call.signal,
+  });
+  if (reply.status !== 200) {
+    throw Object.assign(new Error('HTTP ' + reply.status), { code: 'http-status' });
+  }
+  return reply.body;
+  ```
+
+- `context.server.listen({ name, port, fetch, websocket, allowedOrigins, bearerToken })` は `127.0.0.1` のポート1025から65535で待ち受けます。`fetch` は要求の `method`、`url`、`headers`、`body` を受け取り、ステータス、ヘッダー、テキストまたはバイナリー本文を返します。WebSocketを使う場合は `websocket.accept` で接続を受け付け、`message` で文字列やバイナリーを受け取ります。ホストがHostとOriginを検証し、`bearerToken` を指定した場合は認証も行います。戻り値の `close()` で待受と接続を閉じられます。常駐サービスの待受は画面を閉じた後も続き、その世代の停止時に閉じます。
+
+  次は `start` の本体です。HTTPの本文やWebSocketのメッセージをそのまま送り返します。サービスを取得したまま `curl --data hello http://127.0.0.1:43123/` を実行すると、応答は `hello` です。ブラウザーから接続する場合は、接続元のページのオリジンを `allowedOrigins` に指定してください。
+
+  ```ts
+  const listener = await context.server.listen({
+    name: 'echo',
+    port: 43123,
+    allowedOrigins: ['https://app.example.org'],
+    fetch: (request) => ({ body: request.body }),
+    websocket: {
+      accept: () => ({}),
+      message: async (socket, data) => await socket.send(data),
+    },
+  });
+  return { methods: {}, stop: async () => await listener.close() };
+  ```
+
+Bearerを設定した待受にHTTPで接続するときは、Authorizationヘッダーに `Bearer <トークン>` を指定します。ブラウザーのWebSocketクライアントでは、サブプロトコルに `muon.auth` と、トークンをBase64URLに変換して `muon.bearer.` を先頭に付けた文字列を指定します。[WebSocketの認証例](local-server.md#ブラウザーからのwebsocket認証)
+
+共通APIの失敗は `isServiceIoError(error)` で判別できます。`error.code` は許可外なら `permission-denied`、証明書の検証に失敗したら `tls-error`、本文が大きすぎると `size-limit`、時間切れなら `timeout`、キャンセルなら `cancelled` です。Node.jsの標準ライブラリやnativeコードを直接呼ぶ操作には、プロセスのOS権限が適用されます。Androidのビルダーは通信を使うサービスに `INTERNET` 権限を付け、平文の送信を許可したホストをネットワークセキュリティ設定に反映します。[Androidの通信権限](https://developer.android.com/develop/connectivity/network-ops/connecting)・[Androidのネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
+
+C ABI v3では `muon_service_context.io->request` で同じ操作を開始します。例えば `fs.write` には領域とパスをJSONで、内容をバイナリーバッファーで渡します。完了コールバックはサービスのディスパッチャーで一度呼ばれます。結果のバッファーはコールバックの間だけ有効です。C++20では `muon_service_io_cpp.h` の `muon::request_service_io` が所有権を持つ結果を返し、`cardio` のコルーチン内で待機できます。SDKの `examples/services` に、終了時の保存、外向きのHTTP、ローカルサーバーをそれぞれCとTSで実装したサンプルがあります。
+
 ## 参照と自動起動
 
 サービスは、画面が取得した参照か、ホストが持つ常駐参照がある間、実行を必要とします。常駐参照はサービスごとに最大1つです。
@@ -114,6 +272,22 @@ await watcher.close();
 整数の`int64`と`uint64`には`bigint`、`bytes`には`Uint8Array`を使用します。文字列、真偽値、32bit整数、浮動小数と、これらの型の配列も扱えます。型定義と合わない値は拒否されます。メソッド固有のエラーコードは`errors`に列挙し、JS/TSの実装では`code`と`message`を持つエラーをthrowします。
 
 メソッドは`call(method, args, { signal })`でキャンセルできます。JS/TSのメソッドには最初の引数として呼び出し情報が渡り、その`signal`から取り消しを確認できます。キャンセルに対応するI/O処理を実装し、停止時には確保した資源を解放してください。
+
+公開メソッドの `returns` には、`Promise` が解決したときの値の型を書きます。最初の `echo` サービスの `start` を次のように変更し、`io.fs.data` に `read-write` を指定してください。実装は `Promise<string>` を返すので、インターフェイスには `returns: 'string'` と宣言します。
+
+```ts
+start: (context) => ({
+  methods: {
+    echo: async (call, text): Promise<string> => {
+      await context.fs.writeText('last-echo.txt', text, { signal: call.signal });
+      return text;
+    },
+  },
+  stop: () => {},
+}),
+```
+
+画面で `await handle.call('echo', ['Hello'])` が `'Hello'` を返すのは書き込みが完了した後です。書き込みが失敗した場合は、画面側の `try` / `catch` でエラーを受け取れます。
 
 引数の関数は、親メソッドが完了するまでのコールバックです。親メソッドの完了後やキャンセル後に保持して使うことはできません。継続的な通知にはイベントを使います。サービス側は`start`に渡る`context.emit(name, value)`で通知し、画面側は`handle.subscribe(name, listener)`で購読します。
 
@@ -241,7 +415,18 @@ QuickJSサービスの`plugins`へ、利用するプラグインと関数の許�
 
 サービスごとに独立したJS実行環境を持ちます。標準のJS機能に加えて`setTimeout`、`clearTimeout`、`console`を使用できます。型宣言が必要なら`import type {} from 'muon-plugin-sdk/service-globals'`を追加します。
 
-DOM、`window.muon`、Node.jsの組み込みモジュール、`fetch`、`setInterval`は提供しません。ファイルやネットワークのI/Oには明示的に許可したnativeプラグインを使用します。ビルダーはサービスと依存モジュールを単一JSへまとめ、未許可の外部モジュールや別アセットへの依存を拒否します。
+DOM、`window.muon`、Node.jsの組み込みモジュール、`fetch`、`setInterval`は提供しません。ファイルと通信には、各サービスに許可した共通APIを使えます。ビルダーはサービスと依存モジュールを単一JSへまとめ、宣言したアセットをサービスと一緒に配布します。
+
+SDKの `quickjs-project` ではnpmパッケージ `base64-js` でバイナリーをBase64文字列に変換しています。自分のサービスで使う場合は、サービスのプロジェクトで `npm install base64-js` を実行してください。[base64-jsのAPI](https://github.com/beatgammit/base64-js#methods)
+
+```ts
+import { fromByteArray } from 'base64-js';
+
+const bytes = Uint8Array.of(0, 128, 255);
+console.log(fromByteArray(bytes)); // AID/
+```
+
+ファイルを読む例、HTTP要求を送る例、HTTPとWebSocketで応答する例は、[サービスのファイル、HTTP、ローカルサーバー](#サービスのファイルhttpローカルサーバー)にあります。
 
 現在の上限は、JSバンドル8 MiB、JSヒープ64 MiB、スタック1 MiB、1回のJS実行2秒、起動・停止各10秒です。非同期I/Oの待ち時間と、CPUを占有するJS実行時間は区別します。上限超過や実行エラーはサービスの失敗として報告します。nativeコードの停止不能やプロセスの異常終了は、同じプロセスで動く他サービスにも影響します。
 

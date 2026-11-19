@@ -18,6 +18,9 @@
     <application android:allowBackup="false" android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher" android:supportsRtl="true"
         android:theme="@style/MuonTheme"
+{{if serviceCleartext}}
+        android:networkSecurityConfig="@xml/muon_service_network"
+{{end}}
         android:usesCleartextTraffic="false">
 {{if notificationsEnabled}}
         <meta-data android:name="dev.muon.notifications.smallIcon" android:resource="@drawable/muon_notification_small" />

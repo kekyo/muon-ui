@@ -87,3 +87,6 @@ std::vector<MuonServiceValue> DecodeMuonServiceArguments(
  */
 std::string EncodeMuonServiceArguments(const std::vector<MuonServiceType>& types,
                                       const std::vector<MuonServiceValue>& values);
+
+/** @param code Service failure identifier. @return Whether any method may report this framework error. */
+bool IsMuonServiceFrameworkError(const std::string& code);

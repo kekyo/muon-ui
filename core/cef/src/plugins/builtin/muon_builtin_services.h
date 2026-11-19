@@ -17,9 +17,10 @@ void InitializeMuonBuiltinServices(const MuonConfig& config,
 /** @param config Application and profile configuration.
  *  @param config_paths Absolute startup configuration paths.
  *  @param refresh Whether ordinary launch/setup should reconcile OS registration.
+ *  @param login_launch Whether a login registration launched this process.
  *  @return A CEF-independent session usable by the headless login entry point. */
 std::shared_ptr<MuonServiceSession> CreateMuonBuiltinServiceSession(const MuonConfig& config,
-    const std::vector<std::filesystem::path>& config_paths, bool refresh);
+    const std::vector<std::filesystem::path>& config_paths, bool refresh, bool login_launch);
 /** @returns Service metadata after initialization, including an empty service registry. */
 const muon_plugin_metadata* GetMuonBuiltinServicesMetadata();
 /** @param completion Receives the committed UI auto-display preference as JSON. */

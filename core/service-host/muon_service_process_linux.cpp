@@ -59,7 +59,7 @@ cardio::promise<MuonServiceProcess> LaunchMuonServiceProcess(
   }
   const char* arguments[] = {options.executable.c_str(), "--config", options.registry.c_str(),
       "--endpoint", options.endpoint.c_str(), "--data-root", options.data_root.c_str(),
-      "--bootstrap", "stdin", "--startup", options.startup.c_str(), nullptr};
+      "--bootstrap", options.login_launch ? "login" : "stdin", "--startup", options.startup.c_str(), nullptr};
   GError* error = nullptr;
   auto bootstrap = std::make_shared<MuonServiceBootstrap>();
   bootstrap->process = std::shared_ptr<GSubprocess>(g_subprocess_newv(arguments,

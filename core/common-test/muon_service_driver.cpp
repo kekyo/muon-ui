@@ -36,6 +36,7 @@ static const char* StateName(MuonServiceState state) {
 
 static const char* EventName(MuonServiceEventKind kind) {
   switch (kind) {
+    case MuonServiceEventKind::CancelStart: return "cancel-start";
     case MuonServiceEventKind::Start: return "start";
     case MuonServiceEventKind::Stop: return "stop";
     case MuonServiceEventKind::SaveAutostart: return "save-autostart";

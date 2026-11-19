@@ -33,6 +33,9 @@ struct NodeServiceEntry {
   uint64_t generation;
   MuonNodeProcess child;
   MuonServiceInterface interface;
+  std::unique_ptr<MuonServiceIo> io;
+  std::map<uint64_t, std::function<void()>> io_requests;
+  uint64_t io_sequence = 0;
   std::string interface_json;
   std::map<uint64_t, std::shared_ptr<NodeServiceCall>> calls;
   std::map<uint64_t, std::function<void(yyjson_val*)>> requests;
@@ -125,6 +128,7 @@ static void Finish(const std::shared_ptr<NodeServiceEntry>& entry) {
   }
   entry->calls.clear();
   const auto owner = entry->owner.lock();
+  entry->io->Close([owner, entry] {
   owner->entries.erase({entry->spec.id, entry->generation});
   if (entry->started) {
     auto started = std::move(entry->started);
@@ -136,6 +140,7 @@ static void Finish(const std::shared_ptr<NodeServiceEntry>& entry) {
   auto stopped = std::move(entry->stopped);
   entry->stopped.clear();
   for (const auto& complete : stopped) complete();
+  });
 }
 
 static void Done(const std::shared_ptr<NodeServiceEntry>& entry) {
@@ -156,10 +161,11 @@ static void Fault(const std::shared_ptr<NodeServiceEntry>& entry, const std::str
   Queue(owner, [entry] { Finish(entry); });
 }
 
-static void Deadline(const std::shared_ptr<NodeServiceEntry>& entry, const std::string& message) {
+static void Deadline(const std::shared_ptr<NodeServiceEntry>& entry, const std::string& message,
+    std::optional<std::chrono::milliseconds> remaining = std::nullopt) {
   if (entry->cancel_deadline) entry->cancel_deadline();
   const auto owner = entry->owner.lock();
-  entry->cancel_deadline = owner->platform.delay(owner->platform.lifecycle_timeout,
+  entry->cancel_deadline = owner->platform.delay(remaining.value_or(owner->platform.lifecycle_timeout),
       [entry, message] { Fault(entry, message); });
 }
 
@@ -206,8 +212,7 @@ static MuonServiceResult Result(const MuonServiceMethod& method, yyjson_val* val
       Json(yyjson_obj_get(value, "value"))), {}, {}};
   if (status != "error") throw std::invalid_argument("Unknown Node service result");
   const auto code = Field(value, "code");
-  if (code != "cancelled" && code != "unavailable" && code != "invalid-result" &&
-      code != "callback-failed" && code != "resource-exhausted" &&
+  if (!IsMuonServiceFrameworkError(code) &&
       std::find(method.errors.begin(), method.errors.end(), code) == method.errors.end())
     throw std::invalid_argument("Undeclared Node service failure");
   return {{}, code, Field(value, "message")};
@@ -256,6 +261,25 @@ static void Callback(const std::shared_ptr<NodeServiceEntry>& entry, yyjson_val*
   });
 }
 
+static void RequestIo(const std::shared_ptr<NodeServiceEntry>& entry, yyjson_val* message) {
+  const auto id = Identity(message, "id");
+  if (id <= entry->io_sequence || entry->io_requests.size() >= 64) throw std::invalid_argument("Invalid Node service I/O identity");
+  entry->io_sequence = id;
+  const MuonServiceType binary{MUON_SERVICE_VALUE_BYTES, {}, {}};
+  auto bytes = DecodeMuonServiceValue(binary, Json(yyjson_obj_get(message, "body")));
+  entry->io_requests.emplace(id, entry->io->Run({Field(message, "operation"), Json(yyjson_obj_get(message, "parameters")),
+      std::move(std::get<MuonServiceValue::Bytes>(bytes.data))}, [entry, id, binary](MuonServiceIoReply reply) {
+    entry->io_requests.erase(id);
+    if (entry->closed || !entry->fault.empty()) return;
+    try {
+      auto result = "{\"kind\":\"ioResult\",\"id\":" + Quote(std::to_string(id));
+      if (reply.code.empty()) result += ",\"metadata\":" + reply.metadata + ",\"body\":" + EncodeMuonServiceValue(binary, {std::move(reply.body)});
+      else result += ",\"error\":{\"code\":" + Quote(reply.code) + ",\"message\":" + Quote(reply.message) + "}";
+      Send(entry, result + "}");
+    } catch (const std::exception& error) { Fault(entry, error.what()); }
+  }));
+}
+
 static void Message(const std::shared_ptr<NodeServiceEntry>& entry, const std::string& json) {
   const auto document = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>(
       yyjson_read(json.data(), json.size(), 0), &yyjson_doc_free);
@@ -271,6 +295,10 @@ static void Message(const std::shared_ptr<NodeServiceEntry>& entry, const std::s
     if (!yyjson_is_true(yyjson_obj_get(message, "ok")))
       throw std::runtime_error("Node service request failed: " + Field(yyjson_obj_get(message, "error"), "message"));
     complete(yyjson_obj_get(message, "value"));
+  } else if (kind == "io") RequestIo(entry, message);
+  else if (kind == "ioCancel") {
+    const auto found = entry->io_requests.find(Identity(message, "id"));
+    if (found != entry->io_requests.end()) found->second();
   } else if (kind == "callback") Callback(entry, message);
   else if (kind == "event") {
     if (Field(message, "serviceId") != entry->spec.id || Identity(message, "generation") != entry->generation)
@@ -328,10 +356,13 @@ static cardio::promise<void> Monitor(const std::shared_ptr<NodeServiceEntry> ent
 static cardio::promise<void> StartChild(const std::shared_ptr<NodeServiceEntry> entry) {
   try {
     entry->child.session_token = CreateMuonNodeSessionToken();
-    co_await StartMuonNodeProcess(&entry->child, true, [entry] {
+    // Hand the launch operation its callback before suspending. Its owning capture
+    // must be destroyed exactly once, independently of the awaiter's lifetime.
+    auto launched = StartMuonNodeProcess(&entry->child, true, [entry] {
       ++entry->tasks;
       cardio::fire_and_forget(Monitor(entry));
     });
+    co_await launched;
     if (!entry->fault.empty()) throw std::runtime_error(entry->fault);
     ++entry->tasks;
     cardio::fire_and_forget(Read(entry));
@@ -344,7 +375,8 @@ static cardio::promise<void> StartChild(const std::shared_ptr<NodeServiceEntry> 
     Request(entry, "initialize", "{\"protocol\":\"node-service/1\",\"token\":" + Quote(entry->child.session_token) +
         ",\"projectRoot\":" + Quote(entry->spec.project) + ",\"entry\":" + Quote(entry->spec.entry) +
         ",\"id\":" + Quote(entry->spec.id) + ",\"generation\":" + Quote(std::to_string(entry->generation)) +
-        ",\"config\":" + config + ",\"dataDirectory\":" + Quote(entry->spec.data_directory) + "}",
+        ",\"startReason\":" + Quote(MuonServiceReasonName(entry->spec.start_reason)) +
+        ",\"config\":" + config + ",\"dataDirectory\":" + Quote(entry->spec.data_directory) + ",\"io\":" + entry->spec.io.policy + "}",
         [entry](yyjson_val* value) {
           if (Field(value, "protocol") != "node-service/1") throw std::invalid_argument("Unsupported Node service protocol");
           entry->interface_json = Json(yyjson_obj_get(value, "interface"));
@@ -359,6 +391,15 @@ static cardio::promise<void> StartChild(const std::shared_ptr<NodeServiceEntry> 
             started({});
           });
         });
+    if (entry->spec.signal) {
+      const auto cancel = [weak = std::weak_ptr<NodeServiceEntry>(entry)] {
+        const auto current = weak.lock();
+        if (!current || current->ready || current->closed || !current->fault.empty()) return;
+        try { Request(current, "cancelStart", "{}", [](yyjson_val*) {}); }
+        catch (const std::exception& error) { Fault(current, error.what()); }
+      };
+      if (!entry->spec.signal->Subscribe(cancel)) cancel();
+    }
   } catch (const std::exception& error) { Fault(entry, error.what()); }
   Done(entry);
 }
@@ -392,6 +433,7 @@ void MuonNodeServiceHost::Start(const MuonNodeServiceSpec& spec, uint64_t genera
   const auto entry = std::make_shared<NodeServiceEntry>();
   entry->owner = impl_;
   entry->spec = spec;
+  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post, impl_->platform.delay);
   entry->generation = generation;
   entry->child.executable_path = spec.executable;
   entry->child.bridge_path = spec.bridge;
@@ -404,24 +446,29 @@ void MuonNodeServiceHost::Start(const MuonNodeServiceSpec& spec, uint64_t genera
   });
 }
 
-void MuonNodeServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete) {
+void MuonNodeServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete, MuonServiceStopCause cause) {
   const auto found = impl_->entries.find({id, generation});
   if (found == impl_->entries.end()) { Queue(impl_, std::move(complete)); return; }
   const auto entry = found->second;
   entry->stopped.push_back(std::move(complete));
   if (entry->stopping || !entry->fault.empty()) return;
   entry->stopping = true;
-  Queue(impl_, [entry] {
+  const auto deadline = std::chrono::steady_clock::now() + impl_->platform.lifecycle_timeout;
+  cause.deadline = std::min(deadline, cause.deadline.value_or(deadline));
+  Queue(impl_, [entry, cause = std::move(cause)] {
     if (entry->closed || !entry->fault.empty()) return;
     try {
-      Deadline(entry, "Node service stop deadline exceeded");
+      const auto remaining = MuonServiceRemainingMs(cause);
+      Deadline(entry, "Node service stop deadline exceeded", std::chrono::milliseconds(remaining));
       for (const auto& [id, call] : entry->calls) {
         (void)id;
         call->cancelled = true;
         call->callbacks.clear();
         Complete(entry, call, {{}, "cancelled", "Node service stopped"});
       }
-      Request(entry, "stop", "{\"reason\":\"Service stopped\"}", [entry](yyjson_val* value) {
+      Request(entry, "stop", "{\"reason\":" + Quote(MuonServiceReasonName(cause.reason)) +
+          (cause.detail.empty() ? "" : ",\"detail\":" + Quote(cause.detail)) +
+          ",\"remainingMs\":" + std::to_string(remaining) + "}", [entry](yyjson_val* value) {
         if (!yyjson_is_true(yyjson_obj_get(value, "stopped"))) throw std::invalid_argument("Invalid Node service stop response");
         entry->stop_acknowledged = true;
       });

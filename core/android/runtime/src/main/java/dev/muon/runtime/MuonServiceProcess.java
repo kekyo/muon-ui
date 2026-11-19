@@ -8,6 +8,9 @@ package dev.muon.runtime;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
+import androidx.core.content.ContextCompat;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
@@ -85,6 +88,7 @@ final class MuonServiceProcess {
     private final Map<String, SourceStart> sourceStarts = new HashMap<>();
     private long nextWatch = 1;
     private long nativeHandle;
+    private boolean sessionEnding;
     private boolean initialized;
     private String initializationError;
     private JSONObject lastHostExit;
@@ -126,6 +130,7 @@ final class MuonServiceProcess {
             String[] libraries = new String[count];
             String[] runtimes = new String[count];
             String[] directories = new String[count];
+            String[] ioPolicies = new String[count];
             boolean[] autostarts = new boolean[count];
             String[][] configurations = new String[count][];
             String[][] pluginGrants = new String[count][];
@@ -134,6 +139,7 @@ final class MuonServiceProcess {
                 String id = entry.getKey();
                 JSONObject definition = entry.getValue();
                 String runtime = definition.getString("runtime");
+                ioPolicies[index] = definition.has("io") ? definition.getJSONObject("io").toString() : "{}";
                 String path;
                 if ("native".equals(runtime)) {
                     String library = definition.getString("library");
@@ -186,15 +192,24 @@ final class MuonServiceProcess {
                 if (path == null) throw new IllegalStateException("Service plugin is not installed: " + soname);
                 entry.put("library", path);
             }
+            // Keep the receiver on the service process Looper, including while an Activity is detached.
+            ContextCompat.registerReceiver(context, new BroadcastReceiver() {
+                @Override public void onReceive(Context receiverContext, Intent intent) {
+                    if (Intent.ACTION_SHUTDOWN.equals(intent.getAction())) {
+                        sessionEnding = true;
+                        if (nativeHandle != 0) nativeSessionEnding(nativeHandle);
+                    }
+                }
+            }, new IntentFilter(Intent.ACTION_SHUTDOWN), ContextCompat.RECEIVER_NOT_EXPORTED);
             String pluginRegistry = plugins.toString();
             MuonServiceExitHistory.load(context, handler, (history, historyError) -> {
                 lastHostExit = history;
                 if (historyError != null) Log.w("MuonNativeService", "Cannot read previous host exit: " + historyError);
                 preferences.load(ids, (overrides, error) -> {
-                    initializationError = error;
-                    if (error == null) {
+                    initializationError = sessionEnding ? "Android device shutdown" : error;
+                    if (initializationError == null) {
                         try {
-                            nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories,
+                            nativeHandle = nativeCreate(this, ids, runtimes, libraries, directories, ioPolicies,
                                     autostarts, overrides, configurations, pluginGrants, pluginRegistry);
                         } catch (RuntimeException failure) {
                             initializationError = failure.getMessage();
@@ -398,6 +413,10 @@ final class MuonServiceProcess {
     }
 
     // Called by JNI on the owner Looper. No native callback is invoked inline.
+    private void submitFileWork(long work) {
+        java.util.concurrent.ForkJoinPool.commonPool().execute(() -> nativeFileWork(work));
+    }
+
     private void postTask(long task) { handler.post(() -> nativeRunTask(nativeHandle, task)); }
 
     private void delayTask(long task, long milliseconds) {
@@ -475,13 +494,13 @@ final class MuonServiceProcess {
         nativeStartFailed(nativeHandle, id, generation, error);
     }
 
-    void runtimeStop(String id, long generation, String reason) {
-        nativeRuntimeStop(nativeHandle, id, generation, reason);
+    void runtimeStop(String id, long generation, String reason, boolean timeout) {
+        nativeRuntimeStop(nativeHandle, id, generation, reason, timeout);
     }
 
     void componentDestroyed(MuonNativeService component, String id, long generation, boolean stopped) {
         if (components.get(id) == component) components.remove(id);
-        if (!stopped) runtimeStop(id, generation, "Android destroyed the service component");
+        if (!stopped) runtimeStop(id, generation, "Android destroyed the service component", false);
     }
 
     private void onEvent(String json) {
@@ -516,8 +535,9 @@ final class MuonServiceProcess {
     }
 
     private static native long nativeCreate(MuonServiceProcess owner, String[] ids, String[] runtimes,
-            String[] libraries, String[] directories, boolean[] autostarts, int[] overrides,
+            String[] libraries, String[] directories, String[] ioPolicies, boolean[] autostarts, int[] overrides,
             String[][] configurations, String[][] pluginGrants, String pluginRegistry);
+    private static native void nativeFileWork(long work);
     private static native void nativeRunTask(long handle, long task);
     private static native void nativeActivate(long handle);
     private static native String nativeSetAutostart(long handle, String id, boolean enabled);
@@ -529,5 +549,6 @@ final class MuonServiceProcess {
     private static native String nativeSnapshot(long handle, String id);
     private static native boolean nativeForegroundReady(long handle, String id, long generation, String source, long remaining);
     private static native void nativeStartFailed(long handle, String id, long generation, String error);
-    private static native void nativeRuntimeStop(long handle, String id, long generation, String error);
+    private static native void nativeSessionEnding(long handle);
+    private static native void nativeRuntimeStop(long handle, String id, long generation, String error, boolean timeout);
 }

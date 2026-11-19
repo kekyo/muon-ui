@@ -246,6 +246,7 @@ export const buildAndroidApplication = async (
                 }),
             autostart: service.autostart,
             config: service.config,
+            ...(service.io ? { io: service.io } : {}),
             android: service.android,
           },
         ]),
@@ -326,12 +327,29 @@ export const buildAndroidApplication = async (
       2,
     ),
   );
+  const origins = input.services.flatMap(
+    (service) => service.io?.http?.origins ?? [],
+  );
+  const cleartextHosts = [
+    ...new Set(
+      origins
+        .filter((origin) => origin.startsWith("http://"))
+        .map((origin) => new URL(origin).hostname),
+    ),
+  ];
+  const permissions = new Set(input.permissions);
+  if (
+    origins.length ||
+    input.services.some((service) => service.io?.server?.listen)
+  )
+    permissions.add("android.permission.INTERNET");
   await writeFile(
     join(project, "app/src/main/AndroidManifest.xml"),
     await render(
       join(project, "AndroidManifest.xml.fc"),
       new Map<string, unknown>([
-        ["permissions", input.permissions.map(xml)],
+        ["permissions", [...permissions].map(xml)],
+        ["serviceCleartext", cleartextHosts.length > 0],
         ["notificationsEnabled", input.notifications.enabled],
         ["servicesEnabled", input.services.length > 0],
         [
@@ -349,6 +367,16 @@ export const buildAndroidApplication = async (
     ),
   );
   const resources = join(project, "app/src/main/res");
+  if (cleartextHosts.length) {
+    await mkdir(join(resources, "xml"), { recursive: true });
+    await writeFile(
+      join(resources, "xml/muon_service_network.xml"),
+      await render(
+        join(project, "service-network-security.xml.fc"),
+        new Map([["hosts", cleartextHosts.map(xml)]]),
+      ),
+    );
+  }
   await mkdir(join(resources, "values"), { recursive: true });
   await writeFile(
     join(resources, "values/strings.xml"),

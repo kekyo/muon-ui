@@ -28,6 +28,10 @@ struct MuonServiceEntry {
   uint64_t generation = 0;
   uint64_t revision = 0;
   bool resident = false;
+  muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE;
+  std::optional<muon_service_start_reason> next_reason;
+  std::optional<MuonServiceStopCause> stop;
+  std::shared_ptr<MuonServiceCancellation> signal;
   std::string error;
   std::string forced_stop_reason;
   std::map<uint64_t, MuonServiceClientReference> references;
@@ -55,7 +59,8 @@ static MuonServiceSnapshot Snapshot(const MuonServiceEntry& entry) {
   return {entry.definition.id, entry.state, entry.generation, entry.revision,
           entry.definition.user_autostart.value_or(
               entry.definition.default_autostart),
-          entry.resident, entry.references.size(), entry.error};
+          entry.resident, entry.references.size(), entry.error, entry.start_reason,
+          entry.stop.value_or(MuonServiceStopCause{}), entry.signal};
 }
 
 static MuonServiceEvent Event(MuonServiceEventKind kind,
@@ -87,6 +92,10 @@ static void StartIfNeeded(MuonServiceLifecycleImpl& impl,
     return;
   }
   ++entry.generation;
+  entry.start_reason = entry.next_reason.value_or(MUON_SERVICE_START_ACQUIRE);
+  entry.next_reason.reset();
+  entry.stop.reset();
+  entry.signal = std::make_shared<MuonServiceCancellation>();
   entry.state = MuonServiceState::Starting;
   entry.error.clear();
   entry.forced_stop_reason.clear();
@@ -98,7 +107,14 @@ static void StopIfUnused(MuonServiceLifecycleImpl& impl,
                          MuonServiceEntry& entry) {
   // An in-flight start must settle before its resources can be disposed. Its
   // completion rechecks demand instead of handing an orphan runtime to a page.
-  if (HasDemand(entry) || entry.state != MuonServiceState::Running) return;
+  if (HasDemand(entry)) return;
+  entry.next_reason.reset();
+  if (entry.state == MuonServiceState::Starting && !entry.stop) {
+    entry.stop.emplace();
+    impl.events.push_back(Event(MuonServiceEventKind::CancelStart, entry));
+  }
+  if (entry.state != MuonServiceState::Running) return;
+  if (!entry.stop) entry.stop.emplace();
   entry.state = MuonServiceState::Stopping;
   Changed(impl, entry);
   impl.events.push_back(Event(MuonServiceEventKind::Stop, entry));
@@ -173,7 +189,7 @@ static void IssueNextSave(MuonServiceLifecycleImpl& impl,
 }
 
 MuonServiceLifecycle::MuonServiceLifecycle(
-    const std::vector<MuonServiceDefinition>& definitions)
+    const std::vector<MuonServiceDefinition>& definitions, muon_service_start_reason resident_reason)
     : impl_(std::make_unique<MuonServiceLifecycleImpl>()) {
   for (const auto& definition : definitions) {
     if (definition.id.empty() || impl_->services.contains(definition.id)) {
@@ -182,6 +198,7 @@ MuonServiceLifecycle::MuonServiceLifecycle(
     auto entry = MuonServiceEntry{};
     entry.definition = definition;
     entry.resident = definition.user_autostart.value_or(definition.default_autostart);
+    if (entry.resident) entry.next_reason = resident_reason;
     impl_->services.emplace(definition.id, std::move(entry));
   }
   for (auto& [id, entry] : impl_->services) {
@@ -201,7 +218,7 @@ std::optional<MuonServiceReference> MuonServiceLifecycle::Acquire(
   if (!entry.forced_stop_reason.empty() &&
       (entry.state == MuonServiceState::Starting ||
        entry.state == MuonServiceState::Stopping)) return std::nullopt;
-  const auto current = entry.state == MuonServiceState::Starting ||
+  const auto current = (entry.state == MuonServiceState::Starting && !entry.stop) ||
                        entry.state == MuonServiceState::Running;
   if (!current && entry.generation == std::numeric_limits<uint64_t>::max()) {
     return std::nullopt;
@@ -212,6 +229,7 @@ std::optional<MuonServiceReference> MuonServiceLifecycle::Acquire(
       id, service_id, owner_id, current ? entry.generation : entry.generation + 1};
   const auto ready = entry.state == MuonServiceState::Running;
   if (entry.state == MuonServiceState::Failed) entry.forced_stop_reason.clear();
+  if (!current && !entry.next_reason) entry.next_reason = MUON_SERVICE_START_ACQUIRE;
   entry.references.emplace(id, MuonServiceClientReference{reference, ready});
   Changed(*impl_, entry);
   if (ready) {
@@ -266,7 +284,7 @@ void MuonServiceLifecycle::CompleteStart(const std::string& service_id,
     RuntimeExited(service_id, generation, error);
     return;
   }
-  if (!entry.forced_stop_reason.empty()) {
+  if (entry.stop) {
     entry.state = MuonServiceState::Stopping;
     Changed(*impl_, entry);
     impl_->events.push_back(Event(MuonServiceEventKind::Stop, entry));
@@ -309,13 +327,18 @@ void MuonServiceLifecycle::CompleteStop(const std::string& service_id,
 
 void MuonServiceLifecycle::RequestRuntimeStop(const std::string& service_id,
                                               uint64_t generation,
-                                              const std::string& reason) {
+                                              const std::string& reason, MuonServiceStopCause cause) {
   const auto found = impl_->services.find(service_id);
   if (found == impl_->services.end()) return;
   auto& entry = found->second;
   if (entry.generation != generation || entry.state == MuonServiceState::Stopped ||
       entry.state == MuonServiceState::Failed ||
       !entry.forced_stop_reason.empty()) return;
+  if (!entry.stop) {
+    entry.stop = std::move(cause);
+    if (entry.state == MuonServiceState::Starting)
+      impl_->events.push_back(Event(MuonServiceEventKind::CancelStart, entry));
+  }
   entry.forced_stop_reason = reason.empty() ? "OS stopped service" : reason;
   entry.error = entry.forced_stop_reason;
   RemoveReferences(*impl_, entry, true, entry.error);
@@ -344,7 +367,7 @@ void MuonServiceLifecycle::RuntimeExited(const std::string& service_id,
   // New demand received during a normal stop is an explicit acquisition or
   // policy change. It may proceed once the old process has actually exited.
   // A running/starting failure never retries a retained resident reference.
-  if (was_stopping && entry.forced_stop_reason.empty()) StartIfNeeded(*impl_, entry);
+  if ((was_stopping || entry.stop) && entry.forced_stop_reason.empty()) StartIfNeeded(*impl_, entry);
 }
 
 uint64_t MuonServiceLifecycle::SetAutostart(const std::string& service_id,
@@ -376,19 +399,28 @@ void MuonServiceLifecycle::CompleteAutostart(const std::string& service_id,
     entry.revision = request.id;
     entry.resident = request.enabled && !impl_->closing;
     Changed(*impl_, entry);
-    if (entry.resident && !was_resident) StartIfNeeded(*impl_, entry);
+    if (entry.resident && !was_resident) {
+      if ((entry.state != MuonServiceState::Running && entry.state != MuonServiceState::Starting) || entry.stop)
+        if (!entry.next_reason) entry.next_reason = MUON_SERVICE_START_AUTOSTART_ENABLED;
+      StartIfNeeded(*impl_, entry);
+    }
     StopIfUnused(*impl_, entry);
   }
   SettingResult(*impl_, entry, request, error);
   IssueNextSave(*impl_, entry);
 }
 
-void MuonServiceLifecycle::Shutdown(const std::string& reason) {
+void MuonServiceLifecycle::Shutdown(const std::string& reason, MuonServiceStopCause cause) {
   if (impl_->closing) return;
   impl_->closing = true;
   const auto diagnostic = reason.empty() ? "service host is shutting down" : reason;
   for (auto& [id, entry] : impl_->services) {
     entry.resident = false;
+    if (!entry.stop) {
+      entry.stop = cause;
+      if (entry.state == MuonServiceState::Starting)
+        impl_->events.push_back(Event(MuonServiceEventKind::CancelStart, entry));
+    }
     RemoveReferences(*impl_, entry, true, diagnostic);
     Changed(*impl_, entry);
     StopIfUnused(*impl_, entry);

@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-/** Browser-owned listeners with independently releasable page handler bindings.
+/** Owner-scoped listeners with independently releasable page handler bindings.
  * All operations run on the dispatcher that creates the service.
  */
 struct MuonServerService {
@@ -20,11 +20,11 @@ struct MuonServerService {
    */
   std::function<cardio::promise<std::vector<uint8_t>>(
       std::string, std::vector<uint8_t>, std::string)> dispatch;
-  /** Releases this page's handlers and asynchronously closes its listeners. */
+  /** Releases this owner's handlers and asynchronously closes its listeners. */
   std::function<void(const std::string&)> release_owner;
   /** Stops accepting commands and awaits every listener and connection. */
   std::function<cardio::promise<void>()> stop;
 };
 
-/** Creates the CEF server service on the current cardio dispatcher. */
-std::shared_ptr<MuonServerService> CreateMuonServerService();
+/** Creates a server service on the current cardio dispatcher. @param valid_origin Verifies each serialized origin. */
+std::shared_ptr<MuonServerService> CreateMuonServerService(std::function<bool(const std::string&)> valid_origin);

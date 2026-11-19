@@ -143,7 +143,7 @@ export const startMuonDevelopmentServices = async (
           throw new Error("Development session ended during startup");
         const oldSnapshot = currentSnapshot;
         try {
-          await current?.stop();
+          await current?.stop(true);
         } finally {
           current = undefined;
         }
@@ -157,6 +157,7 @@ export const startMuonDevelopmentServices = async (
           join(profilePath, "services"),
           environment,
           signal,
+          oldSnapshot !== undefined,
         );
         current = candidate;
         await candidate.ready;
@@ -273,6 +274,7 @@ const launchHost = (
   dataRoot: string,
   environment: NodeJS.ProcessEnv,
   signal: AbortSignal,
+  updated: boolean,
 ) => {
   const host = spawn(
     join(runtimePath, windows ? "muon-service-host.exe" : "muon-service-host"),
@@ -284,7 +286,7 @@ const launchHost = (
       "--data-root",
       dataRoot,
       "--bootstrap",
-      "development",
+      updated ? "development-update" : "development",
     ],
     {
       cwd: runtimePath,
@@ -333,7 +335,9 @@ const launchHost = (
         `muon development service host ${forced ? "exceeded its 15 second stop deadline" : "failed"}: ${stopFailure ?? processError?.message ?? host.signalCode ?? host.exitCode}${diagnostic ? "\n" + diagnostic.trim() : ""}`,
       );
   };
-  const stop = async () => {
+  const stop = async (updating = false) => {
+    if (updating && !stopping && !host.stdin!.writableEnded)
+      host.stdin!.write("u");
     beginStop();
     await checkExit();
   };

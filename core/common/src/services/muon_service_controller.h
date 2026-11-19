@@ -42,9 +42,10 @@ struct MuonServiceControllerImpl;
 class MuonServiceController final {
  public:
   /** @param definitions Manifest services and loaded user preferences.
-   *  @param backend Runtime, storage, and client notification adapters. */
+   *  @param backend Runtime, storage, and client notification adapters.
+   *  @param resident_reason Launch cause for services with a saved resident reference. */
   MuonServiceController(const std::vector<MuonServiceDefinition>& definitions,
-                         MuonServiceBackend backend);
+                         MuonServiceBackend backend, muon_service_start_reason resident_reason = MUON_SERVICE_START_APP);
   /** Requires a quiescent backend and settled lifecycle. */
   ~MuonServiceController();
   /** Controller identity cannot be copied. */
@@ -74,7 +75,7 @@ class MuonServiceController final {
    *  @param generation Generation reported by the platform.
    *  @param reason OS restriction or deadline diagnostic. */
   void RequestRuntimeStop(const std::string& id, uint64_t generation,
-                          const std::string& reason);
+                          const std::string& reason, MuonServiceStopCause cause = {MUON_SERVICE_STOP_HOST});
   /** Reports a runtime failure after all resources of that generation are gone.
    *  @param id Configured service identity.
    *  @param generation Terminated runtime generation.
@@ -82,8 +83,9 @@ class MuonServiceController final {
   void RuntimeExited(const std::string& id, uint64_t generation,
                      const std::string& reason);
   /** Ends the whole application without rewriting saved preferences.
-   *  @param reason Diagnostic sent to invalidated clients. */
-  void Shutdown(const std::string& reason);
+   *  @param reason Diagnostic sent to invalidated clients.
+   *  @param cause Stop observation delivered to each active generation. */
+  void Shutdown(const std::string& reason, MuonServiceStopCause cause = {MUON_SERVICE_STOP_HOST});
   /** @param reference Exact owner-bound reference to check.
    *  @return True only for a currently callable exact reference. */
   bool IsReady(const MuonServiceReference& reference) const;

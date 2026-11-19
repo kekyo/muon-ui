@@ -6,6 +6,7 @@
 
 #include "services/muon_native_service_host.h"
 
+#include <yyjson.h>
 #include <cassert>
 #include <algorithm>
 #include <cstring>
@@ -23,6 +24,14 @@ struct MuonNativeServiceEntry final
   std::vector<muon_plugin_config_entry> config;
   muon_service_host host{};
   muon_service_context context{};
+  muon_service_signal signal{};
+  std::shared_ptr<MuonServiceCancellation> cleanup = std::make_shared<MuonServiceCancellation>();
+  std::unique_ptr<MuonServiceIo> io;
+  muon_service_io io_table{};
+  muon_service_signal cleanup_signal{};
+  MuonServiceStopCause stop_cause{};
+  muon_service_stop_info stop_info{};
+  std::function<void()> cancel_deadline;
   std::shared_ptr<const muon_service_factory> factory;
   muon_service_instance instance{};
   MuonNativeInstanceState state = MuonNativeInstanceState::Starting;
@@ -50,6 +59,8 @@ struct MuonNativeServiceCall {
   std::weak_ptr<MuonNativeServiceCall> self;
   std::weak_ptr<MuonNativeServiceEntry> entry;
   muon_service_call_context context{};
+  std::shared_ptr<MuonServiceCancellation> source = std::make_shared<MuonServiceCancellation>();
+  muon_service_signal signal{};
   std::string method;
   const MuonServiceMethod* signature = nullptr;
   std::unique_ptr<MuonNativeServiceValues> arguments;
@@ -89,10 +100,62 @@ static MuonServiceResult Failure(const std::string& code, const std::string& mes
   return {{}, code, message};
 }
 
+static muon_service_signal NativeSignal(MuonServiceCancellation& source) {
+  return {&source, [](void* data) -> int { return static_cast<MuonServiceCancellation*>(data)->aborted; },
+      [](void* data, void (*notify)(void*), void* user) -> uint64_t {
+        return notify ? static_cast<MuonServiceCancellation*>(data)->Subscribe([notify, user] { notify(user); }) : 0;
+      }, [](void* data, uint64_t id) { static_cast<MuonServiceCancellation*>(data)->listeners.erase(id); }};
+}
+
+static void RequestIo(void* data, const muon_service_io_request* request,
+    muon_service_io_completion completion, void* completion_data) {
+  const auto entry = static_cast<MuonNativeServiceEntry*>(data)->shared_from_this();
+  const auto owner = entry->owner.lock();
+  if (!completion) return;
+  auto complete = [entry, completion, completion_data](MuonServiceIoReply reply) {
+    std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> document(
+        reply.metadata.starts_with('{') ? yyjson_read(reply.metadata.data(), reply.metadata.size(), 0) : nullptr, yyjson_doc_free);
+    const muon_service_io_result result{MUON_SERVICE_ABI_VERSION, sizeof(muon_service_io_result),
+        reply.metadata.c_str(), reply.body.data(), reply.body.size(), reply.code.empty() ? nullptr : reply.code.c_str(),
+        reply.message.empty() ? nullptr : reply.message.c_str(),
+        yyjson_doc_get_root(document.get()),
+        [](const void* fields, const char* key) { return yyjson_get_str(yyjson_obj_get(static_cast<yyjson_val*>(const_cast<void*>(fields)), key)); },
+        [](const void* fields, const char* key) { return static_cast<int>(yyjson_is_true(yyjson_obj_get(static_cast<yyjson_val*>(const_cast<void*>(fields)), key))); }};
+    completion(completion_data, &result);
+  };
+  auto source = std::shared_ptr<MuonServiceCancellation>{};
+  if (request && request->abi_version == MUON_SERVICE_ABI_VERSION && request->size >= sizeof(*request) &&
+      request->operation && request->parameters_json && (request->body || !request->body_size)) {
+    if (request->signal == &entry->signal) source = entry->spec.signal;
+    else if (request->signal == &entry->cleanup_signal && entry->stop_called) source = entry->cleanup;
+    else for (const auto& [id, call] : entry->calls) if (request->signal == &call->signal) { source = call->source; break; }
+  }
+  if (!source || source->aborted || (source != entry->cleanup && entry->spec.signal->aborted)) {
+    const auto code = source ? "cancelled" : "invalid-input";
+    Queue(owner, [complete = std::move(complete), code] { complete({"null", {}, code, "Invalid or cancelled service I/O request"}); });
+    return;
+  }
+  if (request->body_size > 1024 * 1024) {
+    Queue(owner, [complete] { complete({"null", {}, "size-limit", "Service I/O body exceeds 1 MiB"}); });
+    return;
+  }
+  MuonServiceIoRequest operation{request->operation, request->parameters_json, {}};
+  if (request->body_size) operation.body.assign(request->body, request->body + request->body_size);
+  const auto subscription = std::make_shared<uint64_t>(0);
+  auto cancel = entry->io->Run(std::move(operation), [source, subscription, complete = std::move(complete)](MuonServiceIoReply reply) {
+    source->listeners.erase(*subscription);
+    complete(std::move(reply));
+  });
+  *subscription = source->Subscribe(std::move(cancel));
+}
+
 static void MaybeStop(const std::shared_ptr<MuonNativeServiceEntry>& entry) {
   if (entry->state == MuonNativeInstanceState::Stopping && entry->calls.empty() && !entry->stop_called) {
     entry->stop_called = true;
-    entry->instance.stop(entry->instance.user_data, &NativeStopped, entry.get());
+    const auto& cause = entry->stop_cause;
+    entry->stop_info = {MUON_SERVICE_ABI_VERSION, sizeof(muon_service_stop_info), cause.reason,
+        cause.detail.empty() ? nullptr : cause.detail.c_str(), MuonServiceRemainingMs(cause), &entry->cleanup_signal};
+    entry->instance.stop(entry->instance.user_data, &entry->stop_info, &NativeStopped, entry.get());
   }
 }
 
@@ -117,11 +180,6 @@ static std::string Diagnostic(const char* text) {
   return std::get<std::string>(CopyMuonServiceValue(value).data);
 }
 
-static bool CommonError(const std::string& code) {
-  return code == "cancelled" || code == "unavailable" || code == "invalid-result" ||
-      code == "callback-failed" || code == "resource-exhausted";
-}
-
 static MuonServiceResult CheckResult(MuonServiceResult result, const MuonServiceType& type,
                                      const std::vector<std::string>& errors) {
   try {
@@ -129,7 +187,7 @@ static MuonServiceResult CheckResult(MuonServiceResult result, const MuonService
       EncodeMuonServiceValue(type, *result.value);
       return result;
     }
-    if (!result.value && !result.code.empty() && (CommonError(result.code) ||
+    if (!result.value && !result.code.empty() && (IsMuonServiceFrameworkError(result.code) ||
         std::find(errors.begin(), errors.end(), result.code) != errors.end())) {
       Diagnostic(result.message.c_str());
       return result;
@@ -172,6 +230,7 @@ static void NativeCallCompleted(void* data, const muon_service_value* value,
     result = CheckResult(std::move(result), call->signature->signature.returns, call->signature->errors);
   } catch (const std::exception&) {}
   call->returned = true;
+  call->source->Cancel();
   if (!call->callbacks.empty()) {
     result = Failure("invalid-result", "Native service completed before draining its callbacks");
     entry->pending_callbacks -= call->callbacks.size();
@@ -227,6 +286,7 @@ static void CancelCall(const std::shared_ptr<MuonNativeServiceEntry>& entry,
                         const std::shared_ptr<MuonNativeServiceCall>& call) {
   if (call->returned || call->cancelled) return;
   call->cancelled = true;
+  call->source->Cancel();
   DeliverResult(call, Failure("cancelled", "Service invocation was cancelled"));
   for (const auto& [id, request] : call->callbacks) {
     CompleteCallback(call, request, Failure("cancelled", "Parent service invocation was cancelled"));
@@ -296,9 +356,11 @@ static void NativeStarted(void* data, const muon_service_instance* instance,
       return;
     }
     auto complete = std::move(entry->started);
-    if (failure.empty()) entry->state = MuonNativeInstanceState::Running;
-    else impl->entries.erase(entry->spec.id);
-    complete(failure);
+    if (failure.empty()) { entry->state = MuonNativeInstanceState::Running; complete(failure); }
+    else entry->io->Close([impl, entry, complete = std::move(complete), failure] {
+      impl->entries.erase(entry->spec.id);
+      complete(failure);
+    });
   });
 }
 
@@ -307,6 +369,9 @@ static void NativeStopped(void* data) {
   const auto impl = entry->owner.lock();
   assert(impl);
   Queue(impl, [impl, entry] {
+    if (entry->cancel_deadline) entry->cancel_deadline();
+    entry->cleanup->Cancel();
+    entry->io->Close([impl, entry] {
     impl->entries.erase(entry->spec.id);
     if (!entry->startup_failure.empty()) {
       auto complete = std::move(entry->started);
@@ -314,6 +379,7 @@ static void NativeStopped(void* data) {
     }
     auto completions = std::move(entry->stopped);
     for (const auto& complete : completions) complete();
+    });
   });
 }
 
@@ -371,16 +437,21 @@ void MuonNativeServiceHost::Start(
     entry->config.push_back({key.c_str(), value.c_str()});
   }
   entry->host = {entry.get(), &PostNativeTask, &LogNativeMessage, &EmitEvent};
+  if (!entry->spec.signal) entry->spec.signal = std::make_shared<MuonServiceCancellation>();
+  entry->signal = NativeSignal(*entry->spec.signal);
+  entry->cleanup_signal = NativeSignal(*entry->cleanup);
+  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post, impl_->platform.delay);
+  entry->io_table = {MUON_SERVICE_ABI_VERSION, sizeof(muon_service_io), entry.get(), &RequestIo};
   entry->context = {&entry->host, entry->spec.id.c_str(), generation,
                     entry->spec.data_directory.c_str(),
                     static_cast<int32_t>(entry->config.size()),
-                    entry->config.empty() ? nullptr : entry->config.data()};
+                    entry->config.empty() ? nullptr : entry->config.data(), spec.start_reason, &entry->signal, &entry->io_table};
   impl_->entries.emplace(spec.id, entry);
   entry->factory->start(&entry->context, &NativeStarted, entry.get());
 }
 
 void MuonNativeServiceHost::Stop(const std::string& id, uint64_t generation,
-                                std::function<void()> complete) {
+                                std::function<void()> complete, MuonServiceStopCause cause) {
   const auto found = impl_->entries.find(id);
   if (found == impl_->entries.end() ||
       found->second->context.generation != generation) {
@@ -394,6 +465,14 @@ void MuonNativeServiceHost::Stop(const std::string& id, uint64_t generation,
   entry->stopped.push_back(std::move(complete));
   if (entry->state == MuonNativeInstanceState::Stopping) return;
   entry->state = MuonNativeInstanceState::Stopping;
+  entry->spec.signal->Cancel();
+  entry->stop_cause = std::move(cause);
+  if (entry->stop_cause.deadline && impl_->platform.delay) {
+    const auto remaining = MuonServiceRemainingMs(entry->stop_cause);
+    if (remaining == 0) entry->cleanup->Cancel();
+    else entry->cancel_deadline = impl_->platform.delay(std::chrono::milliseconds(remaining),
+        [entry] { entry->cleanup->Cancel(); });
+  }
   for (const auto& [id, call] : entry->calls) CancelCall(entry, call);
   MaybeStop(entry);
 }
@@ -445,7 +524,8 @@ uint64_t MuonNativeServiceHost::Invoke(const std::string& id, uint64_t generatio
   call->callback = std::move(callback);
   call->complete = std::move(complete);
   const auto identity = ++impl_->next_call;
-  call->context = {identity, call.get(), &RequestCallback};
+  call->signal = NativeSignal(*call->source);
+  call->context = {identity, call.get(), &RequestCallback, &call->signal};
   entry->calls.emplace(identity, call);
   const auto values = call->arguments->Get();
   entry->instance.invoke(entry->instance.user_data, &call->context, call->method.c_str(),

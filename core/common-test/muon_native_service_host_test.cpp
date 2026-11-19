@@ -17,6 +17,7 @@ struct TestInstance {
   muon_service_stop_completion stopped = nullptr;
   void* stop_data = nullptr;
   int stop_calls = 0;
+  const muon_service_stop_info* info = nullptr;
 };
 
 static std::vector<std::unique_ptr<TestInstance>> instances;
@@ -28,10 +29,11 @@ static void Start(const muon_service_context* context,
       TestInstance{context, complete, data, nullptr, nullptr, 0}));
 }
 
-static void Stop(void* data, muon_service_stop_completion complete,
+static void Stop(void* data, const muon_service_stop_info* info, muon_service_stop_completion complete,
                  void* completion_data) {
   auto& instance = *static_cast<TestInstance*>(data);
   ++instance.stop_calls;
+  instance.info = info;
   instance.stopped = complete;
   instance.stop_data = completion_data;
 }
@@ -85,7 +87,7 @@ int main() {
     if (error.empty()) ++started;
     else errors.push_back(error);
   };
-  const auto a = MuonNativeServiceSpec{"alpha", "shared", "/private/alpha", {{"key", "value"}}};
+  const auto a = MuonNativeServiceSpec{"alpha", "shared", "/private/alpha", {{"key", "value"}}, MUON_SERVICE_START_LOGIN_AUTOSTART};
   const auto b = MuonNativeServiceSpec{"beta", "shared", "/private/beta", {}};
   host.Start(a, 1, completed);
   host.Start(b, 1, completed);
@@ -113,9 +115,14 @@ int main() {
   host.Stop("alpha", 7, [&] { ++stopped; });
   pump();
   Require(stopped == 1 && instances[0]->stop_calls == 0, "stale stop must not stop a live generation");
-  host.Stop("alpha", 1, [&] { ++stopped; });
+  host.Stop("alpha", 1, [&] { ++stopped; }, {MUON_SERVICE_STOP_SESSION_ENDING, "logoff"});
   host.Stop("alpha", 1, [&] { ++stopped; });
   Require(instances[0]->stop_calls == 1, "repeated stop must share one asynchronous cleanup");
+  const auto info = instances[0]->info;
+  Require(context->start_reason == MUON_SERVICE_START_LOGIN_AUTOSTART && context->signal->aborted(context->signal->user_data) &&
+          info->abi_version == MUON_SERVICE_ABI_VERSION && info->size == sizeof(*info) &&
+          info->reason == MUON_SERVICE_STOP_SESSION_ENDING && std::string(info->detail) == "logoff" &&
+          !info->signal->aborted(info->signal->user_data), "native cleanup observes the platform reason and a fresh signal");
   instances[0]->stopped(instances[0]->stop_data);
   Require(stopped == 1 && library_alive, "native stop must return before host cleanup");
   pump();

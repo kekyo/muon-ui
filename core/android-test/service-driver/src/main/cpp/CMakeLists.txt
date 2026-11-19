@@ -25,3 +25,21 @@ target_compile_options(muon_test_plugin_cardio PRIVATE -Wall -Wextra -Wpedantic 
 target_include_directories(muon_test_plugin_cardio PRIVATE "${MUON_REPOSITORY_ROOT}/sdk/include")
 target_link_libraries(muon_test_plugin_cardio PRIVATE muon_cardio)
 target_link_options(muon_test_plugin_cardio PRIVATE -Wl,-z,max-page-size=16384)
+
+add_library(muon_native_state SHARED "${MUON_REPOSITORY_ROOT}/sdk/examples/services/native-state.c")
+target_compile_features(muon_native_state PRIVATE c_std_99)
+target_compile_options(muon_native_state PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_include_directories(muon_native_state PRIVATE "${MUON_REPOSITORY_ROOT}/sdk/include")
+target_link_options(muon_native_state PRIVATE -Wl,-z,max-page-size=16384)
+
+add_library(muon_native_http SHARED "${MUON_REPOSITORY_ROOT}/sdk/examples/services/native-http.c")
+target_compile_features(muon_native_http PRIVATE c_std_99)
+target_compile_options(muon_native_http PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_include_directories(muon_native_http PRIVATE "${MUON_REPOSITORY_ROOT}/sdk/include")
+target_link_options(muon_native_http PRIVATE -Wl,-z,max-page-size=16384)
+
+add_library(muon_native_server SHARED "${MUON_REPOSITORY_ROOT}/sdk/examples/services/native-server.c")
+target_compile_features(muon_native_server PRIVATE c_std_99)
+target_compile_options(muon_native_server PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_include_directories(muon_native_server PRIVATE "${MUON_REPOSITORY_ROOT}/sdk/include")
+target_link_options(muon_native_server PRIVATE -Wl,-z,max-page-size=16384)

@@ -114,6 +114,7 @@ it.skipIf(process.platform === 'win32').each(['stop', 'disconnect'] as const)(
         entry: './service.mjs',
         id: 'worker',
         generation: '9',
+        startReason: 'acquire',
         dataDirectory: root,
         config: { origin: `http://127.0.0.1:${address.port}`, marker },
       };
@@ -250,7 +251,7 @@ it.skipIf(process.platform === 'win32').each(['stop', 'disconnect'] as const)(
       const stopping = once(observer, 'request');
       const stopped =
         termination === 'stop'
-          ? request('stop', { reason: 'test complete' })
+          ? request('stop', { reason: 'app-exit' })
           : undefined;
       if (termination === 'disconnect') socket.end();
       const [stopRequest, stopResponse] = await stopping;
@@ -275,7 +276,11 @@ it.skipIf(process.platform === 'win32').each(['stop', 'disconnect'] as const)(
       ]);
       if (termination === 'disconnect')
         expect(diagnostic).toContain('Service host disconnected');
-      expect(await readFile(marker, 'utf8')).toBe('cleanup completed');
+      expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual([
+        '9',
+        'acquire',
+        termination === 'stop' ? 'app-exit' : 'host-stop',
+      ]);
     } finally {
       socket.destroy();
       if (child.exitCode === null && child.signalCode === null) {

@@ -16,6 +16,7 @@ struct MuonServiceProcessOptions {
   std::string data_root; /**< Private persistent service data directory. */
   std::string startup{}; /**< Trusted login command metadata, empty for standalone drivers. */
   bool connect_only = false; /**< An external supervisor owns this host; never launch a replacement. */
+  bool login_launch = false; /**< The desktop login registration launched this application. */
 };
 
 /** Non-owning startup connection; destroying it never kills resident services. */

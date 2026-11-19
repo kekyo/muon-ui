@@ -155,7 +155,7 @@ bool MuonServiceProtocol::Receive(const std::string& owner, const std::string& j
         send_(owner, error.empty() ? Reply(request, "null") : Failure(request, "persistence-failed", error));
       });
     } else if (op == "shutdown") {
-      controller_.Shutdown("application exit");
+      controller_.Shutdown("application exit", {MUON_SERVICE_STOP_APP_EXIT});
       if (communication_.shutdown) communication_.shutdown();
       send_(owner, Reply(request, "null"));
     } else if (op == "acquire") {

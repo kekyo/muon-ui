@@ -1,4 +1,11 @@
+import { createServiceServer, type ServiceServer } from './service-server.ts';
+import { createServiceHttp, type ServiceHttpClient } from './service-http.ts';
 import { parseServiceInterface } from './service-interface.ts';
+import {
+  createServiceFiles,
+  type ServiceFileSystem,
+  type ServiceIoBridge,
+} from './service-io.ts';
 import type {
   ServiceArguments,
   ServiceInterface,
@@ -27,14 +34,49 @@ export type ServiceRuntimeResult =
       /** Human-readable diagnostic. */ readonly message: string;
     };
 
+const startReasons = [
+  'acquire',
+  'app-start',
+  'login-autostart',
+  'autostart-enabled',
+  'development-update',
+] as const;
+const stopReasons = [
+  'reference-released',
+  'app-exit',
+  'session-ending',
+  'development-update',
+  'development-exit',
+  'execution-timeout',
+  'host-stop',
+] as const;
+
+/** The demand that started this generation, fixed until it stops. */
+export type ServiceStartReason = (typeof startReasons)[number];
+/** The first termination request accepted by the host for this generation. */
+export type ServiceStopReason = (typeof stopReasons)[number];
+
+/** Host observation passed to the runtime at the beginning of shutdown. */
+export interface ServiceStopRequest {
+  /** Why this generation is stopping. */ readonly reason: ServiceStopReason;
+  /** Additional platform information when available. */ readonly detail?: string;
+  /** Remaining cleanup time in milliseconds when the host has a deadline. */ readonly remainingMs?: number;
+}
+
+/** Information passed to the author's cleanup handler. */
+export interface ServiceStopInfo extends ServiceStopRequest {
+  /** Cancels cleanup I/O when the host deadline expires. */ readonly signal: ServiceCancellationSignal;
+}
+
 /** Immutable host inputs for one logical service generation. */
 export interface ServiceRuntimeInput {
+  /** Why the host started this generation. */ readonly startReason: ServiceStartReason;
   /** Configured logical service name. */ readonly id: string;
   /** Positive decimal uint64 generation. */ readonly generation: string;
   /** Application-owned configuration strings. */ readonly config: Readonly<
     Record<string, string>
   >;
-  /** Host-owned private directory; no filesystem API is implied. */ readonly dataDirectory: string;
+  /** Absolute service-private directory. */ readonly dataDirectory: string;
 }
 
 /** Invocation-scoped cancellation; no page owner or native pointer is exposed. */
@@ -47,6 +89,9 @@ export interface ServiceInvocationContext {
 export interface ServiceStartContext<
   Definition extends ServiceInterface,
 > extends ServiceRuntimeInput {
+  /** Local listeners and connections owned by this generation. */ readonly server: ServiceServer;
+  /** Outbound HTTP and HTTPS with per-origin permissions. */ readonly http: ServiceHttpClient;
+  /** Permission-checked files, private to the service unless explicitly shared. */ readonly fs: ServiceFileSystem;
   /** Aborted when service shutdown begins, including shutdown during start. */ readonly signal: ServiceCancellationSignal;
   /**
    * Publishes an event while this instance is running.
@@ -75,10 +120,10 @@ export interface ServiceImplementation<Definition extends ServiceInterface> {
   /** Exactly the methods described by the shared interface. */ readonly methods: ServiceMethods<Definition>;
   /**
    * Releases instance resources after real invocations and callbacks have drained.
-   * @param reason - Host-provided stop reason; the first request wins.
+   * @param info - First accepted reason and cancellation signal for cleanup.
    * @returns Completion after every author-owned resource is released.
    */
-  readonly stop: (reason: string) => void | Promise<void>;
+  readonly stop: (info: ServiceStopInfo) => void | Promise<void>;
 }
 
 /** Portable service entry point. @typeParam Definition - Shared literal schema. */
@@ -98,6 +143,7 @@ export interface ServiceDefinition<Definition extends ServiceInterface> {
 
 /** Environment-specific delivery; all values here use the shared JSON codec. */
 export interface ServiceRuntimeBridge {
+  /** Performs permission-checked I/O for this generation. */ readonly io?: ServiceIoBridge;
   /**
    * Calls a page function within its pending parent invocation.
    * @param callId - Host invocation identity.
@@ -143,14 +189,16 @@ export interface ServiceRuntime {
    * @param callId - Invocation identity; already completed calls are ignored.
    */
   readonly cancel: (callId: string) => void;
+  /** Cancels asynchronous initialization when demand is withdrawn during startup. */
+  readonly cancelStart: () => void;
   /**
    * Closes admission, cancels active calls, drains them, then awaits author cleanup.
-   * @param reason - Host-provided stop reason; the first request wins.
+   * @param request - First accepted reason, platform detail and remaining time.
    * @returns The shared shutdown completion.
    * @remarks This adapter never fabricates completion for pending author promises.
    * The embedding host owns deadlines and runtime interruption.
    */
-  readonly stop: (reason: string) => Promise<void>;
+  readonly stop: (request: ServiceStopRequest) => Promise<void>;
 }
 
 const deferred = <T>() => {
@@ -188,6 +236,15 @@ const commonErrors = new Set([
   'invalid-result',
   'callback-failed',
   'resource-exhausted',
+  'permission-denied',
+  'not-found',
+  'io-error',
+  'invalid-input',
+  'timeout',
+  'size-limit',
+  'tls-error',
+  'network-error',
+  'redirect-limit',
 ]);
 const diagnostic = (
   error: unknown,
@@ -296,6 +353,41 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
   let instance: ServiceImplementation<Definition> | undefined;
   let startup: Promise<void> | undefined, shutdown: Promise<void> | undefined;
   const calls = new Map<string, Invocation>();
+  const operations = new Set<{ cancel: () => void; done: Promise<void> }>();
+  let cleanupSignal: ServiceCancellationSignal | undefined;
+  const io: ServiceIoBridge = async (name, parameters, body, signal) => {
+    if (
+      signal.aborted ||
+      phase === 'failed' ||
+      phase === 'stopped' ||
+      (source.signal.aborted && (!cleanupSignal || signal !== cleanupSignal))
+    )
+      throw failure('cancelled', 'Service I/O was cancelled');
+    if (!bridge.io)
+      throw failure('permission-denied', 'Service I/O is unavailable');
+    if (body.byteLength > 1024 * 1024)
+      throw failure('size-limit', 'Service I/O body exceeds 1 MiB');
+    if (operations.size >= 64)
+      throw failure('resource-exhausted', 'Too many service I/O operations');
+    const operation = cancellation();
+    const drained = deferred<void>();
+    const pending = { cancel: operation.abort, done: drained.promise };
+    operations.add(pending);
+    try {
+      signal.addEventListener('abort', operation.abort, { once: true });
+      return await bridge.io(name, parameters, body, operation.signal);
+    } finally {
+      signal.removeEventListener('abort', operation.abort);
+      operation.clear();
+      operations.delete(pending);
+      drained.resolve();
+    }
+  };
+  const drainIo = async () => {
+    const pending = [...operations];
+    for (const operation of pending) operation.cancel();
+    await Promise.all(pending.map((operation) => operation.done));
+  };
   let callbacks = 0;
   const cancelCall = (call: Invocation) => {
     if (call.cancelled) return;
@@ -321,6 +413,8 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           Array.isArray(input.config)
         )
           throw new TypeError('Invalid service configuration');
+        if (!startReasons.includes(input.startReason))
+          throw new TypeError('Invalid service start reason');
         const config = Object.freeze(
           Object.fromEntries(
             Object.entries(input.config).map(([key, value]) => [
@@ -332,9 +426,13 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
         const context: ServiceStartContext<Definition> = Object.freeze({
           id: text(input.id),
           generation: identity(input.generation),
+          startReason: input.startReason,
           dataDirectory: text(input.dataDirectory),
           config,
           signal: source.signal,
+          server: createServiceServer(io, source.signal),
+          http: createServiceHttp(io, source.signal),
+          fs: createServiceFiles(io, source.signal),
           emit: (
             event: keyof Definition['events'] & string,
             value: unknown
@@ -368,11 +466,13 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           )
         )
           throw new TypeError('Service methods do not match the interface');
-        if (phase === 'starting') phase = 'running';
+        if (phase === 'starting')
+          phase = source.signal.aborted ? 'stopping' : 'running';
         started.resolve();
       } catch (error) {
         phase = 'failed';
         source.abort();
+        await drainIo();
         started.reject(error);
       }
     };
@@ -525,12 +625,36 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
     const call = calls.get(id);
     if (call) cancelCall(call);
   };
-  const stop: ServiceRuntime['stop'] = (reason) => {
+  const stop: ServiceRuntime['stop'] = (request) => {
     if (shutdown) return shutdown;
+    if (
+      !request ||
+      !stopReasons.includes(request.reason) ||
+      (request.remainingMs !== undefined &&
+        (!Number.isSafeInteger(request.remainingMs) ||
+          request.remainingMs < 0 ||
+          request.remainingMs > 2147483647))
+    )
+      return Promise.reject(new TypeError('Invalid service stop request'));
+    const { reason, detail, remainingMs } = request;
+    const deadline =
+      remainingMs === undefined ? undefined : Date.now() + remainingMs;
+    const cleanup = cancellation();
     const stopped = deferred<void>();
     shutdown = stopped.promise;
+    let outcome: { error: unknown } | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (remainingMs !== undefined) {
+      try {
+        timer = setTimeout(cleanup.abort, remainingMs);
+      } catch {
+        // QuickJS imposes a per-instance timer quota. Cleanup still runs once.
+        cleanup.abort();
+      }
+    }
     phase = 'stopping';
     source.abort();
+    for (const operation of operations) operation.cancel();
     for (const call of calls.values()) cancelCall(call);
     const run = async () => {
       try {
@@ -542,19 +666,46 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           }
         }
         await Promise.all([...calls.values()].map((call) => call.done.promise));
-        if (instance && typeof instance.stop === 'function')
-          await instance.stop(reason);
+        await drainIo();
+        if (instance && typeof instance.stop === 'function') {
+          const left =
+            deadline === undefined
+              ? undefined
+              : Math.max(0, Math.min(remainingMs!, deadline - Date.now()));
+          if (left === 0) cleanup.abort();
+          cleanupSignal = cleanup.signal;
+          await instance.stop(
+            Object.freeze({
+              reason,
+              signal: cleanup.signal,
+              ...(detail === undefined ? {} : { detail }),
+              ...(left === undefined ? {} : { remainingMs: left }),
+            })
+          );
+        }
         instance = undefined;
         phase = 'stopped';
         source.clear();
-        stopped.resolve();
       } catch (error) {
         phase = 'failed';
-        stopped.reject(error);
+        outcome = { error };
+      } finally {
+        cleanupSignal = undefined;
+        if (timer !== undefined) clearTimeout(timer);
+        cleanup.abort();
+        await drainIo();
       }
+      if (outcome) stopped.reject(outcome.error);
+      else stopped.resolve();
     };
     void run();
     return shutdown;
   };
-  return Object.freeze({ start, invoke, cancel, stop });
+  const cancelStart = () => {
+    if (phase === 'starting' || phase === 'new') {
+      source.abort();
+      for (const operation of operations) operation.cancel();
+    }
+  };
+  return Object.freeze({ start, invoke, cancel, cancelStart, stop });
 };

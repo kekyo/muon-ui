@@ -32,7 +32,13 @@ export default defineService({
         context.emit('progress', value);
       },
     },
-    stop: async () => {
+    stop: async (info) => {
+      console.info(
+        'lifecycle',
+        context.generation,
+        context.startReason,
+        info.reason
+      );
       await new Promise<void>((resolve) =>
         setTimeout(resolve, Number(context.config.stopDelayMs ?? '1'))
       );

@@ -81,6 +81,7 @@ export const buildMuonNativeService = async (
  * @param entry - Absolute author entry exporting a service definition.
  * @param modules - Explicitly granted host module specifiers.
  * @param onInput - Optional observer for source inputs, including failed builds.
+ * @param project - Directory containing the service package, or the entry directory by default.
  * @returns Self-contained ESM source, evaluated only by the service host.
  * @remarks Requires Vite 8 and the author's muon-plugin-sdk installation.
  * Node builtins and external chunks are rejected for the QuickJS runtime.
@@ -89,6 +90,7 @@ export const buildMuonQuickJsService = async (
   entry: string,
   modules: readonly string[],
   onInput?: MuonServiceInputObserver,
+  project = dirname(entry),
 ): Promise<string> => {
   const vite = await import("vite");
   if (Number(vite.version.split(".")[0]) < 8)
@@ -99,21 +101,24 @@ import definition from {{entry}};
 import { createServiceRuntime } from 'muon-plugin-sdk/services';
 globalThis.__muonServiceInterface = definition.interface;
 globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
+  io: globalThis.__muonServiceIo,
   callback: globalThis.__muonServiceCallback,
   emit: globalThis.__muonServiceEmit,
 });
 `,
     {
       sourceId: "muon-quickjs-service.fc",
-      variables: new Map([["entry", JSON.stringify(entry)]]),
+      variables: new Map([
+        ["entry", JSON.stringify(vite.normalizePath(entry))],
+      ]),
     },
   );
   if (source === undefined)
     throw new Error("Unable to generate the QuickJS service entry.");
-  const virtual = join(dirname(entry), ".muon-service-entry.ts");
+  const virtual = vite.normalizePath(join(project, ".muon-service-entry.ts"));
   const result = await vite.build({
     configFile: false,
-    root: dirname(entry),
+    root: project,
     publicDir: false,
     logLevel: "warn",
     plugins: [
@@ -121,16 +126,26 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
       {
         name: "muon-quickjs-service",
         enforce: "pre",
-        resolveId: (id) => {
+        resolveId: (id, importer) => {
           if (modules.includes(id)) return { id, external: true };
           if (id.startsWith("muon:"))
             throw new Error(`Service is not allowed to import ${id}.`);
-          if (isBuiltin(id) || id.startsWith("node:"))
-            throw new Error(`QuickJS services cannot import ${id}.`);
-          if (id === virtual) return "\0" + virtual;
+          if (
+            isBuiltin(id) ||
+            id.startsWith("node:") ||
+            /\.node(?:\?|$)/iu.test(id)
+          )
+            throw new Error(
+              `QuickJS services cannot import ${id} from ${importer ?? entry}.`,
+            );
+          if (vite.normalizePath(id) === virtual) return "\0" + virtual;
           return undefined;
         },
-        load: (id) => (id === "\0" + virtual ? source : undefined),
+        load: (id) => {
+          if (/\.node(?:\?|$)/iu.test(id))
+            throw new Error(`QuickJS services cannot load native addon ${id}.`);
+          return id === "\0" + virtual ? source : undefined;
+        },
       },
     ],
     build: {

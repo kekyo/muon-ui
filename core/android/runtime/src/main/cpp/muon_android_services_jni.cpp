@@ -17,6 +17,8 @@
 #include "services/muon_quickjs_service_plugins.h"
 #include "services/muon_service_execution_router.h"
 #include "muon_android_service_peer.h"
+#include "muon_android_service_http.h"
+#include "services/muon_service_server.h"
 #include "muon_android_service_plugins.h"
 
 #include <map>
@@ -71,6 +73,7 @@ struct MuonAndroidServices {
   JNIEnv* env = nullptr;
   jobject owner = nullptr;
   jmethodID post_method;
+  jmethodID file_method;
   jmethodID delay_method;
   jmethodID cancel_method;
   jmethodID start_method;
@@ -164,16 +167,46 @@ static MuonAndroidServices* Runtime(jlong handle) {
   return reinterpret_cast<MuonAndroidServices*>(handle);
 }
 
+struct AndroidFileTask {
+  std::function<void()> work;
+  cardio::promise_source<std::string> finished;
+};
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_muon_runtime_MuonServiceProcess_nativeFileWork(JNIEnv*, jclass, jlong handle) {
+  auto job = std::unique_ptr<AndroidFileTask>(reinterpret_cast<AndroidFileTask*>(handle));
+  std::string error;
+  try { job->work(); } catch (const std::exception& exception) { error = exception.what(); }
+  job->finished.resolve(std::move(error));
+}
+
+static cardio::promise<void> SubmitFile(MuonAndroidServices* state, std::function<void()> work,
+                                        std::function<void(std::string)> complete) {
+  auto job = std::make_unique<AndroidFileTask>();
+  job->work = std::move(work);
+  auto finished = job->finished.get_promise();
+  auto* raw = job.release();
+  state->env->CallVoidMethod(state->owner, state->file_method, reinterpret_cast<jlong>(raw));
+  if (state->env->ExceptionCheck()) {
+    state->env->ExceptionClear();
+    delete raw;
+    complete("Android file executor rejected work");
+    co_return;
+  }
+  complete(co_await finished);
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
     JNIEnv* env, jclass, jobject owner, jobjectArray ids, jobjectArray runtimes, jobjectArray libraries,
-    jobjectArray directories, jbooleanArray autostarts, jintArray overrides,
+    jobjectArray directories, jobjectArray io_policies, jbooleanArray autostarts, jintArray overrides,
     jobjectArray configurations, jobjectArray plugin_grants, jstring plugin_registry) {
   try {
   auto runtime = std::make_unique<MuonAndroidServices>();
   runtime->env = env;
   runtime->owner = env->NewGlobalRef(owner);
   const auto type = env->GetObjectClass(owner);
+  runtime->file_method = env->GetMethodID(type, "submitFileWork", "(J)V");
   runtime->post_method = env->GetMethodID(type, "postTask", "(J)V");
   runtime->delay_method = env->GetMethodID(type, "delayTask", "(JJ)V");
   runtime->cancel_method = env->GetMethodID(type, "cancelTask", "(J)V");
@@ -194,7 +227,8 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
       };
   runtime->host = std::make_unique<MuonNativeServiceHost>(MuonNativeServicePlatform{
       LoadMuonNativeServiceFactory,
-      [state](std::function<void()> task) { state->Post(std::move(task)); }, log});
+      [state](std::function<void()> task) { state->Post(std::move(task)); }, log,
+      [state](std::chrono::milliseconds delay, std::function<void()> task) { return state->Delay(delay, std::move(task)); }});
   runtime->javascript = std::make_unique<MuonQuickJsServiceHost>(MuonQuickJsServicePlatform{
       [state](std::function<void()> task) { state->Post(std::move(task)); },
       [state](std::chrono::milliseconds delay, std::function<void()> task) {
@@ -223,6 +257,12 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
       return text;
     };
     MuonNativeServiceSpec spec{read(ids), read(libraries), read(directories), {}};
+    spec.io.policy = read(io_policies);
+    spec.io.http = CreateAndroidMuonServiceHttp(env);
+    spec.io.server = CreateMuonServiceListeners;
+    spec.io.submit = [state](std::function<void()> work, std::function<void(std::string)> complete) {
+      cardio::fire_and_forget(SubmitFile(state, std::move(work), std::move(complete)));
+    };
     runtime->runtimes.emplace(spec.id, read(runtimes) == "quickjs" ? 1 : 0);
     const auto pairs = static_cast<jobjectArray>(env->GetObjectArrayElement(configurations, index));
     for (jsize entry = 0; entry < env->GetArrayLength(pairs); entry += 2) {
@@ -271,8 +311,8 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
           complete();
         };
         if (state->runtimes.at(snapshot.id) == 1)
-          state->javascript->Stop(snapshot.id, snapshot.generation, std::move(stopped));
-        else state->host->Stop(snapshot.id, snapshot.generation, std::move(stopped));
+          state->javascript->Stop(snapshot.id, snapshot.generation, std::move(stopped), snapshot.stop);
+        else state->host->Stop(snapshot.id, snapshot.generation, std::move(stopped), snapshot.stop);
       },
       [state](const std::string& id, bool enabled, std::function<void(const std::string&)> complete) {
         const auto task = state->next_save++;
@@ -416,7 +456,7 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeForegroundReady(
   auto complete = [state, id, version](const std::string& error) {
     state->CompleteStart(id, version, error);
   };
-  const auto& spec = state->specs.at(id);
+  const auto spec = MuonServiceSpecForGeneration(state->specs.at(id), *snapshot);
   if (state->runtimes.at(id) == 1) {
     if (!source || remaining <= 0) {
       complete("Service source startup deadline exceeded");
@@ -424,7 +464,7 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeForegroundReady(
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(remaining);
     MuonQuickJsServiceSpec script{id, spec.library_path, ReadString(env, source), spec.data_directory,
-        spec.config, deadline};
+        spec.config, deadline, spec.start_reason, spec.signal, spec.io};
     // The lifecycle waits for startup to settle before dispatching Stop. This
     // includes native pool drainage and cannot create an orphaned late heap.
     if (state->plugin_services.contains(id))
@@ -442,7 +482,13 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeStartFailed(
 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeRuntimeStop(
-    JNIEnv* env, jclass, jlong handle, jstring id, jlong generation, jstring error) {
+    JNIEnv* env, jclass, jlong handle, jstring id, jlong generation, jstring error, jboolean timeout) {
+  const auto detail = ReadString(env, error);
   Runtime(handle)->controller->RequestRuntimeStop(ReadString(env, id),
-      static_cast<uint64_t>(generation), ReadString(env, error));
+      static_cast<uint64_t>(generation), detail, {timeout ? MUON_SERVICE_STOP_EXECUTION_TIMEOUT : MUON_SERVICE_STOP_HOST, detail});
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_muon_runtime_MuonServiceProcess_nativeSessionEnding(JNIEnv*, jclass, jlong handle) {
+  Runtime(handle)->controller->Shutdown("Android device shutdown", {MUON_SERVICE_STOP_SESSION_ENDING, "shutdown"});
 }

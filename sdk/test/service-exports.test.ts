@@ -62,13 +62,14 @@ it('ships working service clients in both ESM and CommonJS entries', async () =>
       id: 'test',
       generation: '1',
       config: {},
+      startReason: 'acquire',
       dataDirectory: '/private/test',
     });
     expect(await runtime.invoke('1', 'ping', [])).toEqual({
       status: 'ok',
       value: '37',
     });
-    await runtime.stop('released');
+    await runtime.stop({ reason: 'reference-released' });
   }
 });
 

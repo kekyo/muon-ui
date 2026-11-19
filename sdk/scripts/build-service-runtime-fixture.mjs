@@ -13,6 +13,7 @@ import definition from {{entry}};
 import { createServiceRuntime } from {{runtime}};
 globalThis.__muonServiceInterface = definition.interface;
 globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
+  io: globalThis.__muonServiceIo,
   callback: globalThis.__muonServiceCallback,
   emit: globalThis.__muonServiceEmit,
 });
@@ -23,9 +24,11 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
       [
         'entry',
         JSON.stringify(
-          fileURLToPath(
-            new URL('../test/fixtures/quickjs-service.ts', import.meta.url)
-          )
+          process.argv[3] === '--entry'
+            ? resolve(process.argv[4])
+            : fileURLToPath(
+                new URL('../test/fixtures/quickjs-service.ts', import.meta.url)
+              )
         ),
       ],
       [
@@ -64,7 +67,7 @@ if (!bundle) throw new Error('Service fixture bundle is missing');
 await mkdir(dirname(resolve(output)), { recursive: true });
 await writeFile(output, bundle.code);
 
-const header = process.argv[3];
+const header = process.argv[3] === '--entry' ? undefined : process.argv[3];
 if (header) {
   if (bundle.code.includes(')muon_js"'))
     throw new Error(

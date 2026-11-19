@@ -27,17 +27,18 @@ int main() {
       auto task = std::move(tasks.front()); tasks.pop_front(); task();
     }
   };
+  std::vector<std::string> logs;
   MuonQuickJsServiceHost host({post,
     [&](std::chrono::milliseconds delay, std::function<void()> task) {
       const auto id = ++next_timer;
       timers.emplace(id, Timer{delay, std::move(task)});
       return std::function<void()>([&, id] { timers.erase(id); });
-    }, [](const std::string&, muon_log_level, const std::string&) {},
+    }, [&](const std::string&, muon_log_level, const std::string& message) { logs.push_back(message); },
     [](const std::string&, uint64_t, const std::string&) { assert(false); },
     {64 * 1024 * 1024, 1024 * 1024, std::chrono::milliseconds(2000)}, std::chrono::seconds(5)});
   bool started = false;
   std::string startup_error;
-  host.Start({"sdk", "fixture.mjs", kMuonQuickJsServiceFixture, "/private", {}}, 7,
+  host.Start({"sdk", "fixture.mjs", kMuonQuickJsServiceFixture, "/private", {}, std::nullopt, MUON_SERVICE_START_DEVELOPMENT_UPDATE}, 7,
       [&](const std::string& error) { startup_error = error; started = error.empty(); });
   pump();
   if (!startup_error.empty()) std::cerr << startup_error << '\n';
@@ -95,9 +96,9 @@ int main() {
   execution.invoke("sdk", 7, "callback", {{message}, {MuonServiceCallback{41}}}, wait_callback, collect);
   pump();
   bool stopped = false;
-  host.Stop("sdk", 7, [&] { stopped = true; });
+  host.Stop("sdk", 7, [&] { stopped = true; }, {MUON_SERVICE_STOP_DEVELOPMENT_EXIT});
   pump();
-  assert(!stopped && timers.size() == 2);
+  assert(!stopped);
   auto timer = std::find_if(timers.begin(), timers.end(), [](const auto& item) {
     return item.second.delay == std::chrono::milliseconds(1);
   });
@@ -105,6 +106,7 @@ int main() {
   auto expire = std::move(timer->second.task); timers.erase(timer); expire();
   pump();
   assert(stopped && host.IsIdle() && timers.empty());
+  assert((logs == std::vector<std::string>{"lifecycle 7 development-update development-exit"}));
   assert(results.size() == 8 && results.back().code == "cancelled");
   late({MuonServiceValue{std::string("after heap disposal")}, {}, {}});
   pump();

@@ -8,7 +8,7 @@
 #include "server/muon_server_socket.h"
 #include "server/muon_server_websocket.h"
 #include "muon_json_helpers.h"
-#include "include/cef_parser.h"
+
 #include <array>
 #include <charconv>
 #include <algorithm>
@@ -85,6 +85,7 @@ struct ServerState {
   std::vector<std::shared_ptr<cardio::promise_source<void>>> stopped;
 };
 struct ServerServiceState {
+  std::function<bool(const std::string&)> valid_origin;
   std::shared_ptr<MuonServerSockets> sockets;
   uint64_t next_server = 0;
   bool stopping = false;
@@ -135,19 +136,6 @@ static bool IsServerBearerToken(const std::string& token) {
         (ch >= '0' && ch <= '9') || std::string("-._~+/").find(ch) != std::string::npos)) return false;
   }
   return true;
-}
-static bool IsServerOrigin(const std::string& origin) {
-  if (origin.size() > 2048 || origin.find('*') != std::string::npos) return false;
-  CefURLParts parts;
-  if (!CefParseURL(origin, parts)) return false;
-  const auto scheme = CefString(&parts.scheme).ToString();
-  const auto host = CefString(&parts.host).ToString();
-  const auto port = CefString(&parts.port).ToString();
-  if ((scheme != "http" && scheme != "https" && scheme != "asset") || host.empty()) return false;
-  // Requiring the serialized origin rejects paths, userinfo, whitespace and
-  // opaque origins rather than silently broadening a caller's allowlist.
-  const auto serialized = scheme + "://" + host + (port.empty() ? "" : ":" + port);
-  return origin == serialized;
 }
 static ServerHeaders ServerResponseHeaders(const std::string& origin) {
   auto headers = ServerHeaders{{"Connection", "close"}, {"Vary", "Origin"}};
@@ -728,7 +716,7 @@ static cardio::promise<ServerBytes> DispatchServer(
         const auto value = yyjson_arr_get(origins, i);
         if (!yyjson_is_str(value)) throw std::runtime_error("Invalid server origin");
         const auto origin = muon_internal::ReadJsonString(value);
-        if (!IsServerOrigin(origin)) throw std::runtime_error("Server origin must be a serialized http, https or asset origin");
+        if (!service->valid_origin(origin)) throw std::runtime_error("Server origin must be a serialized http, https or asset origin");
         state->allowed_origins.insert(origin);
       }
     }
@@ -861,8 +849,9 @@ static cardio::promise<void> StopServerService(std::shared_ptr<ServerServiceStat
   service->servers.clear();
   co_await service->sockets->stop();
 }
-std::shared_ptr<MuonServerService> CreateMuonServerService() {
+std::shared_ptr<MuonServerService> CreateMuonServerService(std::function<bool(const std::string&)> valid_origin) {
   auto state = std::make_shared<ServerServiceState>();
+  state->valid_origin = std::move(valid_origin);
   state->sockets = CreateMuonServerSockets();
   return std::make_shared<MuonServerService>(MuonServerService{
       [state](std::string json, ServerBytes body, std::string owner) {

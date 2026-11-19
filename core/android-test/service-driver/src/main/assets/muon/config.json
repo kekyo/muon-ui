@@ -15,6 +15,114 @@
     ]
   },
   "services": {
+    "listenNative": {
+      "runtime": "native",
+      "library": "libmuon_native_server.so",
+      "io": {
+        "server": {
+          "listen": true
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureNativeListenerService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "listenNative",
+          "title": "Listener fixture",
+          "text": "Service loopback listener"
+        }
+      },
+      "config": {
+        "port": "49211",
+        "bearerToken": "local-service"
+      }
+    },
+    "listenQuick": {
+      "runtime": "quickjs",
+      "asset": "muon/services/listenQuick.js",
+      "io": {
+        "server": {
+          "listen": true
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickListenerService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "listenQuick",
+          "title": "Listener fixture",
+          "text": "Service loopback listener"
+        }
+      },
+      "config": {
+        "port": "49212",
+        "bearerToken": "local-service"
+      }
+    },
+    "httpNative": {
+      "runtime": "native",
+      "library": "libmuon_native_http.so",
+      "io": {
+        "http": {
+          "origins": ["http://127.0.0.1:49206", "https://127.0.0.1:49207"]
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureNativeHttpService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "httpNative",
+          "title": "HTTP fixture",
+          "text": "Service HTTP requests"
+        }
+      }
+    },
+    "httpQuick": {
+      "runtime": "quickjs",
+      "asset": "muon/services/httpQuick.js",
+      "io": {
+        "http": {
+          "origins": ["http://127.0.0.1:49206", "https://127.0.0.1:49207"]
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickHttpService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "httpQuick",
+          "title": "HTTP fixture",
+          "text": "Service HTTP requests"
+        }
+      }
+    },
+    "stateNative": {
+      "runtime": "native",
+      "library": "libmuon_native_state.so",
+      "io": { "fs": { "data": "read-write", "assets": { "initial": "AP8=" } } },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureNativeStateService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "stateNative",
+          "title": "State fixture",
+          "text": "Service state persistence"
+        }
+      }
+    },
+    "stateQuick": {
+      "runtime": "quickjs",
+      "asset": "muon/services/stateQuick.js",
+      "io": { "fs": { "data": "read-write", "assets": { "initial": "AP8=" } } },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickStateService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "stateQuick",
+          "title": "State fixture",
+          "text": "Service state persistence"
+        }
+      }
+    },
     "quickjs-fault": {
       "runtime": "quickjs",
       "asset": "muon/services/quickjs-fault.js",

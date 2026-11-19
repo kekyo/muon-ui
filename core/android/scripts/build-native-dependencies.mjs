@@ -285,6 +285,11 @@ if (argumentsSet.has('--clean')) {
 mkdirSync(dependencyRoot, { recursive: true });
 // Share the pinned, hash-checked JSON source preparation with desktop builds.
 execute('bash', [join(repositoryRoot, 'builder/build_yyjson.sh')]);
+for (const script of ['build_llhttp.sh', 'build_wslay.sh']) {
+  execFileSync('bash', [join(repositoryRoot, 'core/cef', script)], {
+    stdio: 'inherit',
+  });
+}
 await prepareMuonQuickJsSource(join(dependencyRoot, 'quickjs'), false);
 const sourceArchivePath = join(dependencyRoot, libffiSourceArchiveName);
 const sourceArchive = await loadOfficialSourceArchive(sourceArchivePath);

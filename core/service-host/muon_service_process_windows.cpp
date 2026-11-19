@@ -171,7 +171,7 @@ cardio::promise<MuonServiceProcess> LaunchMuonServiceProcess(
       muon_internal::FilesystemPathFromUtf8(options.executable), muon_internal::FilesystemIoUsage::File);
   auto command = Quote(executable.native());
   for (const auto& argument : {std::string("--config"), options.registry, std::string("--endpoint"),
-      options.endpoint, std::string("--data-root"), options.data_root, std::string("--bootstrap"), std::string("stdin"),
+      options.endpoint, std::string("--data-root"), options.data_root, std::string("--bootstrap"), std::string(options.login_launch ? "login" : "stdin"),
       std::string("--startup"), options.startup})
     command += L" " + Quote(muon_internal::FilesystemPathFromUtf8(argument).native());
   PROCESS_INFORMATION created{};

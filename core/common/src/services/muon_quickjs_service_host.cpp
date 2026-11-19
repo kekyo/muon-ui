@@ -50,6 +50,8 @@ struct QuickJsCallback {
   JSValue reject;
 };
 
+struct QuickJsIo { JSValue resolve, reject; std::function<void()> cancel; };
+
 struct QuickJsTimer {
   JSValue function;
   std::vector<JSValue> arguments;
@@ -73,6 +75,8 @@ struct QuickJsEntry {
   std::vector<QuickJsAwait> pending;
   std::map<uint64_t, std::shared_ptr<QuickJsCall>> calls;
   std::map<uint64_t, QuickJsCallback> callbacks;
+  std::unique_ptr<MuonServiceIo> io;
+  std::map<uint64_t, QuickJsIo> operations;
   std::map<uint64_t, QuickJsTimer> timers;
   uint64_t next_callback = 0;
   uint64_t next_timer = 0;
@@ -198,8 +202,7 @@ static MuonServiceResult Result(const MuonServiceMethod& method, const std::stri
   if (status != "error") throw std::invalid_argument("Unknown service result status");
   const auto code = Field(root, "code");
   const auto message = Field(root, "message");
-  if (code != "cancelled" && code != "unavailable" && code != "invalid-result" &&
-      code != "callback-failed" && code != "resource-exhausted" &&
+  if (!IsMuonServiceFrameworkError(code) &&
       std::find(method.errors.begin(), method.errors.end(), code) == method.errors.end())
     throw std::invalid_argument("Undeclared service failure");
   return {{}, code, message};
@@ -446,17 +449,84 @@ static JSValue Log(JSContext* context, JSValueConst, int count, JSValueConst* va
   } catch (const std::exception& error) { return BridgeError(context, "invalid-result", error.what()); }
 }
 
+static JSValue RequestIo(JSContext* context, JSValueConst, int count, JSValueConst* args) {
+  try {
+    const auto entry = Current(context);
+    if (count != 4) throw std::invalid_argument("Invalid service I/O request");
+    const auto id = Identity(context, args[0]);
+    MuonServiceIoRequest request{Text(context, args[1]), Text(context, args[2]), {}};
+    size_t size = 0;
+    const auto* bytes = JS_GetArrayBuffer(context, &size, args[3]);
+    if (!bytes && JS_HasException(context)) return JS_EXCEPTION;
+    if (size > 1024 * 1024) return BridgeError(context, "size-limit", "Service I/O payload exceeds 1 MiB");
+    if (size) request.body.assign(bytes, bytes + size);
+    if (entry->operations.contains(id) || entry->operations.size() >= 64)
+      return BridgeError(context, "resource-exhausted", "Service I/O capacity exceeded");
+    JSValue functions[2];
+    const auto promise = JS_NewPromiseCapability(context, functions);
+    if (JS_IsException(promise)) return promise;
+    auto& operation = entry->operations.emplace(id, QuickJsIo{functions[0], functions[1], {}}).first->second;
+    operation.cancel = entry->io->Run(std::move(request), [entry, id](MuonServiceIoReply reply) {
+      const auto found = entry->operations.find(id);
+      if (found == entry->operations.end()) return;
+      const auto request = std::move(found->second);
+      entry->operations.erase(found);
+      auto* context = entry->engine->Context();
+      auto resolve = QuickJsOwnedValue(context, request.resolve);
+      auto reject = QuickJsOwnedValue(context, request.reject);
+      try {
+        const bool ok = reply.code.empty();
+        auto result = QuickJsOwnedValue(context, ok ? JS_NewObject(context) : JS_NewError(context));
+        if (ok) {
+          if (JS_SetPropertyStr(context, result.value, "metadata", Parse(entry, reply.metadata)) < 0 ||
+              JS_SetPropertyStr(context, result.value, "body", JS_NewArrayBufferCopy(context, reply.body.data(), reply.body.size())) < 0)
+            throw std::runtime_error("Cannot allocate service I/O reply");
+        } else {
+          JS_SetPropertyStr(context, result.value, "code", JS_NewString(context, reply.code.c_str()));
+          JS_SetPropertyStr(context, result.value, "message", JS_NewString(context, reply.message.c_str()));
+        }
+        const auto ignored = QuickJsOwnedValue(context, entry->engine->Call(ok ? resolve.value : reject.value, JS_UNDEFINED, {result.value}));
+        Wake(entry);
+      } catch (const std::exception& error) { Fault(entry, error.what()); }
+    });
+    return promise;
+  } catch (const std::exception& error) { return BridgeError(context, "invalid-input", error.what()); }
+}
+
+static JSValue CancelIo(JSContext* context, JSValueConst, int count, JSValueConst* args) {
+  try {
+    const auto entry = Current(context);
+    if (count != 1) throw std::invalid_argument("Missing service I/O identity");
+    const auto found = entry->operations.find(Identity(context, args[0]));
+    if (found != entry->operations.end()) found->second.cancel();
+    return JS_UNDEFINED;
+  } catch (const std::exception& error) { return BridgeError(context, "invalid-input", error.what()); }
+}
+
 static void InstallBridge(const std::shared_ptr<QuickJsEntry>& entry) {
   auto* context = entry->engine->Context();
   JS_SetContextOpaque(context, entry.get());
   const auto global = QuickJsOwnedValue(context, JS_GetGlobalObject(context));
   for (const auto& [name, function] : std::map<std::string, JSCFunction*>{
       {"__muonServiceCallback", RequestCallback}, {"__muonServiceEmit", Emit},
-      {"__muonServiceLog", Log}, {"setTimeout", SetTimeout}, {"clearTimeout", ClearTimeout}}) {
+      {"__muonRequestIo", RequestIo}, {"__muonCancelIo", CancelIo}, {"__muonServiceLog", Log}, {"setTimeout", SetTimeout}, {"clearTimeout", ClearTimeout}}) {
     if (JS_SetPropertyStr(context, global.value, name.c_str(), JS_NewCFunction(context, function, name.c_str(), 3)) < 0)
       throw std::runtime_error("Unable to register service host functions");
   }
   const auto ignored = QuickJsOwnedValue(context, entry->engine->Evaluate(R"(
+    {
+      let next = 0n;
+      globalThis.__muonServiceIo = async (name, params, body, signal) => {
+        if (signal.aborted) throw Object.assign(new Error('Service I/O cancelled'), { code: 'cancelled' });
+        const id = String(++next);
+        const cancel = () => __muonCancelIo(id);
+        signal.addEventListener('abort', cancel, { once: true });
+        try {
+          const result = await __muonRequestIo(id, name, JSON.stringify(params), body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
+          return { metadata: result.metadata, body: new Uint8Array(result.body) };
+        } finally { signal.removeEventListener('abort', cancel); }
+      };
+    }
     globalThis.console = Object.freeze(Object.fromEntries(
       [['debug',0],['log',1],['info',1],['warn',2],['error',3]].map(([name,level]) =>
         [name, (...args) => __muonServiceLog(level, args.map(String).join(' '))])));
@@ -509,6 +579,11 @@ static void Dispose(const std::shared_ptr<QuickJsEntry>& entry, const std::strin
       FreeTimer(context, timer);
     }
     entry->timers.clear();
+    for (const auto& [id, operation] : entry->operations) {
+      JS_FreeValue(context, operation.resolve); JS_FreeValue(context, operation.reject);
+      operation.cancel();
+    }
+    entry->operations.clear();
     for (const auto& [id, request] : entry->callbacks) {
       (void)id;
       JS_FreeValue(context, request.resolve);
@@ -528,13 +603,6 @@ static void Dispose(const std::shared_ptr<QuickJsEntry>& entry, const std::strin
   // losing the old native drain or completing a repeated stop prematurely.
   const auto identity = std::make_pair(entry->spec.id, entry->generation);
   owner->closing.emplace(identity, entry);
-  if (was_starting) {
-    auto complete = std::move(entry->started);
-    entry->started = nullptr;
-    if (complete) complete(error.empty() ? "Service startup interrupted" : error);
-  } else if (!error.empty()) {
-    owner->platform.exited(entry->spec.id, entry->generation, error);
-  }
   auto drained = [owner, entry, identity] {
     Queue(owner, [owner, entry, identity] {
       if (!owner->closing.erase(identity)) return;
@@ -544,8 +612,17 @@ static void Dispose(const std::shared_ptr<QuickJsEntry>& entry, const std::strin
       for (const auto& complete : stopped) complete();
     });
   };
-  if (entry->extension.close) entry->extension.close(std::move(drained));
-  else drained();
+  entry->io->Close([owner, entry, was_starting, error, drained = std::move(drained)] {
+    if (was_starting) {
+      auto complete = std::move(entry->started);
+      entry->started = nullptr;
+      if (complete) complete(error.empty() ? "Service startup interrupted" : error);
+    } else if (!error.empty()) {
+      owner->platform.exited(entry->spec.id, entry->generation, error);
+    }
+    if (entry->extension.close) entry->extension.close(drained);
+    else drained();
+  });
 }
 
 static void Pump(const std::shared_ptr<QuickJsEntry>& entry) {
@@ -635,6 +712,7 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
   auto entry = std::make_shared<QuickJsEntry>();
   entry->self = entry;
   entry->owner = impl_; entry->spec = spec; entry->generation = generation;
+  entry->io = std::make_unique<MuonServiceIo>(spec.data_directory, spec.io, impl_->platform.post, impl_->platform.delay);
   entry->lifecycle_deadline = std::min(std::chrono::steady_clock::now() + impl_->platform.shutdown_timeout,
       spec.startup_deadline.value_or(std::chrono::steady_clock::time_point::max()));
   entry->started = std::move(complete);
@@ -670,12 +748,24 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
               entry->interface = ParseMuonServiceInterface(entry->interface_json);
               const auto input = QuickJsOwnedValue(context, JS_NewObject(context));
               Set(context, input.value, "id", JS_NewString(context, entry->spec.id.c_str()));
+              Set(context, input.value, "startReason", JS_NewString(context, MuonServiceReasonName(entry->spec.start_reason)));
               Set(context, input.value, "generation", JS_NewString(context, std::to_string(entry->generation).c_str()));
               Set(context, input.value, "dataDirectory", JS_NewString(context, entry->spec.data_directory.c_str()));
               const auto config = QuickJsOwnedValue(context, JS_NewObjectProto(context, JS_NULL));
               for (const auto& [key, value] : entry->spec.config)
                 Set(context, config.value, key.c_str(), JS_NewStringLen(context, value.data(), value.size()));
               Set(context, input.value, "config", JS_DupValue(context, config.value));
+              if (entry->spec.signal) {
+                const auto cancel = [weak = std::weak_ptr<QuickJsEntry>(entry)] {
+                  const auto current = weak.lock();
+                  if (!current || current->state != QuickJsState::Starting || !current->fault.empty()) return;
+                  try {
+                    const auto result = QuickJsOwnedValue(current->engine->Context(), Call(current, "cancelStart", {}));
+                    Wake(current);
+                  } catch (const std::exception& error) { Fault(current, error.what()); }
+                };
+                if (!entry->spec.signal->Subscribe(cancel)) cancel();
+              }
               Await(entry, Call(entry, "start", {input.value}), [entry](const std::string&, const std::string& error) {
                 if (!error.empty()) { Dispose(entry, error); return; }
                 entry->state = QuickJsState::Running;
@@ -691,7 +781,7 @@ void MuonQuickJsServiceHost::Start(const MuonQuickJsServiceSpec& spec, uint64_t 
   });
 }
 
-void MuonQuickJsServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete) {
+void MuonQuickJsServiceHost::Stop(const std::string& id, uint64_t generation, std::function<void()> complete, MuonServiceStopCause cause) {
   if (const auto closing = impl_->closing.find({id, generation}); closing != impl_->closing.end()) {
     closing->second->stopped.push_back(std::move(complete));
     return;
@@ -706,17 +796,23 @@ void MuonQuickJsServiceHost::Stop(const std::string& id, uint64_t generation, st
   if (entry->state == QuickJsState::Stopping || !entry->fault.empty()) return;
   entry->state = QuickJsState::Stopping;
   entry->lifecycle_deadline = std::chrono::steady_clock::now() + impl_->platform.shutdown_timeout;
-  Queue(impl_, [entry] {
+  if (cause.deadline) entry->lifecycle_deadline = std::min(entry->lifecycle_deadline, *cause.deadline);
+  cause.deadline = entry->lifecycle_deadline;
+  Queue(impl_, [entry, cause = std::move(cause)] {
     if (entry->state == QuickJsState::Closed || !entry->fault.empty()) return;
     try {
       Deadline(entry);
-      const auto reason = QuickJsOwnedValue(entry->engine->Context(), JS_NewString(entry->engine->Context(), "Service stopped"));
+      auto* context = entry->engine->Context();
+      const auto info = QuickJsOwnedValue(context, JS_NewObject(context));
+      Set(context, info.value, "reason", JS_NewString(context, MuonServiceReasonName(cause.reason)));
+      if (!cause.detail.empty()) Set(context, info.value, "detail", JS_NewString(context, cause.detail.c_str()));
+      Set(context, info.value, "remainingMs", JS_NewInt64(context, MuonServiceRemainingMs(cause)));
       for (const auto& [id, call] : entry->calls) {
         (void)id;
         call->cancelled = true;
         Complete(entry, call, {{}, "cancelled", "Service stopped"});
       }
-      Await(entry, Call(entry, "stop", {reason.value}), [entry](const std::string&, const std::string& error) {
+      Await(entry, Call(entry, "stop", {info.value}), [entry](const std::string&, const std::string& error) {
         Dispose(entry, error);
       });
       for (const auto& [id, call] : entry->calls) { (void)call; CancelCallbacks(entry, id); }

@@ -61,6 +61,7 @@ it('bundles a typed service with only host callbacks and timer primitives', asyn
       id: 'fixture',
       generation: '1',
       config: {},
+      startReason: 'acquire',
       dataDirectory: '/private/fixture',
     });
     expect(await runtime.invoke('1', 'echo', ['日本語\0😀'])).toEqual({
@@ -86,7 +87,7 @@ it('bundles a typed service with only host callbacks and timer primitives', asyn
       value: null,
     });
     expect(events).toEqual([['progress', 37]]);
-    const stopped = runtime.stop('shutdown');
+    const stopped = runtime.stop({ reason: 'app-exit' });
     await scheduled;
     timer();
     await stopped;

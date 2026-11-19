@@ -52,6 +52,8 @@ beforeAll(async () => {
       minify: false,
       lib: {
         entry: {
+          "server-node": resolve("../../sdk/examples/services/server.ts"),
+          "http-node": resolve("../../sdk/examples/services/http.ts"),
           "node-driver": resolve("../service-host/node-driver.ts"),
           service: resolve("../../node/test/fixtures/node-service.ts"),
           lifecycle: resolve(
@@ -67,6 +69,23 @@ beforeAll(async () => {
       rolldownOptions: { external: [/^node:/] },
     },
   });
+  await promisify(execFile)(process.execPath, [
+    "../../sdk/scripts/build-service-runtime-fixture.mjs",
+    join(nodeAssets, "http-quick.js"),
+    "--entry",
+    "../../sdk/examples/services/http.ts",
+  ]);
+  await promisify(execFile)(process.execPath, [
+    "../../sdk/scripts/build-service-runtime-fixture.mjs",
+    join(nodeAssets, "server-quick.js"),
+    "--entry",
+    "../../sdk/examples/services/server.ts",
+  ]);
+  for (const name of ["localhost-cert.pem", "localhost-key.pem"])
+    await copyFile(
+      join("../android-poc/android/app/src/androidTest/assets", name),
+      join(nodeAssets, name),
+    );
   await copyFile(
     resolve("../../node/dist/node-bridge.mjs"),
     join(nodeAssets, "node-bridge.mjs"),

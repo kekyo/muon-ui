@@ -288,9 +288,10 @@ try {
         endpoint,
         "--data-root",
         join(directory, "data"),
+        ...(shutdown === "session" ? ["--bootstrap", "login"] : []),
       ];
       const host = spawn(join(binaryDirectory, "muon-service-host.exe"), args, {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["overlapped", "pipe", "pipe"],
         windowsHide: true,
       });
       children.push(host);
@@ -593,6 +594,11 @@ try {
         clearTimeout(deadline!);
       }
       assert.equal(code, 0, diagnostic);
+      if (mode === "probe") {
+        const stops = diagnostic.split(/\r?\n/).filter((line) => line.startsWith("resident.v1-test: lifecycle "));
+        const cause = shutdown === "session" ? "login-autostart session-ending logoff" : "app-start app-exit";
+        assert.deepEqual(stops, [`resident.v1-test: lifecycle ${initial.generation} ${cause}`]);
+      }
       assert(
         observations.some(
           (value) =>

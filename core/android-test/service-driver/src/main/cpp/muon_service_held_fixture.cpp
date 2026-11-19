@@ -46,7 +46,8 @@ static cardio::promise<void> AwaitStartGate(HeldStart* state) {
     state->context->host->post(state->context->host->user_data, FinishHeldStart, state);
   } catch (const std::exception& error) {
     state->error = error.what();
-    state->instance.stop(state->instance.user_data, FailedHeldWorkerStopped, state);
+    static const muon_service_stop_info info{MUON_SERVICE_ABI_VERSION, sizeof(muon_service_stop_info), MUON_SERVICE_STOP_HOST, nullptr, -1, nullptr};
+    state->instance.stop(state->instance.user_data, &info, FailedHeldWorkerStopped, state);
   }
 }
 

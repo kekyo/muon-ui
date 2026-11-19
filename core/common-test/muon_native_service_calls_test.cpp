@@ -32,7 +32,7 @@ static void Invoke(void*, const muon_service_call_context* context, const char*,
 }
 
 static void Cancel(void*, uint64_t id) { ++pending.at(id).cancellations; }
-static void Stop(void*, muon_service_stop_completion complete, void* data) {
+static void Stop(void*, const muon_service_stop_info*, muon_service_stop_completion complete, void* data) {
   assert(pending.empty());
   ++stops;
   complete(data);

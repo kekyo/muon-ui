@@ -8,9 +8,11 @@
 
 #include "muon_plugin_api.h"
 #include "muon_service_value.h"
+#include "muon_service_lifecycle_types.h"
+#include "muon_service_io.h"
 
 /** Native service ABI revision used by service artifact manifests. */
-#define MUON_SERVICE_ABI_VERSION 2
+#define MUON_SERVICE_ABI_VERSION 3
 
 /**
  * @file muon_service_api.h
@@ -73,6 +75,7 @@ typedef struct muon_service_call_context {
   int (*callback)(void* user_data, uint64_t token,
       const muon_service_value* arguments, size_t count,
       muon_service_result_completion complete, void* completion_data);
+  const muon_service_signal* signal; /**< Cancelled when the invocation ends or the caller withdraws it. */
 } muon_service_call_context;
 
 /** Host operations borrowed by one service until its stop completion. */
@@ -122,6 +125,9 @@ typedef struct muon_service_context {
   int32_t config_count;
   /** Borrowed entries; null when config_count is zero. */
   const muon_plugin_config_entry* config_entries;
+  muon_service_start_reason start_reason; /**< What caused this generation to start. */
+  const muon_service_signal* signal; /**< Cancelled when shutdown begins, including during startup. */
+  const muon_service_io* io; /**< Permission-checked, asynchronous I/O for this generation. */
 } muon_service_context;
 
 /**
@@ -144,6 +150,7 @@ typedef struct muon_service_instance {
   /**
    * Begins asynchronous disposal, called exactly once for a successful start.
    * @param user_data Instance state returned at startup.
+   * @param info Reason, optional deadline and cancellation for cleanup I/O.
    * @param completion Non-null callback called after disposal.
    * @param completion_data State to pass unchanged to completion.
    * @remarks Stop may complete inline. Cancel outstanding work and release all
@@ -151,7 +158,7 @@ typedef struct muon_service_instance {
    *     completion returns. OS deadlines may terminate the process even if stop
    *     is unfinished; this hook does not guarantee execution after a crash.
    */
-  void (*stop)(void* user_data, muon_service_stop_completion completion,
+  void (*stop)(void* user_data, const muon_service_stop_info* info, muon_service_stop_completion completion,
                void* completion_data);
   /**
    * Begins a typed method invocation; null for an interface with no methods.

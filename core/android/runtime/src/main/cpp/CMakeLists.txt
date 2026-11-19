@@ -134,12 +134,20 @@ target_link_options(muon_android_rpc PRIVATE
   )
 
 # The background process owns this host independently of the page plugin runtime.
+include("${MUON_COMMON_ROOT}/cmake/MuonServer.cmake")
+add_library(muon_sha1 STATIC "${MUON_REPOSITORY_ROOT}/builder/src/sha1.c")
+target_include_directories(muon_sha1 PUBLIC "${MUON_REPOSITORY_ROOT}/builder/src")
+
 add_library(muon_android_services SHARED
+  ${MUON_SERVER_SOURCES}
+  "${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_server.cpp"
   muon_android_service_plugins.cpp
   muon_android_service_peer.cpp
   muon_android_service_transport.cpp
   muon_android_utf.cpp
   muon_android_services_jni.cpp
+  muon_android_service_http.cpp
   "${MUON_COMMON_ROOT}/src/muon_filesystem.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp"
@@ -151,6 +159,9 @@ add_library(muon_android_services SHARED
   "${MUON_COMMON_ROOT}/src/services/muon_quickjs_plugin_bindings.cpp"
   "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_engine.cpp"
   "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_module.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_http.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_io.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_files.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_value.cpp"
   "${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp"
@@ -161,5 +172,5 @@ target_compile_options(muon_android_services PRIVATE -Wall -Wextra -Wpedantic -W
 target_include_directories(muon_android_services PRIVATE
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
   "${MUON_REPOSITORY_ROOT}/sdk/include")
-target_link_libraries(muon_android_services PRIVATE muon_plugin_runtime_core muon_cardio muon_service_json muon_service_quickjs android dl log)
+target_link_libraries(muon_android_services PRIVATE muon_sha1 muon_wslay muon_llhttp muon_plugin_runtime_core muon_cardio muon_service_json muon_service_quickjs android dl log)
 target_link_options(muon_android_services PRIVATE -Wl,-z,max-page-size=16384)

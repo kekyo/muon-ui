@@ -54,13 +54,15 @@ it.each(['ES2022', 'DOM', 'Node'] as const)(
           // @ts-expect-error configuration is immutable
           context.config.changed = 'bad';
           void signal; void generation; return 1n;
-        } }, stop: async reason => { const message: string = reason; void message; }
+        } }, stop: async reason => { const message: string = reason.reason; void message; }
       }) });
       const runtime = createServiceRuntime(service, {
         callback: async () => ({ status: 'ok', value: '1' }), emit: () => {}
       });
-      const started: Promise<void> = runtime.start({id:'worker',generation:'1',config:{},dataDirectory:'/private'});
+      const started: Promise<void> = runtime.start({id:'worker',generation:'1',config:{},startReason: 'acquire', dataDirectory:'/private'});
       void started;
+      // @ts-expect-error termination causes are fixed by the public contract
+      void runtime.stop({ reason: "suspend" });
       // @ts-expect-error method return type is derived from the schema
       defineService({interface: definition, start: () => ({methods:{ping:()=> 'wrong'},stop:()=>{}})});
 

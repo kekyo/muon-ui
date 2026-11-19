@@ -7,6 +7,8 @@
 #pragma once
 #include "quickjs/muon_quickjs_engine.h"
 #include "services/muon_service_execution.h"
+#include "services/muon_service_reason.h"
+#include "services/muon_service_io.h"
 #include <muon_plugin_api.h>
 
 /** Resolved source and immutable configuration of one JavaScript service. */
@@ -18,6 +20,9 @@ struct MuonQuickJsServiceSpec {
   std::vector<std::pair<std::string, std::string>> config; /**< String settings. */
   /** Optional platform deadline, including time spent loading the bundle. */
   std::optional<std::chrono::steady_clock::time_point> startup_deadline = std::nullopt;
+  muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE; /**< Demand for this generation. */
+  std::shared_ptr<MuonServiceCancellation> signal{}; /**< Shared cancellation during asynchronous initialization. */
+  MuonServiceIoSettings io{}; /**< Per-service portable I/O grants and executor. */
 };
 
 /** Generation-scoped host modules and their asynchronous native resources. */
@@ -75,8 +80,9 @@ class MuonQuickJsServiceHost final {
              std::function<void(const std::string&)> complete);
   /** @param id Service identity.
    *  @param generation Exact generation to dispose.
-   *  @param complete Deferred completion after heap disposal and native drainage. */
-  void Stop(const std::string& id, uint64_t generation, std::function<void()> complete);
+   *  @param complete Deferred completion after heap disposal and native drainage.
+   *  @param cause Host observation and optional OS deadline. */
+  void Stop(const std::string& id, uint64_t generation, std::function<void()> complete, MuonServiceStopCause cause = {});
   /** @returns Borrowed runtime operations; this host must outlive them. */
   MuonServiceExecution Execution();
   /** @returns True when no generation, native cleanup, or posted turn remains. */

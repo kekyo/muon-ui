@@ -2,7 +2,8 @@
 #include "muon_service_api.h"
 #include <stdlib.h>
 
-static void stop(void* state, muon_service_stop_completion complete, void* data) {
+static void stop(void* state, const muon_service_stop_info* info, muon_service_stop_completion complete, void* data) {
+  (void)info;
   free(state);
   complete(data);
 }

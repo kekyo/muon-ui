@@ -218,6 +218,7 @@ export const getAndroidServicePermissions = (
   const permissions = new Set([
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.POST_NOTIFICATIONS",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
   ]);
   for (const service of services)
     for (const type of service.android.foregroundServiceType.split("|")) {

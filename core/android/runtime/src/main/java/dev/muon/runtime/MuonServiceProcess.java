@@ -228,6 +228,23 @@ final class MuonServiceProcess {
 
     IBinder binder() { return messenger.getBinder(); }
 
+    void activateOnBoot(Runnable finished) {
+        Runnable activate = () -> {
+            try {
+                if (initializationError != null) Log.e("MuonNativeService", initializationError);
+                else nativeActivate(nativeHandle);
+            } catch (RuntimeException | LinkageError error) {
+                Log.e("MuonNativeService", "Cannot restore services after boot", error);
+            } finally {
+                // Activate queues the component start requests on this same Looper.
+                // Keep the broadcast alive until those requests have reached Android.
+                handler.post(finished);
+            }
+        };
+        if (initialized) activate.run();
+        else initializing.add(activate);
+    }
+
     JSONObject definition(String id) {
         JSONObject result = definitions.get(id);
         if (result == null) throw new IllegalArgumentException("Unknown service: " + id);

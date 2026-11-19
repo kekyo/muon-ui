@@ -131,6 +131,19 @@ describe("public Android builds", () => {
     }
     expect(buildAndroid).not.toHaveBeenCalled();
   });
+  it.each([true, false])(
+    "respects explicit boot permission on an app without services: %s",
+    async (requested) => {
+      const permission = "android.permission.RECEIVE_BOOT_COMPLETED";
+      const root = await project({
+        android: { permissions: requested ? [permission] : [] },
+      });
+      await buildMuonApp({ root, targets: ["android"] });
+      expect(
+        buildAndroid.mock.calls[0]![0].permissions.includes(permission),
+      ).toBe(requested);
+    },
+  );
   it.each([true, false, undefined])(
     "enables notification permissions and functions only when configured: %s",
     async (enabled) => {

@@ -8,12 +8,12 @@
 
 plan18は全5段階を完了し、全体テストも成功した。plan18でLinux armhf・arm64とAndroid arm64について確認した範囲は、ビルドと配布物の検査までである。plan17に挙がったサービス間の参照・依存関係の管理や、自動起動の設定を保ったままサービスを一時休止する `requestShutdown()` は、引き続き別の課題として残る。[plan18の完了判定](plan18.md#2026年11月19日-全体試験と完了判定)・[plan17の参照管理](plan17.md#参照による寿命の管理)・[一時休止の検討](plan17.md#検討した別案)
 
-| 対象 | 現行の実装と今回の変更点 |
+| 対象 | 計画開始時の実装と今回の変更点 |
 | --- | --- |
 | 起動と終了 | TSの `start(context)` は非同期の `stop(reason)` を持つインスタンスを返す。QuickJSとNode.jsのホストが渡す停止理由は固定文言で、nativeのC ABI v2の `stop` に理由の引数はない。サービスホストが把握した契機を3方式の作者に渡す。[TSランタイム](../../../sdk/src/service-runtime.ts)・[QuickJSホスト](../../../core/common/src/services/muon_quickjs_service_host.cpp)・[Node.jsホスト](../../../core/service-host/muon_node_service_host.cpp)・[C ABI](../../../sdk/include/muon_service_api.h) |
 | QuickJSの開発 | 公開SDKにサービスとタイマーなどの型宣言がある。ビルダーはTSと依存モジュールをViteで単一のJSにまとめる。現行のQuickJS設定は `entry` を受け付け、`project` を指定できるのはNode.jsに限られる。QuickJSにもnpmプロジェクトを指定できるようにする。[SDKの公開先](../../../sdk/package.json)・[設定の読み込み](../../../ui/common/service-config.ts)・[QuickJSビルダー](../../../ui/common/service-build.ts) |
 | ファイルと通信 | Node.jsのサンプルは `node:fs/promises` で同梱ファイルを読み、終了時に専用ディレクトリへ書き込む。nativeではOSやライブラリを直接呼べる。QuickJSで同様の処理をするには許可済みのnativeプラグインが必要になる。これらの用途をサービスSDKから利用できるようにする。[Node.jsのサンプル](../../../sdk/examples/services/node-files.ts)・[QuickJSの実行環境](../services.md#quickjsの実行環境) |
-| ローカルサーバー | 現在の `muon.server` ではCEFのページがHTTP要求やWebSocket接続を処理し、ページを破棄すると待受も終了する。サービス自身が待ち受け、画面を開かずに応答できるAPIを追加する。[ローカルサーバーガイド](../local-server.md)・[CEFのサーバー実装](../../../core/cef/src/server/muon_server_service.cpp) |
+| ローカルサーバー | 現在の `muon.server` ではCEFのページがHTTP要求やWebSocket接続を処理し、ページを破棄すると待受も終了する。サービス自身が待ち受け、画面を開かずに応答できるAPIを追加する。[ローカルサーバーガイド](../local-server.md)・[ページとサービスが使うサーバー実装](../../../core/common/src/server/muon_server_service.cpp) |
 
 ## 起動・終了ハンドラー
 
@@ -83,7 +83,7 @@ I/O、待受、接続はサービスIDと実行世代に属する。起動時に
 
 ホスト側のファイル・ネットワーク操作には `cardio` を使い、あるサービスがI/Oを待つ間も同じホストで別のサービスを実行できるようにする。C ABIには構造体のバージョンとサイズ、バッファーの所有者と有効期間、完了通知を届けるスレッドを明記する。QuickJSではホストから完了通知を受け取り、サービスのイベントループでPromiseを完了させる。Node.jsではファイル操作などを標準ライブラリで実装する。共通APIを通じて行う操作には他の方式と同じ権限、キャンセル、資源の解放条件を適用する。
 
-サーバーのHTTP・WebSocket処理と待受をCEFへの依存から分け、ページ用とサービス用の両方から使う。サービスのハンドラーにはHTTP要求やWebSocketのメッセージをSDKの型で渡す。ページが作ったサーバーはページを閉じた時点で終了し、常駐サービスが作ったサーバーはそのサービスの停止時に終了する。Android版でもサービスホストから待ち受けられるようにする。通信に必要な `INTERNET` 権限とAndroidの平文通信・証明書の設定を適用する。[CEFのサーバー実装](../../../core/cef/src/server/muon_server_service.cpp)・[Androidの通信権限](https://developer.android.com/develop/connectivity/network-ops/connecting)・[Androidのネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
+サーバーのHTTP・WebSocket処理と待受をCEFへの依存から分け、ページ用とサービス用の両方から使う。サービスのハンドラーにはHTTP要求やWebSocketのメッセージをSDKの型で渡す。ページが作ったサーバーはページを閉じた時点で終了し、常駐サービスが作ったサーバーはそのサービスの停止時に終了する。Android版でもサービスホストから待ち受けられるようにする。通信に必要な `INTERNET` 権限とAndroidの平文通信・証明書の設定を適用する。[ページとサービスが使うサーバー実装](../../../core/common/src/server/muon_server_service.cpp)・[Androidの通信権限](https://developer.android.com/develop/connectivity/network-ops/connecting)・[Androidのネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
 
 Androidの試作版にはQuickJS用のファイル、HTTP、ソケットの実装例がある。入出力や試験例を参考にし、同期ファイル操作をJSの `async` 関数で包む実装は製品の非同期I/Oへ置き換える。独自プロトコル用のTCP接続は将来の拡張候補とし、plan19のネットワークI/OはHTTP・HTTPSクライアントとローカルのHTTP・WebSocketサーバーまでとする。[試作版の対応範囲](../../../core/android-poc/README.md)・[試作版のJS](../../../core/android-poc/android/app/src/main/assets/muon-javascript/runtime.js)・[試作版のファイル処理](../../../core/android-poc/android/app/src/main/cpp/muon_javascript_runtime_jni.cpp)
 
@@ -137,10 +137,18 @@ Linux amd64とWindows 11 VM（amd64・i686）ではnative・QuickJS・Node.jsを
 
 `context.server` と対応するC APIを追加し、HTTP要求とWebSocketメッセージに応答する常駐サービスをPCとAndroidで動かす。ホスト外のクライアントからサービスへ接続して検証する。
 
-- [ ] UIを閉じた後も常駐サービスが同じ世代で応答する。最後の参照を解放すると待受と既存接続が閉じ、次の世代が同じポートを取得できる。その間も別サービスが所有する待受は応答を続ける。開発中のホスト更新でも古い応答が混入しない。Host、Origin、Bearerの検証と、ページ所有の `muon.server` がページ破棄で終了する動作も確認する。
+- [x] UIを閉じた後も常駐サービスが同じ世代で応答する。最後の参照を解放すると待受と既存接続が閉じ、次の世代が同じポートを取得できる。その間も別サービスが所有する待受は応答を続ける。開発中のホスト更新でも古い応答が混入しない。Host、Origin、Bearerの検証と、ページ所有の `muon.server` がページ破棄で終了する動作も確認する。
+
+Linux amd64とWindows 11 VMのamd64・i686では、native・QuickJS・Node.jsの各サービスが、画面との接続を閉じた後も同じ世代でHTTPとWebSocketに応答した。最後の参照を解放すると外部クライアントの接続が閉じ、同じポートを次の世代で再利用できた。別のサービスの待受はその間も応答した。Host、Origin、Bearerの検査と、テキストおよびバイナリーのエコーも確認した。[外部クライアントによる試験](../../../core/service-host/server-driver.ts)
+
+Android API 37のx86_64エミュレーターでは、生成APKで唯一のActivityを終了した後、テスト用のPCからnative・QuickJSの常駐サービスへ接続した。画面を再度開き、サービスの世代と待受の解放を確認した。LinuxのCEFではページ所有のサーバーも試し、ページを破棄すると接続も待受も終了した。[Androidの試験](../../../core/android-test/service-rpc.test.ts)・[ページ所有のサーバー試験](../../../core/cef-test/server.test.ts)
+
+LinuxのVite開発起動では、画面の外からQuickJSサービスにWebSocketで接続し、応答を受けたままサービスの入力を更新した。旧ホストとの接続が切れた後に、3方式の新しい待受でバイナリーと実行世代を確認した。[開発中の入れ替え試験](../../../core/cef-test/service-consumer-development.ts)
 
 ### 段階6　公開パッケージを使った開発と配布の確認
 
 利用者向けのサービスガイドに、QuickJSプロジェクトの作成、型の読み込み、各APIの許可、起動・終了理由の扱いを記載する。公開する構成のパッケージをリポジトリ外にインストールし、ソースツリーへの参照を持たない利用アプリで試す。SDKの型宣言だけで全APIを使うQuickJSサンプルが `tsc --noEmit` を通り、誤った停止理由の値、ファイルの引数、HTTP・WebSocketハンドラーの戻り値を型検査が検出することを確かめる。
 
 - [ ] Linux・WindowsのCEF版でnative・QuickJS・Node.jsを開発起動と配布アプリから実行し、Androidではnative・QuickJSを生成APKで実行する。配布先を移してもアセットを読み、保存・通信・待受が動作する。OSから実際に受け取った通知、テストで入力した通知、ビルドだけを確認できた環境を記録する。各段階の条件と照合し、リポジトリ全体の `npm test` が成功した時点でplan19を完了とする。
+
+SDKをnpmパッケージにしてリポジトリ外の利用アプリに入れ、QuickJS用のecho・状態保存・HTTPクライアント・ローカルサーバーを型検査した。DOMとNode.jsの型を読み込まずに4つとも通り、Vitestも成功した。停止理由、ファイルに書くバイナリー、HTTPとWebSocketのハンドラーの戻り値、HTTP応答の形式をそれぞれ誤った値にすると、型検査は5か所すべてを検出した。[日本語ガイド](../services.md)・[英語ガイド](../../en/services.md)

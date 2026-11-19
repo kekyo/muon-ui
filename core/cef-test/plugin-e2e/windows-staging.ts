@@ -129,7 +129,7 @@ const stageRelayExecutable = async (
 };
 
 /**
- * Stages the Windows runtime, and test relay.
+ * Stages the Windows runtime and the test relay.
  *
  * @param agent Connected Windows test agent.
  * @param environment Windows e2e environment.

@@ -715,7 +715,6 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
     }
   });
 
-
   for (const kind of ["selectFile", "selectSaveFile"] as const) {
     for (const length of [140, 300, 1100, 4200]) {
       it(`uses the requested ${length}-unit native ${kind} folder and reuses its returned path`, async () => {

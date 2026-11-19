@@ -36,9 +36,9 @@ The cache directory contains catalogs, verification data, and downloaded archive
 
 Node.js release information comes from the official `https://nodejs.org/dist/index.json`.
 The selected archive is verified with the SHA-256 value in that release's `SHASUMS256.txt`.
-The Node.js version is selected from the intersection of every service project’s `engines.node` range and the versions supported by muon.
-When `engines.node` is omitted, muon selects the latest compatible LTS release. If none matches, preparation fails without falling back to a non-LTS release.
-When it is specified, muon prefers the greatest matching LTS version and otherwise selects the greatest matching version from all releases.
+For Node.js services, muon selects an official release for the target platform that satisfies every service’s `engines.node` range and the versions muon supports.
+If all services omit `engines.node`, muon selects the latest compatible LTS release. Preparation fails if no compatible LTS is available.
+If any service specifies `engines.node`, muon still prefers the latest compatible LTS. When none is available, it selects the latest compatible release.
 
 For `muon build` output and normal installer runtimes, the distributed `dist-muon/<target>` directory is treated as read-only source data.
 When an end user starts the application, `muon-launcher` stages the whole dist directory into `runtime/` under the user state directory before execution, extracts the CEF binaries and, when required, the Node.js runtime there, and then launches `muon-core`.

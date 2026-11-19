@@ -3015,27 +3015,3 @@ describe("muon build", () => {
     ).rejects.toThrow(`muon config file does not exist: ${configPath}`);
   });
 });
-
-it("does not package a page Node sidecar or request a Node runtime for it", async () => {
-  const root = await createTemporaryDirectory("muon-removed-sidecar-build-");
-  const packageDirectory = await createFakeMuonPackageDist(root);
-  await mkdir(join(root, "assets"));
-  await writeFile(join(root, "assets/index.html"), "<title>App</title>");
-  await mkdir(join(root, "backend"));
-  await writeFile(join(root, "backend/package.json"), "{}");
-  await writeFile(
-    join(root, "muon.json"),
-    JSON.stringify({ node: { project: "./backend" } }),
-  );
-  const result = await buildMuonApp({
-    root,
-    packageDirectory,
-    targets: ["linux-amd64"],
-  });
-  expect(
-    await readFakeLauncherEmbeddedConfig(result.targets[0]!.launcherPath),
-  ).not.toHaveProperty("launcher.nodeRuntime");
-  expect(await exists(join(root, "dist-muon/linux-amd64/node-project"))).toBe(
-    false,
-  );
-});

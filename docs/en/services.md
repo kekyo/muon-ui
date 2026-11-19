@@ -12,6 +12,8 @@ Declare named services in `muon.json`. An application can have several services,
 
 A generation lasts from service startup through shutdown. Enabling autostart keeps a resident reference after the last page releases its own reference.
 
+To save text from a page and read it back after a reload, follow [Build a QuickJS note service](quickjs-service-tutorial.md).
+
 ## Your first TS service
 
 Add the SDK to an existing Muon application. Building QuickJS and Node.js services requires Vite 8 or later.
@@ -130,6 +132,33 @@ When stopping begins, the host cancels the generation's `context.signal` and out
 | `execution-timeout` | The OS notified the service of its execution deadline. |
 | `host-stop` | The host received a general termination request. |
 
+A desktop service can record when it starts at login and when it receives a session-end notification. Give the service `read-write` access to `io.fs.data`. Enable service autostart to try the login case.
+
+```ts
+import { defineService, defineServiceInterface } from 'muon-plugin-sdk/services';
+
+export default defineService({
+  interface: defineServiceInterface({ schemaVersion: 1, methods: {}, events: {} }),
+  start: async (context) => {
+    if (context.startReason === 'login-autostart') {
+      await context.fs.writeText('login-start.txt', new Date().toISOString(), {
+        signal: context.signal,
+      });
+    }
+    return {
+      methods: {},
+      stop: async (info) => {
+        if (info.reason === 'session-ending') {
+          await context.fs.writeText('session-end.txt', new Date().toISOString(), {
+            signal: info.signal,
+          });
+        }
+      },
+    };
+  },
+});
+```
+
 On Windows and Linux the service keeps running when a session-end query is cancelled. Linux session notifications require a desktop portal that supports session monitoring. Android delivers notifications to a running service host. A process crash or power loss can prevent the host from calling `stop`. [Windows session notification](https://learn.microsoft.com/en-us/windows/win32/shutdown/wm-endsession) · [Linux session monitoring](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Inhibit.html) · [Android shutdown broadcast](https://developer.android.com/reference/android/content/Intent#ACTION_SHUTDOWN)
 
 ## Service files, outgoing requests and local listeners
@@ -155,8 +184,51 @@ Give each service its own `io` grants in `muon.json`. Page permissions apply sep
 
 - Use `context.fs.readBytes` and `writeBytes` for `Uint8Array` data, or `readText` and `writeText` for UTF-8. Paths are relative to an area. The default area, `data`, is private to the service. A write replaces the destination atomically. Failure before replacement preserves its previous contents. The API also provides `mkdir`, `list` and `rename`. Each file is limited to 1 MiB.
 - Read the packaged initial value with `context.fs.readBytes('initial', { area: 'assets' })`. An asset key is its logical name and the value is its project-relative source. To grant another directory, add a named entry such as `{"path":"/absolute/path","access":"read"}` to `fs.directories`. Use `read-write` to allow writes. The API rejects paths and links outside the granted area.
+
+  For example, a method that restores the default reads the packaged asset and replaces the service's private file. Here `context` is the argument to `start`, and `call` is the first argument to the public method.
+
+  ```ts
+  const initial = await context.fs.readBytes('initial', {
+    area: 'assets',
+    signal: call.signal,
+  });
+  await context.fs.writeBytes('state.bin', initial, { signal: call.signal });
+  ```
+
 - `context.http.request({ url, method, headers, body, responseType, signal })` returns `status`, lowercase `headers` and `body`. The default body is binary. Select `responseType: 'text'` for UTF-8. Responses with a 4xx or 5xx status carry ordinary response data. Each redirect must target an allowed origin, with a maximum of five redirects. HTTPS uses the operating system's certificate trust and hostname checks. The request and response body limits are each 1 MiB. A generation can have eight requests in flight. `timeoutMs` covers the whole request including redirects. It defaults to 30000 and accepts values from 1 through 120000.
+
+  This method sends a GET request and returns the response text on a 200 status. Declare `errors: ['http-status']` on the method so the page receives the status in the error message for other responses. To try it, change `url` to your API's URL and add its origin to `io.http.origins`. Passing `call.signal` also cancels the HTTP request if the page cancels the call.
+
+  ```ts
+  const reply = await context.http.request({
+    url: 'https://api.example.org/status',
+    responseType: 'text',
+    timeoutMs: 5000,
+    signal: call.signal,
+  });
+  if (reply.status !== 200) {
+    throw Object.assign(new Error('HTTP ' + reply.status), { code: 'http-status' });
+  }
+  return reply.body;
+  ```
+
 - `context.server.listen({ name, port, fetch, websocket, allowedOrigins, bearerToken })` binds to `127.0.0.1` on ports 1025 through 65535. The `fetch` handler receives the request's `method`, `url`, `headers` and binary `body`, and returns the status, headers and optional text or binary body. Use `websocket.accept` to accept upgrades and `message` to receive text or bytes. The host validates Host and Origin, and checks credentials when you supply a Bearer token. The returned listener's `close()` closes its connections. A resident service can continue listening after its page closes. Stopping its generation releases the listener.
+
+  This `start` handler body echoes HTTP bodies and WebSocket messages. While holding a reference to the service, run `curl --data hello http://127.0.0.1:43123/` to receive `hello`. For browser clients, set `allowedOrigins` to the origin of the page making the connection.
+
+  ```ts
+  const listener = await context.server.listen({
+    name: 'echo',
+    port: 43123,
+    allowedOrigins: ['https://app.example.org'],
+    fetch: (request) => ({ body: request.body }),
+    websocket: {
+      accept: () => ({}),
+      message: async (socket, data) => await socket.send(data),
+    },
+  });
+  return { methods: {}, stop: async () => await listener.close() };
+  ```
 
 For HTTP requests to a listener with a Bearer token, send an Authorization header containing `Bearer <token>`. A browser WebSocket client can offer the `muon.auth` subprotocol together with `muon.bearer.` followed by the Base64URL-encoded token. [WebSocket authentication example (Japanese)](../ja/local-server.md#ブラウザーからのwebsocket認証)
 
@@ -202,6 +274,22 @@ To share static types with a page, put a `defineServiceInterface()` declaration 
 Use `bigint` for `int64` and `uint64`, and `Uint8Array` for `bytes`. Strings, booleans, 32-bit integers, floating-point numbers, and arrays of these types are also supported. Values must match the declared schema. Declare method-specific error codes in `errors`; JS/TS implementations throw errors with `code` and `message`.
 
 `call(method, args, { signal })` supports cancellation. JS/TS methods receive invocation context as their first argument and can observe its `signal`. Implement cancellation for pending I/O and release resources during shutdown.
+
+The `returns` field describes the value a method's `Promise` resolves to. Replace `start` in the first `echo` service with the following property and grant the service `read-write` access to `io.fs.data`. The implementation returns a `Promise<string>`, so its interface declares `returns: 'string'`.
+
+```ts
+start: (context) => ({
+  methods: {
+    echo: async (call, text): Promise<string> => {
+      await context.fs.writeText('last-echo.txt', text, { signal: call.signal });
+      return text;
+    },
+  },
+  stop: () => {},
+}),
+```
+
+On the page, `await handle.call('echo', ['Hello'])` yields `'Hello'` after the write completes. If the write fails, the call rejects and the page can handle the error with `try` / `catch`.
 
 Function arguments are callbacks scoped to the parent method. They expire when the method completes or is cancelled. Use events for ongoing notifications: services call `context.emit(name, value)` on their start context, and pages call `handle.subscribe(name, listener)`.
 
@@ -330,6 +418,17 @@ Services do not inherit page permissions. Services sharing a plugin must agree o
 Each service has a separate JS environment. Alongside standard JavaScript, it provides `setTimeout`, `clearTimeout`, and `console`. Add `import type {} from 'muon-plugin-sdk/service-globals'` for optional host declarations.
 
 The host does not supply DOM, `window.muon`, Node builtins, `fetch`, or `setInterval`. Use the service’s granted file and network APIs for I/O. The builder produces a single JS bundle and packages declared assets with the service.
+
+The SDK's `quickjs-project` uses the npm package `base64-js` to encode binary data as a Base64 string. To use it in your own service, run `npm install base64-js` in the service project. [base64-js API](https://github.com/beatgammit/base64-js#methods)
+
+```ts
+import { fromByteArray } from 'base64-js';
+
+const bytes = Uint8Array.of(0, 128, 255);
+console.log(fromByteArray(bytes)); // AID/
+```
+
+For examples of reading a file, sending an HTTP request, and answering HTTP or WebSocket clients, see [Service files, outgoing requests and local listeners](#service-files-outgoing-requests-and-local-listeners).
 
 Current limits are 8 MiB per JS bundle, 64 MiB per JS heap, a 1 MiB stack, 2 seconds per JS execution turn, and 10 seconds each for startup and shutdown. Waiting for asynchronous I/O differs from CPU execution time. Runtime errors and exceeded limits are reported as service failures. Unresponsive native cleanup or a process crash can affect other services in the same process.
 

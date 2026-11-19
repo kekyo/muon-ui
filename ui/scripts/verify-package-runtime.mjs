@@ -15,7 +15,6 @@ const packageRuntimeTargets = {
     serviceHost: "muon-service-host",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
-    nodePluginLibrary: "node.so",
     executorSupervisor: "muon-executor-supervisor",
   },
   "linux-armhf": {
@@ -26,7 +25,6 @@ const packageRuntimeTargets = {
     serviceHost: "muon-service-host",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
-    nodePluginLibrary: "node.so",
     executorSupervisor: "muon-executor-supervisor",
   },
   "linux-arm64": {
@@ -37,7 +35,6 @@ const packageRuntimeTargets = {
     serviceHost: "muon-service-host",
     uiLibrary: "libmuon-ui.so",
     cardioLibrary: "libcardio.so",
-    nodePluginLibrary: "node.so",
     executorSupervisor: "muon-executor-supervisor",
   },
   "windows-i686": {
@@ -48,7 +45,6 @@ const packageRuntimeTargets = {
     serviceHost: "muon-service-host.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
-    nodePluginLibrary: "node.dll",
   },
   "windows-amd64": {
     nativePrepare: "muon-builder.exe",
@@ -58,7 +54,6 @@ const packageRuntimeTargets = {
     serviceHost: "muon-service-host.exe",
     uiLibrary: "libmuon-ui.dll",
     cardioLibrary: "libcardio.dll",
-    nodePluginLibrary: "node.dll",
   },
 };
 
@@ -145,8 +140,7 @@ for (const target of targets) {
     descriptor.serviceHost,
     descriptor.uiLibrary,
     descriptor.cardioLibrary,
-    join("plugins", descriptor.nodePluginLibrary),
-    join("plugins", "node-bridge.mjs"),
+    "node-service-bridge.mjs",
     ...(descriptor.executorSupervisor === undefined
       ? []
       : [descriptor.executorSupervisor]),

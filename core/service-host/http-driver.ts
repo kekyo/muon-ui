@@ -40,7 +40,7 @@ export const createHttpDriver = async (assets: string, binaries: string) => {
     services: {
       httpNative: { library: join(binaries, process.platform === 'win32' ? 'http-service.dll' : 'http-service.so'), io },
       httpQuick: { runtime: 'quickjs', script: join(assets, 'http-quick.js'), io },
-      httpNode: { runtime: 'node', project: assets, entry: './http-node.mjs', executable: process.execPath, bridge: join(assets, 'node-bridge.mjs'), io },
+      httpNode: { runtime: 'node', project: assets, entry: './http-node.mjs', executable: process.execPath, bridge: join(assets, 'node-service-bridge.mjs'), io },
     },
     verify: async (api: ReturnType<typeof createMuonServicesApi>) => {
       for (const id of ['httpNative','httpQuick','httpNode']) {

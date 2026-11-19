@@ -35,7 +35,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Records the request callbacks exposed by WebView for debug capability tests. */
 public final class MuonNetworkCapabilityProbeActivity extends Activity {
-    static final String EXTRA_PAGE_URL = "dev.muon.prototype.extra.PAGE_URL";
+    static final String EXTRA_PAGE_URL = "dev.muon.testhost.extra.PAGE_URL";
     private static final String MESSAGE_OBJECT_NAME = "muonNetworkProbe";
 
     private final CountDownLatch pageReady = new CountDownLatch(1);

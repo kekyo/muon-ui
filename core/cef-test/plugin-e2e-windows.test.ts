@@ -134,9 +134,5 @@ if (windowsAgent !== undefined) {
   await import("./plugin-e2e/application-windows-long-path.js");
   await import("./plugin-e2e/filesystem-windows-long-path.js");
   await import("./plugin-e2e/plugin-interop.js");
-  await import("./plugin-e2e/node-plugin.js");
-  await import("./plugin-e2e/node-plugin-express.js");
-  await import("./plugin-e2e/node-plugin-validate.js");
   await import("./plugin-e2e/native-dialog.js");
-  await import("./plugin-e2e/node-plugin-windows-job.js");
 }

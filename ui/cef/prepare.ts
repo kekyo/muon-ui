@@ -49,7 +49,7 @@ export interface MuonPrepareOptions {
   cacheDir: string | undefined;
 
   /**
-   * Node runtime requirement used to select or validate a sidecar runtime.
+   * Node runtime requirement used to select or validate the Node.js service runtime.
    *
    * @remarks This is `undefined` when the application has no Node project.
    */

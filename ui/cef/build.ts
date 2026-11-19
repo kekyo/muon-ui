@@ -78,12 +78,8 @@ import type { MuonProgressCallback } from "../common/progress.js";
 import {
   assertMuonNodeProjectAssetSourceIsSafe,
   assertMuonNodeProjectStagingIsSafe,
-  createPackagedMuonNodeConfig,
   createMuonNodeRuntimeRequirement,
-  resolveMuonNodeProject,
   resolveMuonNodeServiceProjects,
-  stageMuonNodeHostArtifacts,
-  stageMuonNodeProject,
   type MuonNodeRuntimeRequirement,
   type ResolvedMuonNodeProject,
 } from "./node-project.ts";
@@ -188,23 +184,13 @@ export const buildDesktopMuonApp = async (
           targets,
           environment,
         })));
-  const nodeProject = await resolveMuonNodeProject(
-    buildConfig.config,
-    buildConfig.directory,
-  );
   const runtimePluginConfig = options.runtimePluginConfig ?? {
     mode: "simple",
   };
-  const nodeProjects = [
-    ...(nodeProject === undefined ? [] : [nodeProject]),
-    ...services.flatMap((service) =>
-      service.runtime === "node" ? [service.project] : [],
-    ),
-  ];
-  const nodeRuntimeRequirement = createMuonNodeRuntimeRequirement(
-    nodeProjects,
-    true,
+  const nodeProjects = services.flatMap((service) =>
+    service.runtime === "node" ? [service.project] : [],
   );
+  const nodeRuntimeRequirement = createMuonNodeRuntimeRequirement(nodeProjects);
   for (const target of targets) {
     await assertMuonNodeProjectStagingIsSafe(
       nodeProjects,
@@ -219,12 +205,9 @@ export const buildDesktopMuonApp = async (
     services: _serviceBuildConfig,
     ...desktopConfig
   } = buildConfig.config;
-  const sourceConfig = createPackagedMuonNodeConfig(
-    applyRuntimePluginConfig(
-      { ...desktopConfig, notifications },
-      runtimePluginConfig,
-    ),
-    nodeProject,
+  const sourceConfig = applyRuntimePluginConfig(
+    { ...desktopConfig, notifications },
+    runtimePluginConfig,
   );
   if (nativeArtifacts.size > 0) {
     const plugin = sourceConfig.plugin as JsonObject;
@@ -325,7 +308,6 @@ export const buildDesktopMuonApp = async (
       windowsCodeSigning,
       linuxDesktop,
       distributionFiles,
-      nodeProject,
       nodeRuntimeRequirement,
       salt,
       environment,
@@ -463,26 +445,6 @@ const resolvePackageDescription = (packageJson: JsonObject): string =>
     : "";
 
 /**
- * Resolves the Node project selected by a build-oriented muon configuration.
- *
- * @param root Project root used to locate a default or relative config path.
- * @param configPath Explicit muon config path, or `undefined` to use the
- * default config lookup.
- * @returns The resolved Node project, or `undefined` when Node hosting is not
- * enabled.
- */
-export const resolveMuonNodeProjectForBuildConfig = async (
-  root: string,
-  configPath: string | undefined,
-): Promise<ResolvedMuonNodeProject | undefined> => {
-  const buildConfig = await readBuildConfig(root, configPath);
-  return await resolveMuonNodeProject(
-    buildConfig.config,
-    buildConfig.directory,
-  );
-};
-
-/**
  * Resolves Node service projects before Vite or packaging changes any output.
  * @param root - Application root used to locate the configuration.
  * @param configPath - Explicit configuration or undefined for default lookup.
@@ -555,7 +517,6 @@ const buildMuonTarget = async (input: {
   windowsCodeSigning: ResolvedMuonWindowsCodeSigning | undefined;
   linuxDesktop: ResolvedMuonLinuxDesktop;
   distributionFiles: readonly DistributionFile[];
-  nodeProject: ResolvedMuonNodeProject | undefined;
   nodeRuntimeRequirement: MuonNodeRuntimeRequirement | undefined;
   salt: Buffer;
   environment: NodeJS.ProcessEnv;
@@ -641,13 +602,11 @@ const buildMuonTarget = async (input: {
     await chmod(runtimeHelperPath, executableMode);
   }
   if (input.nodeRuntimeRequirement !== undefined) {
-    await stageMuonNodeHostArtifacts(
-      sourceRuntimePath,
-      outputPath,
-      descriptor.os,
+    await copyFile(
+      join(sourceRuntimePath, "node-service-bridge.mjs"),
+      join(outputPath, "node-service-bridge.mjs"),
     );
   }
-  await stageMuonNodeProject(input.nodeProject, outputPath);
   await copyDistributionFiles(input.distributionFiles, outputPath);
   if (notificationRegistration !== undefined) {
     await copyFile(appIconPath, join(outputPath, "notification-icon.png"));

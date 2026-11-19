@@ -65,12 +65,8 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
       req.pipe(res);
     });
     const tls = tlsServer({
-      key: await readFile(
-        '../android-poc/android/app/src/androidTest/assets/localhost-key.pem'
-      ),
-      cert: await readFile(
-        '../android-poc/android/app/src/androidTest/assets/localhost-cert.pem'
-      ),
+      key: await readFile('../service-host/test-assets/localhost-key.pem'),
+      cert: await readFile('../service-host/test-assets/localhost-cert.pem'),
     });
     const reverse: string[] = [];
     const listenerPorts: number[] = [];

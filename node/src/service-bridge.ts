@@ -20,15 +20,14 @@ import { createNodeServiceIo, type NodeServiceIoPolicy } from './service-io.ts';
 import { createMuonNodeFrameDecoder, encodeMuonNodeFrame } from './framing.ts';
 import {
   initializeMuonNodeProject,
-  importMuonNodeProjectModule,
-} from './index.ts';
+  loadNodeServiceEntry,
+} from './service-project.ts';
 
 /** Streams and authentication inherited by a service-owned Node process. */
 export interface MuonNodeServiceBridgeOptions {
   /** Framed requests from the owning service host. */ readonly input: Readable;
   /** Framed replies, callbacks, and events to the same host. */ readonly output: Writable;
-  /** Secret required during initialization; omitted only by trusted tests. */ readonly expectedToken?: string;
-  /** Whether the child uses the service project's working directory. */ readonly changeWorkingDirectory: boolean;
+  /** Secret required during initialization. */ readonly expectedToken: string;
   /** Cleanup deadline after transport loss, in milliseconds; defaults to 5000. */ readonly shutdownTimeoutMs?: number;
 }
 
@@ -216,15 +215,14 @@ export const createMuonNodeServiceBridge = (
     const project = await initializeMuonNodeProject(
       params,
       options.expectedToken,
-      options.changeWorkingDirectory,
       protocol
     );
     const entry = text(params.entry);
-    const imported = await importMuonNodeProjectModule(project, entry);
+    const imported = await loadNodeServiceEntry(project, entry);
     if (stopping || ended)
       throw failure('unavailable', 'Service startup was canceled');
     const definition = defineService(
-      imported.namespace.default as ServiceDefinition<ServiceInterface>
+      imported.default as ServiceDefinition<ServiceInterface>
     );
     identity = {
       startReason: text(

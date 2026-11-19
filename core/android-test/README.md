@@ -6,7 +6,7 @@ Android上のWebView、RPC、ネイティブプラグイン、ファイル操作
 
 端末テストでは`ANDROID_SERIAL`で対象を指定します。x86_64・16 KiBページのエミュレーターでは`npm run test:android --workspace muon-android-tester`、Pixel 6では`npm run test:android:pixel6 --workspace muon-android-tester`を実行します。
 
-`observer`は独立した利用アプリを端末から操作するためのテストアプリです。QuickJSの試作と検証は[core/android-poc](../android-poc)にあります。
+`observer`は、端末上で独立した利用アプリを操作するためのテストアプリです。
 
 ## Androidプラグインの同梱
 

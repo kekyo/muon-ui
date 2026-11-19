@@ -20,7 +20,7 @@ const build = vi.hoisted(() =>
 );
 vi.mock("../common/build.js", () => ({
   buildMuonApp: build,
-  resolveMuonNodeProjectForBuildConfig: async () => undefined,
+  resolveMuonNodeServiceProjectsForBuildConfig: async () => [],
 }));
 const directories: string[] = [];
 afterEach(async () => {

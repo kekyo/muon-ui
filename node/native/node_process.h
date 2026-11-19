@@ -18,7 +18,7 @@
 
 /** One child and its transport, exclusively owned by a dispatcher-bound caller.
  * All pending I/O and the process monitor must drain before closing its handles.
- * The caller supplies lifecycle policy; this transport has no page ownership. */
+ * The service host supplies lifecycle policy. */
 struct MuonNodeProcess {
   std::string executable_path; /**< Absolute Node executable path. */
   std::string bridge_path; /**< Absolute bundled bridge entry. */
@@ -48,11 +48,10 @@ struct MuonNodeProcessExit {
 std::string CreateMuonNodeSessionToken();
 /** Starts the child and establishes its private transport.
  * @param process Owned child state and immutable launch paths.
- * @param service Whether to select the service bridge instead of the page bridge.
  * @param spawned Invoked after child creation, before connection waits; starts
  * the owner's process monitor so pre-connect exits cancel connection promptly.
  * @remarks The owner must clean up even if startup throws after spawning. */
-cardio::promise<void> StartMuonNodeProcess(MuonNodeProcess* process, bool service,
+cardio::promise<void> StartMuonNodeProcess(MuonNodeProcess* process,
     std::function<void()> spawned);
 /** @returns Terminal result after asynchronous OS notification and reaping. */
 cardio::promise<MuonNodeProcessExit> WaitMuonNodeProcess(MuonNodeProcess* process);

@@ -30,12 +30,8 @@ import {
   type MuonDevelopmentServices,
 } from "./development-services.ts";
 import {
-  assertMuonNodeHostArtifacts,
   assertMuonNodeProjectStagingIsSafe,
   createMuonNodeRuntimeRequirement,
-  resolveMuonNodeProject,
-  stageMuonNodeProject,
-  type ResolvedMuonNodeProject,
 } from "./node-project.ts";
 
 export interface MuonLaunchScriptOptions {
@@ -67,9 +63,6 @@ interface MuonProjectConfigResolution {
 interface MuonOverrideConfig {
   serviceHost: MuonDevelopmentServiceConfig["serviceHost"];
   config?: Record<string, string>;
-  node?: {
-    project: string;
-  };
   cdp?: {
     enable: true;
   };
@@ -328,20 +321,12 @@ const createMuonOverrideConfig = (
   allowInsecureLocalhost: boolean | undefined,
   config: Readonly<Record<string, string>> | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig,
-  nodeProjectPath: string | undefined,
   serviceConfig: MuonDevelopmentServiceConfig,
 ): MuonOverrideConfig => {
   const origin = new URL(startUrl).origin;
   return {
     serviceHost: serviceConfig.serviceHost,
     ...(config === undefined ? {} : { config: { ...config } }),
-    ...(nodeProjectPath === undefined
-      ? {}
-      : {
-          node: {
-            project: nodeProjectPath,
-          },
-        }),
     ...(enableDebugger
       ? {
           cdp: {
@@ -383,7 +368,6 @@ const writeMuonOverrideConfig = (
   overrideConfigPath: string,
   pluginOptions: MuonVitePluginOptions,
   runtimePluginConfig: MuonRuntimePluginConfig,
-  nodeProjectPath: string | undefined,
   serviceConfig: MuonDevelopmentServiceConfig,
 ): boolean => {
   const startUrl = getBaseUrl(server);
@@ -400,7 +384,6 @@ const writeMuonOverrideConfig = (
         pluginOptions.allowInsecureLocalhost,
         pluginOptions.dev?.config,
         runtimePluginConfig,
-        nodeProjectPath,
         serviceConfig,
       ),
       null,
@@ -572,8 +555,6 @@ export const startMuonViteBrowserBridge = async ({
   let uiRuntime: string | undefined;
   let activeRequirement: string | undefined;
   let activeSettings: string | undefined;
-  let activeNodeProject: ResolvedMuonNodeProject | undefined;
-  let activeNodeProjectPath: string | undefined;
   let activeInputs = new Map<string, MuonServiceInput>();
   const changedPaths = new Set<string>();
   const runtimeDirectories = new Set<string>();
@@ -585,7 +566,6 @@ export const startMuonViteBrowserBridge = async ({
   const serviceSettings = (project: MuonProjectConfigResolution): string =>
     JSON.stringify({
       services: project.config?.services,
-      node: project.config?.node,
     });
   const collectInputs = (): Map<string, MuonServiceInput> =>
     new Map(
@@ -606,24 +586,14 @@ export const startMuonViteBrowserBridge = async ({
       [target],
       { root: server.config.root, environment, onInput },
     );
-    const nodeProject = await resolveMuonNodeProject(project.config, directory);
-    if (nodeProject)
-      onInput({
-        path: join(nodeProject.sourcePath, "package.json"),
-        kind: "file",
-      });
-    const nodeProjects = [
-      ...(nodeProject === undefined ? [] : [nodeProject]),
-      ...services.flatMap((service) =>
-        service.runtime === "node" ? [service.project] : [],
-      ),
-    ];
+    const nodeProjects = services.flatMap((service) =>
+      service.runtime === "node" ? [service.project] : [],
+    );
     await assertMuonNodeProjectStagingIsSafe(nodeProjects, stagePath);
-    const requirement = createMuonNodeRuntimeRequirement(nodeProjects, true);
-    const key = JSON.stringify([requirement, nodeProject?.sourcePath]);
+    const requirement = createMuonNodeRuntimeRequirement(nodeProjects);
+    const key = JSON.stringify(requirement ?? null);
     let runtime = activeRuntime;
     let allocated: string | undefined;
-    let nodeProjectPath = activeNodeProjectPath;
     try {
       if (runtime === undefined || activeRequirement !== key) {
         let destination = stagePath;
@@ -655,15 +625,12 @@ export const startMuonViteBrowserBridge = async ({
         if (prepared.stagePath === undefined)
           throw new Error("muon-builder did not return a staged runtime path.");
         runtime = prepared.stagePath;
-        nodeProjectPath = await stageMuonNodeProject(nodeProject, runtime);
       }
       if (nodeProjects.length)
-        await assertMuonNodeHostArtifacts(runtime, platform);
+        await access(join(runtime, "node-service-bridge.mjs"));
       return {
         runtime,
         services,
-        nodeProject,
-        nodeProjectPath,
         key,
         allocated,
         onInput,
@@ -712,8 +679,6 @@ export const startMuonViteBrowserBridge = async ({
         activeRuntime = candidate.runtime;
         activeRequirement = candidate.key;
         activeSettings = settings;
-        activeNodeProject = candidate.nodeProject;
-        activeNodeProjectPath = candidate.nodeProjectPath;
         activeInputs = inputs;
         await serviceWatcher?.replace([...inputs.values()]);
         if (closing) return;
@@ -796,8 +761,6 @@ export const startMuonViteBrowserBridge = async ({
           activeRuntime = candidate.runtime;
           activeRequirement = candidate.key;
           activeSettings = serviceSettings(projectConfig);
-          activeNodeProject = candidate.nodeProject;
-          activeNodeProjectPath = candidate.nodeProjectPath;
           activeInputs = inputs;
           if (!closing && server.config.server.watch !== null)
             serviceWatcher = await createMuonDevelopmentServiceWatcher(
@@ -808,20 +771,12 @@ export const startMuonViteBrowserBridge = async ({
                   `muon service watch failed: ${getErrorMessage(error)}`,
                 ),
             );
-        } else {
-          // A UI recycle can copy its page-owned Node project after that UI has
-          // exited. The service runtime and its snapshots remain immutable.
-          activeNodeProjectPath = await stageMuonNodeProject(
-            activeNodeProject,
-            activeRuntime!,
-          );
         }
         const configWritten = writeMuonOverrideConfig(
           server,
           paths.overrideConfigPath,
           pluginOptions,
           runtimePluginConfig,
-          activeNodeProjectPath,
           serviceSession.config,
         );
         if (!configWritten || closing) {

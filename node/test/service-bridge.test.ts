@@ -51,7 +51,7 @@ it.skipIf(process.platform === 'win32').each(['stop', 'disconnect'] as const)(
     delete environment.MUON_NODE_PIPE;
     const child = spawn(
       process.execPath,
-      [resolve('dist/node-bridge.mjs'), '--service'],
+      [resolve('dist/node-service-bridge.mjs')],
       {
         env: environment,
         stdio: ['ignore', 'ignore', 'pipe', 'pipe'],

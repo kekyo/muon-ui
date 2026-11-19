@@ -8,7 +8,7 @@ const failure = (code: string, message: string) =>
   Object.assign(new Error(message), { code });
 
 /**
- * Encodes a bounded JSON message shared by page and service Node transports.
+ * Encodes a bounded JSON message for the Node.js service transport.
  * @param message - JSON-compatible protocol message.
  * @returns A big-endian four-byte length followed by UTF-8 JSON.
  * @throws Error when serialization fails or the payload exceeds 16 MiB.

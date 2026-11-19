@@ -71,12 +71,12 @@ it("owns a Node service independently of UI and drains asynchronous stop", async
     ]);
     for (const name of ["localhost-cert.pem", "localhost-key.pem"])
       await copyFile(
-        join("../android-poc/android/app/src/androidTest/assets", name),
+        join("../service-host/test-assets", name),
         join(root, name),
       );
     await copyFile(
-      resolve("../../node/dist/node-bridge.mjs"),
-      join(root, "node-bridge.mjs"),
+      resolve("../../node/dist/node-service-bridge.mjs"),
+      join(root, "node-service-bridge.mjs"),
     );
     const result = await promisify(execFile)(process.execPath, [
       join(root, "node-driver.mjs"),

@@ -86,8 +86,8 @@ it("replaces prepared services while retaining preferences and rejecting stale h
       );
     await cp(process.execPath, join(runtime, "runtimes/node/bin/node"));
     await cp(
-      resolve("../node/dist/node-bridge.mjs"),
-      join(runtime, "plugins/node-bridge.mjs"),
+      resolve("../node/dist/node-service-bridge.mjs"),
+      join(runtime, "node-service-bridge.mjs"),
     );
     const manifest = JSON.stringify({ name: "session-worker", type: "module" });
     await writeFile(join(project, "package.json"), manifest);

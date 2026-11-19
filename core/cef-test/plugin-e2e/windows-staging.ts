@@ -3,12 +3,9 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { readFile, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 
 import type { RemoteAgent } from "agent-rover";
 
@@ -21,15 +18,6 @@ import {
 
 const hashBuffer = (buffer: Buffer): string =>
   createHash("sha256").update(buffer).digest("hex");
-
-const execFileAsync = promisify(execFile);
-const windowsNodePrepareTimeoutMs = 600000;
-const windowsNodeRuntimeRequirement = JSON.stringify({
-  comparatorSets: [[">=20.19.0", "<21.0.0-0"], [">=22.12.0"]],
-  engineRange: ">=18",
-  engineRangeSpecified: true,
-  required: true,
-});
 
 const normalizeWindowsProcessPath = (path: string): string =>
   path
@@ -140,195 +128,8 @@ const stageRelayExecutable = async (
   return remoteRelayPath;
 };
 
-const runWindowsNodeRuntimePrepare = async (
-  agent: RemoteAgent,
-  target: WindowsRuntimeTarget,
-  remoteTargetRoot: string,
-): Promise<string> => {
-  const localBuilderPath = resolve(
-    "../..",
-    "builder",
-    ".run",
-    `test-${target.target}-release`,
-    "muon-builder.exe",
-  );
-  const localBuilder = await readFile(localBuilderPath);
-  const prepareRoot = joinWindowsPath(remoteTargetRoot, "node-prepare");
-  const sourceDirectory = joinWindowsPath(prepareRoot, "source");
-  const cefDirectory = joinWindowsPath(prepareRoot, "cef");
-  const stageDirectory = joinWindowsPath(prepareRoot, "stage");
-  const cacheDirectory = joinWindowsPath(
-    remoteTargetRoot,
-    "node-runtime-cache",
-  );
-  const builderPath = joinWindowsPath(prepareRoot, "muon-builder.exe");
-
-  if (await agent.files.exists(prepareRoot)) {
-    await agent.files.remove(prepareRoot, { recursive: true });
-  }
-  await agent.files.mkdir(sourceDirectory, { recursive: true });
-  await agent.files.mkdir(cefDirectory, { recursive: true });
-  await agent.files.writeFile(builderPath, localBuilder);
-  await agent.files.writeFile(
-    joinWindowsPath(sourceDirectory, "muon-core.exe"),
-    Buffer.from("muon Node runtime staging input\r\n"),
-  );
-  await agent.files.writeFile(
-    joinWindowsPath(cefDirectory, "libcef.dll"),
-    Buffer.from("muon Node runtime CEF placeholder\r\n"),
-  );
-
-  const processInfo = await agent.processes.launchManaged({
-    arguments: [
-      "runtime",
-      "--muon-path",
-      sourceDirectory,
-      "--cef-path",
-      cefDirectory,
-      "--stage-dir",
-      stageDirectory,
-      "--target",
-      target.target,
-      "--cache-dir",
-      cacheDirectory,
-      "--node-runtime-requirement",
-      windowsNodeRuntimeRequirement,
-      "--quiet",
-      "--json",
-    ],
-    captureStderr: true,
-    captureStdout: true,
-    createNoWindow: true,
-    killTreeOnRelease: true,
-    path: builderPath,
-    workingDirectory: prepareRoot,
-  });
-  let completed = false;
-  try {
-    const snapshot = await processInfo.waitForExit({
-      intervalMs: 100,
-      timeoutMs: windowsNodePrepareTimeoutMs,
-    });
-    completed = true;
-    if (snapshot.root.exitCode !== 0) {
-      const stdout = await processInfo.stdoutText();
-      const stderr = await processInfo.stderrText();
-      throw new Error(
-        `Windows Node runtime preparation failed with ${String(
-          snapshot.root.exitCode,
-        )}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-      );
-    }
-  } finally {
-    if (!completed) {
-      try {
-        await agent.processes.kill(processInfo.id);
-        await agent.processes.waitForExit(processInfo.id, {
-          intervalMs: 100,
-          timeoutMs: 3000,
-        });
-      } catch {
-        // The builder may have exited between the timeout and cleanup.
-      }
-    }
-    await processInfo.releaseAsync();
-  }
-
-  return joinWindowsPath(stageDirectory, "runtimes", "node");
-};
-
-const stageWindowsNodeSupport = async (
-  agent: RemoteAgent,
-  target: WindowsRuntimeTarget,
-  remoteTargetRoot: string,
-  debugRuntimeDirectory: string,
-  releaseRuntimeDirectory: string,
-): Promise<{
-  nodeExpressProjectDirectory: string;
-  nodeProjectDirectory: string;
-}> => {
-  const remotePreparedNodeDirectory = await runWindowsNodeRuntimePrepare(
-    agent,
-    target,
-    remoteTargetRoot,
-  );
-  const localDownloadRoot = await mkdtemp(
-    join(tmpdir(), `muon-${target.target}-node-`),
-  );
-  const localNodeDirectory = join(localDownloadRoot, "node");
-  try {
-    await agent.files.downloadDirectory({
-      localPath: localNodeDirectory,
-      remotePath: remotePreparedNodeDirectory,
-    });
-    await stageWindowsRuntimeDirectory(
-      agent,
-      localNodeDirectory,
-      joinWindowsPath(debugRuntimeDirectory, "runtimes", "node"),
-    );
-    await stageWindowsRuntimeDirectory(
-      agent,
-      localNodeDirectory,
-      joinWindowsPath(releaseRuntimeDirectory, "runtimes", "node"),
-    );
-  } finally {
-    await rm(localDownloadRoot, { recursive: true, force: true });
-    const prepareRoot = joinWindowsPath(remoteTargetRoot, "node-prepare");
-    if (await agent.files.exists(prepareRoot)) {
-      await agent.files.remove(prepareRoot, { recursive: true });
-    }
-  }
-
-  const nodeProjectDirectory = joinWindowsPath(
-    remoteTargetRoot,
-    "node-project",
-  );
-  await stageWindowsRuntimeDirectory(
-    agent,
-    resolve("fixtures", "node-project"),
-    nodeProjectDirectory,
-  );
-
-  const localExpressRoot = await mkdtemp(
-    join(tmpdir(), `muon-${target.target}-express-`),
-  );
-  const localExpressProjectDirectory = join(localExpressRoot, "project");
-  const nodeExpressProjectDirectory = joinWindowsPath(
-    remoteTargetRoot,
-    "node-express-project",
-  );
-  try {
-    await cp(
-      resolve("fixtures", "node-express-project"),
-      localExpressProjectDirectory,
-      { recursive: true },
-    );
-    await execFileAsync(
-      "npm",
-      ["ci", "--prefer-offline", "--ignore-scripts", "--omit=dev"],
-      { cwd: localExpressProjectDirectory },
-    );
-    await rm(join(localExpressProjectDirectory, "node_modules", ".bin"), {
-      recursive: true,
-      force: true,
-    });
-    await stageWindowsRuntimeDirectory(
-      agent,
-      localExpressProjectDirectory,
-      nodeExpressProjectDirectory,
-    );
-  } finally {
-    await rm(localExpressRoot, { recursive: true, force: true });
-  }
-
-  return {
-    nodeExpressProjectDirectory,
-    nodeProjectDirectory,
-  };
-};
-
 /**
- * Stages the Windows runtime, its managed Node.js runtime, and Node fixture.
+ * Stages the Windows runtime, and test relay.
  *
  * @param agent Connected Windows test agent.
  * @param environment Windows e2e environment.
@@ -343,15 +144,10 @@ export const stageWindowsRuntime = async (
   const remoteTargetRoot = joinWindowsPath(environment.workDir, target.target);
   const debugRuntimeDirectory = joinWindowsPath(remoteTargetRoot, "debug");
   const releaseRuntimeDirectory = joinWindowsPath(remoteTargetRoot, "release");
-  const nodePrepareDirectory = joinWindowsPath(
-    remoteTargetRoot,
-    "node-prepare",
-  );
   const relayExecutablePath = getRemoteRelayPath(remoteTargetRoot);
   const runtimeDirectories = [
     debugRuntimeDirectory,
     releaseRuntimeDirectory,
-    nodePrepareDirectory,
   ] as const;
 
   await cleanupWindowsStagedRuntimeProcesses(
@@ -370,14 +166,6 @@ export const stageWindowsRuntime = async (
     resolve("../..", target.releaseRuntimeDirectory),
     releaseRuntimeDirectory,
   );
-  const { nodeExpressProjectDirectory, nodeProjectDirectory } =
-    await stageWindowsNodeSupport(
-      agent,
-      target,
-      remoteTargetRoot,
-      debugRuntimeDirectory,
-      releaseRuntimeDirectory,
-    );
   const stagedRelayExecutablePath = await stageRelayExecutable(
     agent,
     target,
@@ -386,8 +174,6 @@ export const stageWindowsRuntime = async (
 
   return {
     debugRuntimeDirectory,
-    nodeExpressProjectDirectory,
-    nodeProjectDirectory,
     releaseRuntimeDirectory,
     relayExecutablePath: stagedRelayExecutablePath,
     target: target.target,

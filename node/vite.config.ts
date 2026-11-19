@@ -26,7 +26,7 @@ export default defineConfig({
     lib: {
       entry: 'src/cli.ts',
       formats: ['es'],
-      fileName: () => 'node-bridge.mjs',
+      fileName: () => 'node-service-bridge.mjs',
     },
     minify: false,
     sourcemap: false,

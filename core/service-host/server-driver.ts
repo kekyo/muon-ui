@@ -20,7 +20,7 @@ export const createServerDriver = async (assets: string,binaries: string) => {
   const sources = [
     {library:join(binaries,process.platform==='win32'?'server-service.dll':'server-service.so')},
     {runtime:'quickjs',script:join(assets,'server-quick.js')},
-    {runtime:'node',project:assets,entry:'./server-node.mjs',executable:process.execPath,bridge:join(assets,'node-bridge.mjs')},
+    {runtime:'node',project:assets,entry:'./server-node.mjs',executable:process.execPath,bridge:join(assets,'node-service-bridge.mjs')},
   ];
   const auth = {Authorization:'Bearer local-service'};
   const query = async (port:number, headers: Record<string,string>, data?: Uint8Array) => await new Promise<{status:number;generation:unknown;body:Buffer}>((resolve,reject)=>{

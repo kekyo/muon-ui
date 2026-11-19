@@ -697,7 +697,7 @@ exit 99
     ).rejects.toMatchObject({ code: 42, stderr: "npm pack failed\n" });
   });
 
-  it("stages Linux runtime helpers and the Node plugin without bundling a Node runtime", async () => {
+  it("stages Linux runtime helpers and the Node service bridge without bundling a Node runtime", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-package-node-stage-"));
     cleanupDirectories.push(root);
     const workspaceDirectory = join(root, "ui");
@@ -719,7 +719,7 @@ exit 99
       const builderDirectory = join(root, "builder", `dist-${target}`);
       const runtimeDirectory = join(root, "core/cef", `dist-${target}`);
       await mkdir(builderDirectory, { recursive: true });
-      await mkdir(join(runtimeDirectory, "plugins"), { recursive: true });
+      await mkdir(runtimeDirectory, { recursive: true });
       for (const executableName of [
         "muon-builder",
         "muon-launcher",
@@ -755,11 +755,7 @@ exit 99
         "audit\n",
       );
       await writeFile(
-        join(runtimeDirectory, "plugins", "node.so"),
-        "node plugin\n",
-      );
-      await writeFile(
-        join(runtimeDirectory, "plugins", "node-bridge.mjs"),
+        join(runtimeDirectory, "node-service-bridge.mjs"),
         "node bridge\n",
       );
       await writeExecutableScript(join(runtimeDirectory, "node"), "node\n");
@@ -797,11 +793,8 @@ exit 99
         ),
       ).resolves.toBe("audit\n");
       await expect(
-        readFile(join(stagedRuntimeDirectory, "plugins", "node.so"), "utf8"),
-      ).resolves.toBe("node plugin\n");
-      await expect(
         readFile(
-          join(stagedRuntimeDirectory, "plugins", "node-bridge.mjs"),
+          join(stagedRuntimeDirectory, "node-service-bridge.mjs"),
           "utf8",
         ),
       ).resolves.toBe("node bridge\n");
@@ -820,7 +813,7 @@ exit 99
     const native = join(root, "dist/native/linux-amd64");
     const runtime = join(root, "dist/runtime/linux-amd64");
     await mkdir(native, { recursive: true });
-    await mkdir(join(runtime, "plugins"), { recursive: true });
+    await mkdir(runtime, { recursive: true });
     await writeFile(join(root, "dist/native/muon-256.png"), "icon");
     for (const name of [
       "muon-builder",
@@ -833,9 +826,8 @@ exit 99
       "libmuon-ui.so",
       "libcardio.so",
       "muon-executor-supervisor",
-      "plugins/node.so",
       "muon-service-host",
-      "plugins/node-bridge.mjs",
+      "node-service-bridge.mjs",
       "CREDITS.md",
     ])
       await writeExecutableScript(join(runtime, name), "payload");
@@ -1007,7 +999,9 @@ printf '  Machine:                           Advanced Micro Devices X86-64\\n'
     expect(containerInvocation).toContain(
       "MUON_CORE_VERSION_HEADER=/workspace/core/cef/.build/package/muon_core_version_generated.h",
     );
-    expect(containerInvocation).toContain("MUON_NODE_BRIDGE_PREBUILT=1");
+    expect(containerInvocation).toContain(
+      "MUON_NODE_SERVICE_BRIDGE_PREBUILT=1",
+    );
     await expect(
       readFile(
         join(
@@ -1537,108 +1531,6 @@ void disposable;
 void released;
 void symbolReleased;
 void releasePromise;
-`),
-    ).resolves.toBeUndefined();
-  });
-
-  it("provides types for descriptor-backed modules from a Node instance", async () => {
-    await expect(
-      runTypeScriptConsumer(`import { createNode } from "muon:node";
-import type {} from "muon-ui";
-
-interface FsPromisesExports {
-  readonly readFile: (path: string, encoding: string) => Promise<string>;
-}
-
-const nodeApi: MuonNodeApi | undefined = window.muon.node;
-const validateCreateNode: MuonNodeApi["createNode"] = createNode;
-const callback: MuonNodeCallback = async (value) => String(value);
-const value: MuonNodeValue = Uint8Array.from([1, 2, 3]);
-const jsonValue: MuonNodeJsonValue = {
-  enabled: true,
-  nested: {
-    count: 3,
-    labels: ["first", "second"] as const,
-  },
-};
-const nestedJsonValue: MuonNodeValue = {
-  records: [
-    { id: 1, value: null },
-    { id: 2, value: "second" },
-  ] as const,
-};
-const readonlyJsonArray: MuonNodeValue = [
-  "first",
-  { nested: [true, null, 42] as const },
-] as const;
-const argument: MuonNodeArgument = callback;
-const jsonArgument: MuonNodeArgument = {
-  request: {
-    ids: [1, 2, 3] as const,
-  },
-};
-const arrayBufferArgument: MuonNodeArgument = new ArrayBuffer(8);
-const typedArrayArgument: MuonNodeArgument = new Int32Array([1, 2, 3]);
-const jsonCallbackResult: MuonNodeCallbackResult = {
-  response: ["accepted", { complete: true }] as const,
-};
-const jsonCallback: MuonNodeCallback = async () => [
-  "accepted",
-  { complete: true },
-] as const;
-
-class UnsupportedClass {
-  readonly value = "unsupported";
-}
-
-const run = async (): Promise<void> => {
-  if (nodeApi === undefined) {
-    return;
-  }
-  const node: MuonNodeInstance = await nodeApi.createNode();
-  const releaseable: AsyncReleaseable = node;
-  const fs: MuonNodeModule<FsPromisesExports> =
-    await node.importModule<FsPromisesExports>("node:fs/promises");
-  const text: string = await fs.readFile("file.txt", "utf8");
-  await fs.$release();
-  await node.release();
-  await node[Symbol.asyncDispose]();
-  void releaseable;
-  void text;
-};
-
-// @ts-expect-error BigInt is supported only as a top-level bridge value.
-const nestedBigInt: MuonNodeValue = { unsupported: 1n };
-// @ts-expect-error Undefined is supported only as a top-level bridge value.
-const nestedUndefined: MuonNodeValue = { unsupported: undefined };
-// @ts-expect-error Binary values are supported only as top-level bridge values.
-const nestedBuffer: MuonNodeValue = { unsupported: Uint8Array.from([1, 2, 3]) };
-// @ts-expect-error Functions cannot be nested in copied JSON values.
-const nestedFunction: MuonNodeValue = { unsupported: (value: number): number => value };
-// @ts-expect-error Date instances are not copied JSON values.
-const nestedDate: MuonNodeValue = { unsupported: new Date() };
-// @ts-expect-error Class instances are not copied JSON values.
-const nestedClass: MuonNodeValue = { unsupported: new UnsupportedClass() };
-
-void argument;
-void arrayBufferArgument;
-void callback;
-void jsonArgument;
-void jsonCallback;
-void jsonCallbackResult;
-void jsonValue;
-void nestedBigInt;
-void nestedBuffer;
-void nestedClass;
-void nestedDate;
-void nestedFunction;
-void nestedJsonValue;
-void nestedUndefined;
-void readonlyJsonArray;
-void run;
-void typedArrayArgument;
-void validateCreateNode;
-void value;
 `),
     ).resolves.toBeUndefined();
   });

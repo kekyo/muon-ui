@@ -73,7 +73,6 @@ import {
 } from "./linux-desktop.js";
 import {
   assertMuonNodeProjectPackCleanupIsSafe,
-  resolveMuonNodeProject,
   resolveMuonNodeServiceProjects,
 } from "./node-project.ts";
 import type { MuonProgressCallback } from "../common/progress.js";
@@ -1461,17 +1460,10 @@ export const packDesktopMuonApp = async (
     root,
     options.configPath ?? pluginBuildOptions.configPath,
   );
-  const nodeProject = await resolveMuonNodeProject(
+  const nodeProjects = await resolveMuonNodeServiceProjects(
     windowsResourceConfig.config,
     windowsResourceConfig.directory,
   );
-  const nodeProjects = [
-    ...(nodeProject === undefined ? [] : [nodeProject]),
-    ...(await resolveMuonNodeServiceProjects(
-      windowsResourceConfig.config,
-      windowsResourceConfig.directory,
-    )),
-  ];
   await assertMuonNodeProjectPackCleanupIsSafe(nodeProjects, packageBuildRoot);
   await assertMuonNodeProjectPackCleanupIsSafe(
     nodeProjects,

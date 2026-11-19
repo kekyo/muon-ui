@@ -9,7 +9,7 @@ import type { InlineConfig, ResolvedConfig } from "vite";
 
 import {
   buildMuonApp,
-  resolveMuonNodeProjectForBuildConfig,
+  resolveMuonNodeServiceProjectsForBuildConfig,
   type MuonBuildOptions,
   type MuonBuildResult,
 } from "./build.js";
@@ -369,12 +369,12 @@ export const resolveMuonBuildSequenceOptions = async (
     Object.assign(buildOptions, pluginBuildOptions);
     const effectiveConfigPath =
       options.configPath ?? pluginBuildOptions.configPath;
-    const nodeProject = await resolveMuonNodeProjectForBuildConfig(
+    const nodeProjects = await resolveMuonNodeServiceProjectsForBuildConfig(
       project.root,
       effectiveConfigPath,
     );
     await assertMuonNodeProjectViteBuildIsSafe(
-      nodeProject,
+      nodeProjects,
       project.viteOutputDirectory,
       project.vitePublicDirectory ?? "",
     );

@@ -26,6 +26,11 @@ typedef struct muon_service_io_result {
   size_t body_size; /**< Length of binary output. */
   const char* code; /**< Stable error identifier, null on success. */
   const char* message; /**< Error diagnostic, null on success. */
+  const void* fields; /**< Borrowed object for field access during this callback. */
+  /** @param fields This result's fields. @param name Top-level metadata key. @return Borrowed string, or null. */
+  const char* (*string_field)(const void* fields, const char* name);
+  /** @param fields This result's fields. @param name Top-level metadata key. @return Nonzero only for JSON true. */
+  int (*boolean_field)(const void* fields, const char* name);
 } muon_service_io_result;
 
 /** @param data Caller-owned state, retained until this one owner-dispatcher completion.

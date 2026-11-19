@@ -1,5 +1,19 @@
 import type { ServiceCancellationSignal } from './service-connection.ts';
 
+const ioErrorCodes = [
+  'permission-denied', 'not-found', 'invalid-input', 'io-error', 'resource-exhausted',
+  'size-limit', 'timeout', 'cancelled', 'network-error', 'tls-error', 'redirect-limit',
+] as const;
+
+/** A stable error code from the portable file, HTTP or local listener API. */
+export type ServiceIoErrorCode = (typeof ioErrorCodes)[number];
+
+/** @param error A caught value. @returns Whether it carries a portable I/O error code and diagnostic. */
+export const isServiceIoError = (error: unknown): error is { readonly code: ServiceIoErrorCode; readonly message: string } => {
+  if (!error || typeof error !== 'object' || !('code' in error) || !('message' in error)) return false;
+  return typeof error.message === 'string' && ioErrorCodes.some(code => code === error.code);
+};
+
 /** The metadata and binary payload returned by an operation on the owner dispatcher. */
 export interface ServiceIoReply {
   /** Operation-specific metadata, such as a directory listing. */ readonly metadata: unknown;

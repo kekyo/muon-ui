@@ -9,6 +9,9 @@ import type { MuonServiceInputObserver } from "./service-inputs.ts";
 
 /** Normalized per-service grants and the contents of explicitly packaged files. */
 export interface MuonServiceIoPolicy {
+  /** Permission to bind a loopback listener. */ readonly server?: {
+    readonly listen: boolean;
+  };
   /** Exact allowed HTTP and HTTPS origins. */ readonly http?: {
     readonly origins: readonly string[];
   };
@@ -58,7 +61,7 @@ export const resolveServiceIo = async (
   label: string,
 ): Promise<MuonServiceIoPolicy | undefined> => {
   if (input === undefined) return undefined;
-  const io = object(input, label, ["fs", "http"]);
+  const io = object(input, label, ["fs", "http", "server"]);
   let http: MuonServiceIoPolicy["http"];
   if (io.http !== undefined) {
     const { origins } = object(io.http, label + ".http", ["origins"]);
@@ -75,7 +78,14 @@ export const resolveServiceIo = async (
     });
     http = { origins: [...new Set(normalized)] };
   }
-  const network = http ? { http } : {};
+  let server: MuonServiceIoPolicy["server"];
+  if (io.server !== undefined) {
+    const grant = object(io.server, label + ".server", ["listen"]);
+    if (typeof grant.listen !== "boolean")
+      throw new Error(label + ".server.listen must be boolean");
+    server = { listen: grant.listen };
+  }
+  const network = { ...(http ? { http } : {}), ...(server ? { server } : {}) };
   if (io.fs === undefined) return network;
   const fs = object(io.fs, label + ".fs", ["data", "assets", "directories"]);
   const directories: Record<

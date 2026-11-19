@@ -4,6 +4,7 @@
  */
 #include "muon_service_io_desktop.h"
 #include "muon_service_http_desktop.h"
+#include "services/muon_service_server.h"
 #include "muon_service_policy.h"
 #include <cstdlib>
 
@@ -23,6 +24,7 @@ MuonServiceIoSettings CreateDesktopMuonServiceIo(yyjson_val* policy) {
     settings.policy = encoded.get();
   }
   settings.http = RunDesktopMuonServiceHttp;
+  settings.server = CreateMuonServiceListeners;
   settings.submit = [](std::function<void()> work, std::function<void(std::string)> completed) {
     cardio::fire_and_forget(FileWork(std::move(work), std::move(completed)));
   };

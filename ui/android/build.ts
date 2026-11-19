@@ -338,7 +338,11 @@ export const buildAndroidApplication = async (
     ),
   ];
   const permissions = new Set(input.permissions);
-  if (origins.length) permissions.add("android.permission.INTERNET");
+  if (
+    origins.length ||
+    input.services.some((service) => service.io?.server?.listen)
+  )
+    permissions.add("android.permission.INTERNET");
   await writeFile(
     join(project, "app/src/main/AndroidManifest.xml"),
     await render(

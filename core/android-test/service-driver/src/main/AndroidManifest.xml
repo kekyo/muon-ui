@@ -60,5 +60,11 @@
         <service android:name="dev.muon.runtime.MuonFixtureNativeHttpService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
         </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickListenerService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureNativeListenerService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
     </application>
 </manifest>

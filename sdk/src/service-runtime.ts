@@ -1,3 +1,4 @@
+import { createServiceServer, type ServiceServer } from './service-server.ts';
 import { createServiceHttp, type ServiceHttpClient } from './service-http.ts';
 import { parseServiceInterface } from './service-interface.ts';
 import {
@@ -88,6 +89,7 @@ export interface ServiceInvocationContext {
 export interface ServiceStartContext<
   Definition extends ServiceInterface,
 > extends ServiceRuntimeInput {
+  /** Local listeners and connections owned by this generation. */ readonly server: ServiceServer;
   /** Outbound HTTP and HTTPS with per-origin permissions. */ readonly http: ServiceHttpClient;
   /** Permission-checked files, private to the service unless explicitly shared. */ readonly fs: ServiceFileSystem;
   /** Aborted when service shutdown begins, including shutdown during start. */ readonly signal: ServiceCancellationSignal;
@@ -363,6 +365,8 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
       throw failure('cancelled', 'Service I/O was cancelled');
     if (!bridge.io)
       throw failure('permission-denied', 'Service I/O is unavailable');
+    if (body.byteLength > 1024 * 1024)
+      throw failure('size-limit', 'Service I/O body exceeds 1 MiB');
     if (operations.size >= 64)
       throw failure('resource-exhausted', 'Too many service I/O operations');
     const operation = cancellation();
@@ -426,6 +430,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           dataDirectory: text(input.dataDirectory),
           config,
           signal: source.signal,
+          server: createServiceServer(io, source.signal),
           http: createServiceHttp(io, source.signal),
           fs: createServiceFiles(io, source.signal),
           emit: (

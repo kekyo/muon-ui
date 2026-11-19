@@ -73,6 +73,7 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
       ),
     });
     const reverse: string[] = [];
+    const listenerPorts: number[] = [];
     let port: string | undefined;
     let client: Client | undefined;
     let closeMcp: (() => Promise<void>) | undefined;
@@ -172,25 +173,113 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
         '-f',
         'files/services/' + stateId + '/state.bin',
       ]);
-      const first = await start();
-      const pid = (await adb(['shell', 'pidof', app])).trim();
-      port = (
-        await adb([
-          'forward',
-          'tcp:0',
-          'localabstract:webview_devtools_remote_' + pid,
-        ])
-      ).trim();
-      const server = await createConnection({
-        browser: { cdpEndpoint: 'http://127.0.0.1:' + port },
-        outputDir: directory,
-      });
-      closeMcp = async () => await server.close();
-      const [a, b] = InMemoryTransport.createLinkedPair();
-      client = new Client({ name: 'muon-android-services', version: '1' });
-      await server.connect(b);
-      await client.connect(a);
-      await select(first);
+      let first = await start();
+      const connectPage = async (label: string) => {
+        const pid = (await adb(['shell', 'pidof', app])).trim();
+        port = (
+          await adb([
+            'forward',
+            'tcp:0',
+            'localabstract:webview_devtools_remote_' + pid,
+          ])
+        ).trim();
+        const server = await createConnection({
+          browser: { cdpEndpoint: 'http://127.0.0.1:' + port },
+          outputDir: directory,
+        });
+        closeMcp = async () => await server.close();
+        const [a, b] = InMemoryTransport.createLinkedPair();
+        client = new Client({ name: 'muon-android-services', version: '1' });
+        await server.connect(b);
+        await client.connect(a);
+        await select(label);
+      };
+      await connectPage(first);
+      const listenerId =
+        serviceId === 'quickjs' ? 'listenQuick' : 'listenNative';
+      const otherId =
+        listenerId === 'listenQuick' ? 'listenNative' : 'listenQuick';
+      const localPort = listenerId === 'listenQuick' ? 49212 : 49211;
+      for (const value of [49211, 49212]) {
+        await adb(['forward', '--no-rebind', 'tcp:' + value, 'tcp:' + value]);
+        listenerPorts.push(value);
+      }
+      const generations = await evaluate<string[]>(`const generations=[];
+        for (const id of ['${listenerId}','${otherId}']) {
+          await muon.services.setAutostart(id,true);
+          const listener=await muon.services.acquire(id); generations.push(listener.generation);
+        } return generations;`);
+      await client?.close();
+      await closeMcp?.();
+      client = undefined;
+      closeMcp = undefined;
+      await adb(['forward', '--remove', 'tcp:' + port]);
+      port = undefined;
+      const pageClosed = (async () => {
+        for await (const [line] of on(events, 'ready', {
+          signal: AbortSignal.timeout(30000),
+        }))
+          if (String(line).includes('closed:' + first)) return;
+      })();
+      await adb([
+        'shell',
+        'am',
+        'broadcast',
+        '-a',
+        'dev.muon.servicefixture.CLOSE_PAGE',
+        '-p',
+        app,
+        '--es',
+        'owner',
+        first,
+      ]);
+      await pageClosed;
+      const url = 'http://127.0.0.1:' + localPort;
+      const auth = { Authorization: 'Bearer local-service' };
+      expect((await fetch(url)).status).toBe(401);
+      expect(
+        (
+          await fetch(url, {
+            headers: { ...auth, Origin: 'https://unlisted.test' },
+          })
+        ).status
+      ).toBe(403);
+      expect(await (await fetch(url, { headers: auth })).text()).toBe(
+        generations[0]
+      );
+      const ws = new WebSocket('ws://127.0.0.1:' + localPort, [
+        'muon.auth',
+        'muon.bearer.' + Buffer.from('local-service').toString('base64url'),
+      ]);
+      ws.binaryType = 'arraybuffer';
+      await once(ws, 'open');
+      const echo = once(ws, 'message');
+      ws.send(new Uint8Array([0, 128, 255]));
+      expect(new Uint8Array((await echo)[0].data)).toEqual(
+        new Uint8Array([0, 128, 255])
+      );
+      first = await start();
+      await connectPage(first);
+      const disconnected = once(ws, 'close');
+      expect(
+        await evaluate(`const last=await muon.services.acquire('${listenerId}');
+        await muon.services.setAutostart('${listenerId}',false);await last.release();return last.generation;`)
+      ).toBe(generations[0]);
+      await disconnected;
+      const otherPort = localPort === 49211 ? 49212 : 49211;
+      expect(
+        await (
+          await fetch('http://127.0.0.1:' + otherPort, { headers: auth })
+        ).text()
+      ).toBe(generations[1]);
+      const next = await evaluate<string>(
+        `globalThis.listener=await muon.services.acquire('${listenerId}');return listener.generation;`
+      );
+      expect(next).not.toBe(generations[0]);
+      expect(await (await fetch(url, { headers: auth })).text()).toBe(next);
+      await evaluate(
+        `await listener.release();await muon.services.setAutostart('${otherId}',false);return true;`
+      );
       const httpId = serviceId === 'quickjs' ? 'httpQuick' : 'httpNative';
       expect(
         await evaluate(`globalThis.httpHandle = await muon.services.acquire('${httpId}');
@@ -371,6 +460,8 @@ it.skipIf(!enabled).each(['alpha.v1-test', 'quickjs'])(
       await exited;
       for (const devicePort of reverse)
         await adb(['reverse', '--remove', 'tcp:' + devicePort]);
+      for (const value of listenerPorts)
+        await adb(['forward', '--remove', 'tcp:' + value]);
       for (const server of [http, tls]) {
         const closed = once(server, 'close');
         server.close();

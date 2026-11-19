@@ -13,6 +13,8 @@ struct MuonServiceIoState {
   std::function<void(std::function<void()>)> post;
   MuonServiceIoDelay delay;
   size_t active_http = 0;
+  std::shared_ptr<MuonServiceServer> server;
+  bool closing_server = false;
   std::set<std::shared_ptr<MuonServiceIoCancellation>> pending;
   bool closed = false;
   std::vector<std::function<void()>> waiters;
@@ -27,7 +29,7 @@ MuonServiceIo::MuonServiceIo(std::string directory, MuonServiceIoSettings settin
 }
 
 static void Drained(const std::shared_ptr<MuonServiceIoState>& state) {
-  if (!state->closed || !state->pending.empty()) return;
+  if (!state->closed || !state->pending.empty() || state->closing_server) return;
   auto waiters = std::move(state->waiters);
   for (auto& waiter : waiters) waiter();
 }
@@ -43,6 +45,26 @@ std::function<void()> MuonServiceIo::Run(MuonServiceIoRequest request, std::func
     reply->message = "Service I/O admission is closed";
     state->post([reply, complete = std::move(complete)] { complete(std::move(*reply)); });
     return [] {};
+  }
+  if (request.operation.starts_with("server.")) {
+    if (!state->server && state->settings.server) state->server = state->settings.server(state->settings.policy);
+    if (!state->server) {
+      state->post([complete = std::move(complete)] { complete({"null", {}, "permission-denied", "Service listener is not allowed"}); });
+      return [] {};
+    }
+    state->pending.insert(cancel);
+    auto finish = [state, cancel, complete = std::move(complete)](MuonServiceIoReply result) {
+      state->post([state, cancel, complete, result = std::move(result)]() mutable {
+        if (!state->pending.erase(cancel)) return;
+        cancel->Bind({});
+        if (cancel->cancelled.load()) result = {"null", {}, "cancelled", "Listener operation cancelled"};
+        complete(std::move(result));
+        Drained(state);
+      });
+    };
+    try { cancel->Bind(state->server->run(std::move(request), finish)); }
+    catch (const std::exception& error) { finish({"null", {}, "io-error", error.what()}); }
+    return [cancel] { cancel->Cancel(); };
   }
   std::function<void()> stop_timer;
   if (http) {
@@ -88,7 +110,11 @@ std::function<void()> MuonServiceIo::Run(MuonServiceIoRequest request, std::func
 
 void MuonServiceIo::Close(std::function<void()> drained) {
   state_->closed = true;
-  for (const auto& cancel : state_->pending) cancel->Cancel();
   state_->waiters.push_back(std::move(drained));
+  if (state_->server && !state_->closing_server) {
+    state_->closing_server = true;
+    state_->server->close([state = state_] { state->server.reset(); state->closing_server = false; Drained(state); });
+  }
+  for (const auto& cancel : state_->pending) cancel->Cancel();
   Drained(state_);
 }

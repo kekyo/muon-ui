@@ -1,15 +1,26 @@
 /** Browser and QuickJS-compatible service contracts, values, and RPC client. */
 export type {
+  ServiceServer,
+  ServiceServerRequest,
+  ServiceServerResponse,
+  ServiceServerOptions,
+  ServiceServerWebSocket,
+  ServiceServerWebSocketHandlers,
+  ServiceServerListener,
+} from './service-server.ts';
+export type {
   ServiceHttpClient,
   ServiceHttpRequest,
   ServiceHttpResponse,
 } from './service-http.ts';
 export type {
   ServiceFileOptions,
+  ServiceIoErrorCode,
   ServiceFileSystem,
   ServiceIoBridge,
   ServiceIoReply,
 } from './service-io.ts';
+export { isServiceIoError } from './service-io.ts';
 export { bindServiceClient } from './service-binding.ts';
 export type {
   BoundServiceClient,

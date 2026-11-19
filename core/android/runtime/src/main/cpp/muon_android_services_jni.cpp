@@ -18,6 +18,7 @@
 #include "services/muon_service_execution_router.h"
 #include "muon_android_service_peer.h"
 #include "muon_android_service_http.h"
+#include "services/muon_service_server.h"
 #include "muon_android_service_plugins.h"
 
 #include <map>
@@ -258,6 +259,7 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
     MuonNativeServiceSpec spec{read(ids), read(libraries), read(directories), {}};
     spec.io.policy = read(io_policies);
     spec.io.http = CreateAndroidMuonServiceHttp(env);
+    spec.io.server = CreateMuonServiceListeners;
     spec.io.submit = [state](std::function<void()> work, std::function<void(std::string)> complete) {
       cardio::fire_and_forget(SubmitFile(state, std::move(work), std::move(complete)));
     };

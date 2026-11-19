@@ -6,6 +6,7 @@
 
 #include "services/muon_native_service_host.h"
 
+#include <yyjson.h>
 #include <cassert>
 #include <algorithm>
 #include <cstring>
@@ -112,14 +113,19 @@ static void RequestIo(void* data, const muon_service_io_request* request,
   const auto owner = entry->owner.lock();
   if (!completion) return;
   auto complete = [entry, completion, completion_data](MuonServiceIoReply reply) {
+    std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> document(
+        reply.metadata.starts_with('{') ? yyjson_read(reply.metadata.data(), reply.metadata.size(), 0) : nullptr, yyjson_doc_free);
     const muon_service_io_result result{MUON_SERVICE_ABI_VERSION, sizeof(muon_service_io_result),
         reply.metadata.c_str(), reply.body.data(), reply.body.size(), reply.code.empty() ? nullptr : reply.code.c_str(),
-        reply.message.empty() ? nullptr : reply.message.c_str()};
+        reply.message.empty() ? nullptr : reply.message.c_str(),
+        yyjson_doc_get_root(document.get()),
+        [](const void* fields, const char* key) { return yyjson_get_str(yyjson_obj_get(static_cast<yyjson_val*>(const_cast<void*>(fields)), key)); },
+        [](const void* fields, const char* key) { return static_cast<int>(yyjson_is_true(yyjson_obj_get(static_cast<yyjson_val*>(const_cast<void*>(fields)), key))); }};
     completion(completion_data, &result);
   };
   auto source = std::shared_ptr<MuonServiceCancellation>{};
   if (request && request->abi_version == MUON_SERVICE_ABI_VERSION && request->size >= sizeof(*request) &&
-      request->operation && request->parameters_json && (request->body || !request->body_size) && request->body_size <= 1024 * 1024) {
+      request->operation && request->parameters_json && (request->body || !request->body_size)) {
     if (request->signal == &entry->signal) source = entry->spec.signal;
     else if (request->signal == &entry->cleanup_signal && entry->stop_called) source = entry->cleanup;
     else for (const auto& [id, call] : entry->calls) if (request->signal == &call->signal) { source = call->source; break; }
@@ -127,6 +133,10 @@ static void RequestIo(void* data, const muon_service_io_request* request,
   if (!source || source->aborted || (source != entry->cleanup && entry->spec.signal->aborted)) {
     const auto code = source ? "cancelled" : "invalid-input";
     Queue(owner, [complete = std::move(complete), code] { complete({"null", {}, code, "Invalid or cancelled service I/O request"}); });
+    return;
+  }
+  if (request->body_size > 1024 * 1024) {
+    Queue(owner, [complete] { complete({"null", {}, "size-limit", "Service I/O body exceeds 1 MiB"}); });
     return;
   }
   MuonServiceIoRequest operation{request->operation, request->parameters_json, {}};

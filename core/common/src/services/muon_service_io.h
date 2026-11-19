@@ -22,10 +22,21 @@ using MuonServiceHttpTransport = std::function<MuonServiceHttpResult(const MuonS
 /** Schedules a dispatcher deadline and returns its cancellation callback. */
 using MuonServiceIoDelay = std::function<std::function<void()>(std::chrono::milliseconds, std::function<void()>)>;
 
+struct MuonServiceIoRequest;
+struct MuonServiceIoReply;
+/** A listener backend belonging to one service generation and its dispatcher. */
+struct MuonServiceServer {
+  /** Runs a command and returns its operation-scoped interrupter. */
+  std::function<std::function<void()>(MuonServiceIoRequest, std::function<void(MuonServiceIoReply)>)> run;
+  /** Closes every socket and completes after all accepts and connections return. */
+  std::function<void(std::function<void()>)> close;
+};
+
 /** Immutable policy and platform adapter shared across a service's generations. */
 struct MuonServiceIoSettings {
   std::string policy = "{}"; /**< Normalized per-service permissions from the application registry. */
   MuonServiceIoSubmit submit{}; /**< Platform asynchronous file executor. */
+  std::function<std::shared_ptr<MuonServiceServer>(const std::string&)> server{}; /**< Opens a generation backend only when granted. */
   MuonServiceHttpTransport http{}; /**< OS HTTP/TLS transport. */
 };
 

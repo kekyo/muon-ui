@@ -590,44 +590,8 @@ target_include_directories(yyjson PUBLIC
   )
 MUON_APPLY_SANITIZERS(yyjson)
 
-set(MUON_LLHTTP_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/src/llhttp-9.4.3")
-if(NOT EXISTS "${MUON_LLHTTP_SOURCE_DIR}/include/llhttp.h")
-  message(FATAL_ERROR "llhttp is required. Run build_llhttp.sh first.")
-endif()
-add_library(muon_llhttp STATIC
-  "${MUON_LLHTTP_SOURCE_DIR}/src/api.c"
-  "${MUON_LLHTTP_SOURCE_DIR}/src/http.c"
-  "${MUON_LLHTTP_SOURCE_DIR}/src/llhttp.c")
-set_target_properties(muon_llhttp PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_features(muon_llhttp PRIVATE c_std_99)
-target_include_directories(muon_llhttp PUBLIC "${MUON_LLHTTP_SOURCE_DIR}/include")
+include("${MUON_COMMON_ROOT}/cmake/MuonServer.cmake")
 MUON_APPLY_SANITIZERS(muon_llhttp)
-
-set(MUON_WSLAY_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/src/wslay-1.1.1")
-if(NOT EXISTS "${MUON_WSLAY_SOURCE_DIR}/lib/includes/wslay/wslay.h")
-  message(FATAL_ERROR "Wslay is required. Run build_wslay.sh first.")
-endif()
-add_library(muon_wslay STATIC
-  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_event.c"
-  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_frame.c"
-  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_net.c"
-  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_queue.c"
-  "${MUON_WSLAY_SOURCE_DIR}/lib/wslay_stack.c")
-set_target_properties(muon_wslay PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_compile_features(muon_wslay PRIVATE c_std_99)
-target_include_directories(muon_wslay PUBLIC "${MUON_WSLAY_SOURCE_DIR}/lib/includes")
-# The public header explicitly supports this definition instead of generated
-# wslayver.h; upstream sources and their obsolete CMake files remain untouched.
-target_compile_definitions(muon_wslay PUBLIC WSLAY_VERSION="1.1.1")
-if(WIN32)
-  target_compile_definitions(muon_wslay PRIVATE HAVE_WINSOCK2_H)
-  target_link_libraries(muon_wslay PUBLIC ws2_32)
-else()
-  target_compile_definitions(muon_wslay PRIVATE HAVE_ARPA_INET_H HAVE_NETINET_IN_H)
-endif()
-if(CMAKE_C_BYTE_ORDER STREQUAL "BIG_ENDIAN")
-  target_compile_definitions(muon_wslay PRIVATE WORDS_BIGENDIAN)
-endif()
 MUON_APPLY_SANITIZERS(muon_wslay)
 
 if(NOT MINIZ_SOURCE_DIR)
@@ -842,6 +806,9 @@ add_executable(muon_service_host
   src/muon_string_helpers.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp
+  ${MUON_SERVER_SOURCES}
+  ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
+  ${MUON_COMMON_ROOT}/src/services/muon_service_server.cpp
   ../service-host/muon_service_io_desktop.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_http.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_io.cpp
@@ -865,7 +832,7 @@ target_include_directories(muon_service_host PRIVATE
   src
   "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
   "${MUON_COMMON_ROOT}/../../sdk/include")
-target_link_libraries(muon_service_host PRIVATE muon_cardio yyjson muon_service_quickjs muon_plugin_runtime_core ${CMAKE_DL_LIBS})
+target_link_libraries(muon_service_host PRIVATE muon_sha1 muon_llhttp muon_wslay muon_cardio yyjson muon_service_quickjs muon_plugin_runtime_core ${CMAKE_DL_LIBS})
 set_target_properties(muon_service_host PROPERTIES
   OUTPUT_NAME "muon-service-host" RUNTIME_OUTPUT_DIRECTORY "${MUON_RUNTIME_DIR}")
 if(WIN32)
@@ -883,7 +850,7 @@ MUON_APPLY_SANITIZERS(muon_service_host)
 
 set(APP_SOURCES
   src/main.cpp
-  src/muon_json_helpers.cpp
+  ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
   src/muon_string_helpers.cpp
   src/app/muon_app.cpp
   src/app/muon_app_scheme.cpp
@@ -924,10 +891,10 @@ set(APP_SOURCES
   src/plugins/builtin/muon_builtin_services.cpp
   src/services/muon_service_rpc.cpp
   src/server/muon_server_rpc.cpp
-  src/server/muon_server_service.cpp
-  src/server/muon_server_http.cpp
-  src/server/muon_server_socket.cpp
-  src/server/muon_server_websocket.cpp
+  ${MUON_COMMON_ROOT}/src/server/muon_server_service.cpp
+  ${MUON_COMMON_ROOT}/src/server/muon_server_http.cpp
+  ${MUON_COMMON_ROOT}/src/server/muon_server_socket.cpp
+  ${MUON_COMMON_ROOT}/src/server/muon_server_websocket.cpp
   src/notifications/muon_notification_rpc.cpp
   src/notifications/muon_notification_model.cpp
   src/plugins/builtin/muon_builtin_executor.cpp
@@ -945,7 +912,7 @@ set(APP_SOURCES
   src/plugins/muon_v8_handler.cpp
   )
 set(APP_HEADERS
-  src/muon_json_helpers.h
+  ${MUON_COMMON_ROOT}/src/muon_json_helpers.h
   ${MUON_COMMON_ROOT}/src/muon_sha256.h
   src/muon_string_helpers.h
   src/app/muon_app.h
@@ -1047,8 +1014,8 @@ elseif(MSVC)
 endif()
 
 add_library(muon_ui SHARED
-  src/muon_json_helpers.cpp
-  src/muon_json_helpers.h
+  ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
+  ${MUON_COMMON_ROOT}/src/muon_json_helpers.h
   src/plugins/builtin/muon_builtin_fs_dialogs.cpp
   src/plugins/builtin/muon_builtin_fs_dialogs.h
   src/plugins/builtin/muon_builtin_fs_helpers.cpp
@@ -1852,28 +1819,28 @@ if(MUON_BUILD_TESTS)
   add_test(NAME service_rpc COMMAND muon_service_rpc_test)
   add_executable(muon_server_http_test
     ../cef-test/native/muon_server_http_test.cpp
-    src/server/muon_server_http.cpp)
+    ${MUON_COMMON_ROOT}/src/server/muon_server_http.cpp)
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_http_test)
   target_compile_features(muon_server_http_test PRIVATE cxx_std_20)
-  target_include_directories(muon_server_http_test PRIVATE src)
+  target_include_directories(muon_server_http_test PRIVATE "${MUON_COMMON_ROOT}/src")
   target_link_libraries(muon_server_http_test PRIVATE muon_llhttp muon_sha1)
   MUON_APPLY_SANITIZERS(muon_server_http_test)
   add_test(NAME server_http COMMAND muon_server_http_test)
   add_executable(muon_server_websocket_test
     ../cef-test/native/muon_server_websocket_test.cpp
-    src/server/muon_server_websocket.cpp)
+    ${MUON_COMMON_ROOT}/src/server/muon_server_websocket.cpp)
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_websocket_test)
   target_compile_features(muon_server_websocket_test PRIVATE cxx_std_20)
-  target_include_directories(muon_server_websocket_test PRIVATE src)
+  target_include_directories(muon_server_websocket_test PRIVATE "${MUON_COMMON_ROOT}/src")
   target_link_libraries(muon_server_websocket_test PRIVATE muon_wslay)
   MUON_APPLY_SANITIZERS(muon_server_websocket_test)
   add_test(NAME server_websocket COMMAND muon_server_websocket_test)
   add_executable(muon_server_socket_test
     ../cef-test/native/muon_server_socket_test.cpp
-    src/server/muon_server_socket.cpp)
+    ${MUON_COMMON_ROOT}/src/server/muon_server_socket.cpp)
   SET_EXECUTABLE_TARGET_PROPERTIES(muon_server_socket_test)
   target_compile_features(muon_server_socket_test PRIVATE cxx_std_20)
-  target_include_directories(muon_server_socket_test PRIVATE src)
+  target_include_directories(muon_server_socket_test PRIVATE "${MUON_COMMON_ROOT}/src")
   target_link_libraries(muon_server_socket_test PRIVATE muon_cardio ${MUON_CARDIO_GLIB_TARGETS})
   if(WIN32)
     target_link_libraries(muon_server_socket_test PRIVATE ws2_32)
@@ -2026,7 +1993,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_app_scheme_storage_test)
   add_executable(muon_builtin_browser_test
     ../cef-test/native/muon_builtin_browser_test.cpp
-    src/muon_json_helpers.cpp
+    ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/browser/muon_builtin_browser.cpp
     src/browser/muon_context_menu.cpp
@@ -2079,7 +2046,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     MUON_APPLY_SANITIZERS(muon_executor_supervisor_sigchld_test)
     add_executable(muon_tray_linux_dbus_test
       ../cef-test/native/muon_tray_linux_dbus_test.cpp
-      src/muon_json_helpers.cpp
+      ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
       src/muon_string_helpers.cpp
       ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
       ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
@@ -2118,7 +2085,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     MUON_APPLY_SANITIZERS(muon_tray_linux_dbus_test)
     add_executable(muon_tray_quota_test
       ../cef-test/native/muon_tray_quota_test.cpp
-      src/muon_json_helpers.cpp
+      ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
       src/muon_string_helpers.cpp
       ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
       ${MUON_COMMON_ROOT}/src/muon_sha256.cpp
@@ -2234,7 +2201,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
   MUON_APPLY_SANITIZERS(muon_icon_test)
   add_executable(muon_internal_helpers_test
     ../cef-test/native/muon_internal_helpers_test.cpp
-    src/muon_json_helpers.cpp
+    ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/plugins/builtin/muon_builtin_environment_helpers.cpp
     src/plugins/builtin/muon_builtin_fs_helpers.cpp
@@ -2429,7 +2396,7 @@ if(MUON_BUILD_TESTS AND NOT WIN32)
     ../cef-test/native/muon_config_network_test.cpp
     src/notifications/muon_notification_model.cpp
     ${MUON_COMMON_ROOT}/src/muon_filesystem.cpp
-    src/muon_json_helpers.cpp
+    ${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp
     src/muon_string_helpers.cpp
     src/browser/muon_browser_background_color.cpp
     src/config/muon_config.cpp

@@ -15,6 +15,50 @@
     ]
   },
   "services": {
+    "listenNative": {
+      "runtime": "native",
+      "library": "libmuon_native_server.so",
+      "io": {
+        "server": {
+          "listen": true
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureNativeListenerService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "listenNative",
+          "title": "Listener fixture",
+          "text": "Service loopback listener"
+        }
+      },
+      "config": {
+        "port": "49211",
+        "bearerToken": "local-service"
+      }
+    },
+    "listenQuick": {
+      "runtime": "quickjs",
+      "asset": "muon/services/listenQuick.js",
+      "io": {
+        "server": {
+          "listen": true
+        }
+      },
+      "android": {
+        "component": "dev.muon.runtime.MuonFixtureQuickListenerService",
+        "foregroundServiceType": "specialUse",
+        "notification": {
+          "channelId": "listenQuick",
+          "title": "Listener fixture",
+          "text": "Service loopback listener"
+        }
+      },
+      "config": {
+        "port": "49212",
+        "bearerToken": "local-service"
+      }
+    },
     "httpNative": {
       "runtime": "native",
       "library": "libmuon_native_http.so",

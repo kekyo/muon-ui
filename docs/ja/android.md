@@ -136,14 +136,17 @@ simpleモードでは`plugin.plugins`を省略すると対応している組込�
 
 ### ビルド時に追加される権限と実行時の許可
 
-muonは、アプリが `android.permissions` に指定した権限と、利用する機能に応じて追加する権限を合わせ、重複を除いてAPKのManifestに宣言します。次の表の権限名には、設定ファイルでは `android.permission.` を付けてください。
+muonはアプリが `android.permissions` に指定した権限と、利用する機能に応じて追加する権限を合わせ、重複を除いてAPKのManifestに宣言します。設定ファイルに表の権限を書くときは、名前の先頭に `android.permission.` を付けてください。
 
 | アプリの機能・設定 | muonがビルド時に追加する権限 | 開発者が指定または要求するもの |
 | --- | --- | --- |
 | WebViewの外部通信 | WebViewの使用だけでは追加なし | `INTERNET` を宣言します。インストール時に付与されます。 |
 | サービスの `io.http.origins` に接続先がある、または `io.server.listen` を指定 | `INTERNET` | 同じ権限の追記は不要です。平文HTTPを使う場合は、許可する接続先を `http://` のoriginで指定します。muonはそのホストに限ってネットワークセキュリティ設定で平文通信を許可します。 |
 | Androidサービスを含む | `FOREGROUND_SERVICE`、サービスの種類に対応する `FOREGROUND_SERVICE_*`、`POST_NOTIFICATIONS`。`shortService` には種類固有の権限はありません。 | `services.<id>.android` に用途に合う `foregroundServiceType` と実行中の `notification` を指定します。`specialUse` には用途を示す `specialUseSubtype` も必要です。 |
+| nativeまたはQuickJSサービスを一つ以上含む | `RECEIVE_BOOT_COMPLETED` と、端末の起動完了を受け取るレシーバー1件。全サービスの初期値がOFFでも追加します。 | 権限とレシーバーの手動登録は不要です。受信権限はインストール時に付与されます。サービスがないAPKには、muonはどちらも自動追加しません。 |
 | ローカル通知を有効化（`notifications.enabled: true`） | `POST_NOTIFICATIONS` | Android 13以降で通常の通知を表示するには、画面から `muon.android.notifications.requestPermission()` で利用者の許可を求めます。フォアグラウンドサービスは、この許可がなくても開始できます。開始時の通知は必要です。 |
+
+端末の再起動後にサービスを自動起動するには、インストール後に一度アプリを開いてください。初回ロック解除時の設定は通常のアプリ起動時と共通です。`services.<id>.autostart` の初期値はOFFで、利用者が変更した場合は保存値を優先します。ONのサービスはAndroidの起動条件を満たせば、画面を開かずに起動します。[再起動後の自動起動](services.md#再起動後の自動起動)・[Androidの受信用権限](https://developer.android.com/reference/android/Manifest.permission#RECEIVE_BOOT_COMPLETED)
 
 例えば、WebViewから外部のHTTPSサイトに接続するには、次のように指定します。
 

@@ -114,7 +114,7 @@ npm test
 | 起動理由 | 契機 |
 | --- | --- |
 | `acquire` | 画面からの参照取得 |
-| `app-start` | 通常のアプリ起動時に有効だった常駐設定 |
+| `app-start` | アプリ起動時の常駐設定による開始。Androidでは、端末の再起動後に同じ設定で開始する場合も含む |
 | `login-autostart` | PCのログイン登録からの起動 |
 | `autostart-enabled` | 利用中に常駐設定を有効にした操作 |
 | `development-update` | 開発中のサービス更新 |
@@ -467,7 +467,7 @@ AndroidではサービスをUIとは別のプロセスで動かし、foreground 
 
 この`android`を`services.<id>`に追加します。実際の機能に合うtypeを選び、そのtypeが要求する権限・実行条件を満たしてください。`specialUse`には用途を示す`specialUseSubtype`も必要です。宣言できるtypeと条件は[Androidのservice type一覧](https://developer.android.com/develop/background-work/services/fgs/service-types)を参照してください。
 
-自動起動ONは、OSが常時実行を保証する意味ではありません。バックグラウンドからの開始、使用中権限、実行時間にはOSの制限があります。開始できない場合は保存済みの設定を保持したまま、実行状態と理由を返します。起動条件は[バックグラウンド開始の制限](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)、時間制限は[foreground serviceのタイムアウト](https://developer.android.com/develop/background-work/services/fgs/timeout)を参照してください。
+実行中のサービスにも、種類に応じてAndroidの実行時間制限が適用されます。[フォアグラウンドサービスのタイムアウト](https://developer.android.com/develop/background-work/services/fgs/timeout)
 
 画面を閉じる操作と、OSによるアプリ全体の停止は異なります。Androidの「アクティブなアプリ」から停止するとアプリ全体が終了し、終了コールバックも保証されません。muonは参照数だけを理由にOSの停止を回避しません。[ユーザーによる停止の仕様](https://developer.android.com/develop/background-work/services/fgs/handle-user-stopping)
 
@@ -482,4 +482,17 @@ if (state.lastHostExit) {
 }
 ```
 
-このバージョンでは端末の起動完了からサービスを開始する登録を追加しません。アプリの正規の起動時に保存済み設定を評価します。Androidアプリのビルド、署名、配布形式については[Androidガイド](android.md)を参照してください。
+### 再起動後の自動起動
+
+インストール後に一度アプリを開くと、端末の再起動後、最初のロック解除でサービスを自動起動できます。muonは `services.<id>.autostart`（省略時はOFF）を初期値に使い、`muon.services.setAutostart(id, enabled)` で保存したONまたはOFFを優先します。全件がOFFならサービスは起動しません。ONのサービスは、Androidの起動条件を満たせばアプリの画面を開く前に動き始めます。その後で画面を開いたり、起動通知が再び届いたりしても、起動済みのサービスは同じ実行世代で動き続けます。[起動通知の仕様](https://developer.android.com/reference/android/content/Intent#ACTION_BOOT_COMPLETED)・[インストール後の初回起動](https://developer.android.com/develop/background-work/services/alarms)
+
+muonがビルドするAPKでは、次の種類を一つでも指定したサービスの開始を、アプリの画面が表示されるまで保留します。[Androidの種類別起動制限](https://developer.android.com/about/versions/15/changes/foreground-service-types)
+
+| 端末のOS | 起動通知から開始できない種類 |
+| --- | --- |
+| Android 14以降 | `microphone` |
+| Android 15以降で追加 | `camera`、`dataSync`、`mediaPlayback`、`mediaProjection`、`phoneCall` |
+
+ほかの種類でも、位置情報などに必要な権限が足りず、Androidが開始を拒否する場合があります。muonはそのサービスの設定をONのまま保持し、理由を `getState(id)` の `error` に記録します。他のサービスはそれぞれの条件に従って起動します。保留中のサービスは画面を開いたり画面に戻ったりしたときに再試行するので、必要な権限を利用者が許可すれば開始できます。[バックグラウンドからの起動条件](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start)・[ビルド時に追加される権限と実行時の許可](android.md#ビルド時に追加される権限と実行時の許可)
+
+利用者がアプリを強制停止した場合は、再びアプリを開く必要があります。Android 13以降では、利用者がアプリのバックグラウンドでのバッテリー使用を「制限」に設定すると、Androidは別の理由でアプリが起動するまで起動通知の配信を保留します。[強制停止を解除したときの配信](https://developer.android.com/reference/android/content/Intent#ACTION_BOOT_COMPLETED)・[バッテリー使用の制限](https://developer.android.com/about/versions/13/behavior-changes-13#battery-resource-utilization)

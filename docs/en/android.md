@@ -143,7 +143,10 @@ Muon combines the permissions in `android.permissions` with those required by th
 | External requests from a WebView | None for the WebView alone | Declare `INTERNET`. Android grants it at install time. |
 | Any service with a nonempty `io.http.origins` or a configured `io.server.listen` | `INTERNET` | The service configuration supplies the declaration. For cleartext HTTP, list the allowed `http://` origins. Muon permits cleartext for those hosts in the network security configuration. |
 | Android services | `FOREGROUND_SERVICE`, the corresponding `FOREGROUND_SERVICE_*` permissions, and `POST_NOTIFICATIONS`. There is no type-specific permission for `shortService`. | Set `foregroundServiceType` and the ongoing `notification` in `services.<id>.android`. For `specialUse`, describe its purpose in `specialUseSubtype`. |
+| One or more native or QuickJS services | `RECEIVE_BOOT_COMPLETED` and one receiver for the system boot notification, even if every service defaults to OFF. | Android grants the permission at install time. An APK with no services has no receiver and includes this permission only if you request it explicitly. |
 | Local notifications enabled with `notifications.enabled: true` | `POST_NOTIFICATIONS` | On Android 13 and later, call `muon.android.notifications.requestPermission()` from the UI to display ordinary notifications. A foreground service can start without this grant and must still supply its ongoing notification. |
+
+Open the app once after installation to enable service autostart on reboot. When the user first unlocks the device after a reboot, Muon uses the same settings as on a normal app launch. Each service defaults to OFF unless you set `services.<id>.autostart`. The user's saved choice takes precedence. Eligible services start before the user opens the app. [Autostart after a reboot](services.md#autostart-after-a-reboot) · [Android boot permission](https://developer.android.com/reference/android/Manifest.permission#RECEIVE_BOOT_COMPLETED)
 
 For example, a WebView that connects to an external HTTPS site can request network access in the app configuration:
 

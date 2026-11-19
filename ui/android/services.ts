@@ -207,9 +207,10 @@ export const getAndroidServicePlugins = (
 };
 
 /**
- * Returns manifest permissions required by the declared foreground types.
+ * Returns manifest permissions for foreground service types, notifications and startup after boot.
  * @param services - Independently configured Android services.
- * @returns Unique permission names; runtime permissions remain user-controlled.
+ * @returns Unique permission names, or an empty list for an app with no Android services.
+ * Runtime permission grants remain user-controlled.
  */
 export const getAndroidServicePermissions = (
   services: readonly MuonAndroidPackagedService[],

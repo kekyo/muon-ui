@@ -356,10 +356,13 @@ static cardio::promise<void> Monitor(const std::shared_ptr<NodeServiceEntry> ent
 static cardio::promise<void> StartChild(const std::shared_ptr<NodeServiceEntry> entry) {
   try {
     entry->child.session_token = CreateMuonNodeSessionToken();
-    co_await StartMuonNodeProcess(&entry->child, true, [entry] {
+    // Hand the launch operation its callback before suspending. Its owning capture
+    // must be destroyed exactly once, independently of the awaiter's lifetime.
+    auto launched = StartMuonNodeProcess(&entry->child, true, [entry] {
       ++entry->tasks;
       cardio::fire_and_forget(Monitor(entry));
     });
+    co_await launched;
     if (!entry->fault.empty()) throw std::runtime_error(entry->fault);
     ++entry->tasks;
     cardio::fire_and_forget(Read(entry));

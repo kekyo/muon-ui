@@ -55,6 +55,10 @@ class MuonServiceController final {
 
   /** Dispatches initial resident starts; repeated calls are harmless. */
   void Activate();
+  /** Reconsiders resident demand when a platform startup restriction has lifted.
+   *  @param id Configured service identity.
+   *  @param generation Failed generation reported by the platform. */
+  void RetryResidentStart(const std::string& id, uint64_t generation);
   /** @param id Configured service identity.
    *  @param owner Authenticated page or connection session.
    *  @return Owner-bound reservation; readiness is delivered through notify. */

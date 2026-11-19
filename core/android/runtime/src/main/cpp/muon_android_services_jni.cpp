@@ -153,13 +153,14 @@ struct MuonAndroidServices {
     env->DeleteLocalRef(value);
   }
 
-  void CompleteStart(const std::string& id, uint64_t generation, const std::string& error) {
+  bool CompleteStart(const std::string& id, uint64_t generation, const std::string& error) {
     const auto found = starts.find({id, generation});
-    if (found == starts.end()) return;
+    if (found == starts.end()) return false;
     auto complete = std::move(found->second);
     starts.erase(found);
     if (!error.empty()) ServiceCallback(stopped_method, id, generation);
     complete(error);
+    return true;
   }
 };
 
@@ -377,6 +378,12 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeActivate(JNIEnv*, jclass, jlong h
   Runtime(handle)->controller->Activate();
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_dev_muon_runtime_MuonServiceProcess_nativeRetryResidentStart(
+    JNIEnv* env, jclass, jlong handle, jstring id, jlong generation) {
+  Runtime(handle)->controller->RetryResidentStart(ReadString(env, id), static_cast<uint64_t>(generation));
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeSetAutostart(
     JNIEnv* env, jclass, jlong handle, jstring id, jboolean enabled) {
@@ -474,10 +481,11 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeForegroundReady(
   return JNI_TRUE;
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jboolean JNICALL
 Java_dev_muon_runtime_MuonServiceProcess_nativeStartFailed(
     JNIEnv* env, jclass, jlong handle, jstring id, jlong generation, jstring error) {
-  Runtime(handle)->CompleteStart(ReadString(env, id), static_cast<uint64_t>(generation), ReadString(env, error));
+  return Runtime(handle)->CompleteStart(ReadString(env, id), static_cast<uint64_t>(generation),
+                                        ReadString(env, error)) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

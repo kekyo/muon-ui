@@ -32,6 +32,12 @@
             </intent-filter>
         </activity>
 {{if servicesEnabled}}
+        <receiver android:name="dev.muon.runtime.MuonServiceBootReceiver"
+            android:exported="false" android:process=":muon_services">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
         <service android:name="dev.muon.runtime.MuonServiceControlService"
             android:exported="false" android:process=":muon_services" />
 {{for service services}}

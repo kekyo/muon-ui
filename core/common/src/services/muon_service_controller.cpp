@@ -129,6 +129,11 @@ MuonServiceController::~MuonServiceController() {
 
 void MuonServiceController::Activate() { Dispatch(impl_); }
 
+void MuonServiceController::RetryResidentStart(const std::string& id, uint64_t generation) {
+  impl_->lifecycle.RetryResidentStart(id, generation);
+  Dispatch(impl_);
+}
+
 std::optional<MuonServiceReference> MuonServiceController::Acquire(
     const std::string& id, const std::string& owner) {
   auto result = impl_->lifecycle.Acquire(id, owner);

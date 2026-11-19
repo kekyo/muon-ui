@@ -162,6 +162,10 @@ class MuonServiceLifecycle final {
       muon_service_start_reason resident_reason = MUON_SERVICE_START_APP);
   /** Releases bookkeeping; the host must complete Shutdown first. */
   ~MuonServiceLifecycle();
+  /** Retries a failed resident launch after the platform's startup conditions change.
+   *  @param service_id Configured service identity.
+   *  @param generation Failed generation whose launch was denied. */
+  void RetryResidentStart(const std::string& service_id, uint64_t generation);
   /** Lifecycle identities cannot be copied. */
   MuonServiceLifecycle(const MuonServiceLifecycle&) = delete;
   /** Lifecycle identities cannot be assigned. */

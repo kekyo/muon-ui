@@ -49,7 +49,7 @@ const manifest = await run(join(buildTools, "aapt2"), [
 ]);
 assert.doesNotMatch(
   manifest,
-  /E: service|E: instrumentation|firebase|QuickJS|MuonActivity"/iu,
+  /E: service|MuonServiceBootReceiver|E: instrumentation|firebase|QuickJS|MuonActivity"/iu,
 );
 await run(join(buildTools, "zipalign"), ["-c", "-P", "16", "4", apk]);
 await run(join(buildTools, "apksigner"), ["verify", "--verbose", apk]);

@@ -56,6 +56,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     private final MuonAndroidNotificationPermissionService notificationPermissionService;
     private final MuonAndroidNotificationService notificationService;
     private MuonServiceClient serviceClient;
+    private final boolean servicesConfigured;
+    private boolean resumed;
     private float managedZoomFactor = 1.0f;
 
     MuonAndroidPlatformService(
@@ -76,7 +78,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         settingsService = new MuonAndroidSettingsService(activity, notificationService::hasChannel);
         notificationPermissionService = new MuonAndroidNotificationPermissionService(activity, config.notificationsEnabled);
         serviceClient = new MuonServiceClient(activity);
-        if (config.servicesConfigured) serviceClient.activate();
+        servicesConfigured = config.servicesConfigured;
+        if (servicesConfigured) serviceClient.activate();
     }
 
     void invoke(
@@ -188,7 +191,10 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         notificationPermissionService.cancelAll();
         notificationService.cancelAll();
         serviceClient.close();
-        if (activity != null) serviceClient = new MuonServiceClient(activity);
+        if (activity != null) {
+            serviceClient = new MuonServiceClient(activity);
+            serviceClient.setResumed(resumed);
+        }
     }
 
     private void invokeService(String path, JSONArray arguments, byte[][] attachments, Completion completion) {
@@ -226,6 +232,9 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     void setResumed(boolean value) {
         settingsService.setResumed(value);
         notificationPermissionService.setResumed(value);
+        resumed = value;
+        serviceClient.setResumed(value);
+        if (value && servicesConfigured) serviceClient.activate();
     }
 
     void onNotificationIntent(Intent intent) { notificationService.onNotificationIntent(intent); }

@@ -86,6 +86,10 @@ final class MuonServiceProcess {
     private final Map<String, Watch> watches = new HashMap<>();
     private final Map<Long, Runnable> delayedTasks = new HashMap<>();
     private final Map<String, SourceStart> sourceStarts = new HashMap<>();
+    private final Map<String, Long> deferredBootStarts = new HashMap<>();
+    private boolean activated;
+    private boolean dispatchingBootStarts;
+    private long resumeEpoch;
     private long nextWatch = 1;
     private long nativeHandle;
     private boolean sessionEnding;
@@ -228,6 +232,33 @@ final class MuonServiceProcess {
 
     IBinder binder() { return messenger.getBinder(); }
 
+    private void activate(boolean boot) {
+        if (activated) return;
+        activated = true;
+        dispatchingBootStarts = boot;
+        nativeActivate(nativeHandle);
+    }
+
+    void activateOnBoot(Runnable finished) {
+        Runnable activate = () -> {
+            try {
+                if (initializationError != null) Log.e("MuonNativeService", initializationError);
+                else activate(true);
+            } catch (RuntimeException | LinkageError error) {
+                Log.e("MuonNativeService", "Cannot restore services after boot", error);
+            } finally {
+                // Activate queues the component start requests on this same Looper.
+                // Keep the broadcast alive until those requests have reached Android.
+                handler.post(() -> {
+                    dispatchingBootStarts = false;
+                    finished.run();
+                });
+            }
+        };
+        if (initialized) activate.run();
+        else initializing.add(activate);
+    }
+
     JSONObject definition(String id) {
         JSONObject result = definitions.get(id);
         if (result == null) throw new IllegalArgumentException("Unknown service: " + id);
@@ -294,7 +325,15 @@ final class MuonServiceProcess {
     private void handle(Client client, int request, String operation, JSONObject envelope) {
         try {
             if (initializationError != null) throw new IllegalStateException(initializationError);
-            if ("open".equals(operation)) { nativeActivate(nativeHandle); return; }
+            if ("open".equals(operation) || "resume".equals(operation)) {
+                if (owners.get(client.owner) == client && ("resume".equals(operation) || envelope.optBoolean("resumed"))) {
+                    ++resumeEpoch;
+                    for (Map.Entry<String, Long> entry : deferredBootStarts.entrySet())
+                        nativeRetryResidentStart(nativeHandle, entry.getKey(), entry.getValue());
+                }
+                activate(false);
+                return;
+            }
             if ("rpcOpen".equals(operation)) { openRpc(client, request); return; }
             JSONObject command = envelope.getJSONObject("arguments");
             String id = command.getString("serviceId");
@@ -437,8 +476,44 @@ final class MuonServiceProcess {
         preferences.save(id, enabled, (ignored, error) -> nativeSaved(nativeHandle, task, error));
     }
 
+    private String restrictedBootType(String types) {
+        int api = Math.min(Build.VERSION.SDK_INT, context.getApplicationInfo().targetSdkVersion);
+        for (String type : types.split("\\|")) {
+            switch (type) {
+                case "microphone":
+                    if (api >= 34) return type;
+                    break;
+                case "camera": case "dataSync": case "mediaPlayback": case "mediaProjection": case "phoneCall":
+                    if (api >= 35) return type;
+                    break;
+                default: break;
+            }
+        }
+        return null;
+    }
+
+    private void deferStart(String id, long generation, long attemptEpoch, String reason) {
+        if (!nativeStartFailed(nativeHandle, id, generation, reason)) return;
+        deferredBootStarts.put(id, generation);
+        Log.w("MuonNativeService", id + ": " + reason);
+        // The Activity may have resumed after startForegroundService but before
+        // Android rejected the promotion in onStartCommand.
+        if (resumeEpoch > attemptEpoch) nativeRetryResidentStart(nativeHandle, id, generation);
+    }
+
     private void startComponent(String id, long generation) {
+        boolean boot = dispatchingBootStarts && resumeEpoch == 0;
+        boolean retry = deferredBootStarts.remove(id) != null;
+        long attemptEpoch = boot || retry ? resumeEpoch : -1;
         try {
+            JSONObject options = definition(id).getJSONObject("android");
+            if (boot) {
+                String type = restrictedBootType(options.getString("foregroundServiceType"));
+                if (type != null) {
+                    deferStart(id, generation, attemptEpoch, "BOOT_COMPLETED cannot start foreground service type " + type);
+                    return;
+                }
+            }
             if ("quickjs".equals(definition(id).getString("runtime"))) {
                 SourceStart start = new SourceStart(generation);
                 start.timeout = () -> {
@@ -448,13 +523,13 @@ final class MuonServiceProcess {
                 sourceStarts.put(id, start);
                 handler.postDelayed(start.timeout, 10000);
             }
-            String component = definition(id).getJSONObject("android").getString("component");
+            String component = options.getString("component");
             Intent intent = new Intent().setClassName(context, component)
-                    .putExtra("generation", generation);
+                    .putExtra("generation", generation).putExtra("bootAttemptEpoch", attemptEpoch);
             if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
             else context.startService(intent);
         } catch (JSONException | RuntimeException error) {
-            nativeStartFailed(nativeHandle, id, generation, error.toString());
+            startFailed(id, generation, attemptEpoch, error);
         }
     }
 
@@ -490,8 +565,12 @@ final class MuonServiceProcess {
         });
     }
 
-    void startFailed(String id, long generation, String error) {
-        nativeStartFailed(nativeHandle, id, generation, error);
+    void startFailed(String id, long generation, long attemptEpoch, Exception error) {
+        boolean denied = error instanceof SecurityException || (Build.VERSION.SDK_INT >= 31
+                ? error instanceof android.app.ForegroundServiceStartNotAllowedException
+                : error instanceof IllegalStateException);
+        if (attemptEpoch >= 0 && denied) deferStart(id, generation, attemptEpoch, error.toString());
+        else nativeStartFailed(nativeHandle, id, generation, error.toString());
     }
 
     void runtimeStop(String id, long generation, String reason, boolean timeout) {
@@ -511,6 +590,7 @@ final class MuonServiceProcess {
                 String id = event.getJSONObject("snapshot").getString("id");
                 // Coalesce on the current snapshot, never a stale queued event.
                 JSONObject state = snapshot(id);
+                if (!state.getBoolean("autostart")) deferredBootStarts.remove(id);
                 for (Watch watch : new ArrayList<>(watches.values())) {
                     if (!watch.serviceId.equals(id)) continue;
                     watch.latest = state;
@@ -540,6 +620,7 @@ final class MuonServiceProcess {
     private static native void nativeFileWork(long work);
     private static native void nativeRunTask(long handle, long task);
     private static native void nativeActivate(long handle);
+    private static native void nativeRetryResidentStart(long handle, String id, long generation);
     private static native String nativeSetAutostart(long handle, String id, boolean enabled);
     private static native void nativeSaved(long handle, long task, String error);
     private static native String nativeAcquire(long handle, String id, String owner);
@@ -548,7 +629,7 @@ final class MuonServiceProcess {
     private static native void nativeOpenRpc(long handle, String owner, int descriptor);
     private static native String nativeSnapshot(long handle, String id);
     private static native boolean nativeForegroundReady(long handle, String id, long generation, String source, long remaining);
-    private static native void nativeStartFailed(long handle, String id, long generation, String error);
+    private static native boolean nativeStartFailed(long handle, String id, long generation, String error);
     private static native void nativeSessionEnding(long handle);
     private static native void nativeRuntimeStop(long handle, String id, long generation, String error, boolean timeout);
 }

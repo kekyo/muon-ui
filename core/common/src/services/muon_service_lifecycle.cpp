@@ -208,6 +208,16 @@ MuonServiceLifecycle::MuonServiceLifecycle(
 
 MuonServiceLifecycle::~MuonServiceLifecycle() = default;
 
+void MuonServiceLifecycle::RetryResidentStart(const std::string& service_id, uint64_t generation) {
+  const auto found = impl_->services.find(service_id);
+  if (found == impl_->services.end()) return;
+  auto& entry = found->second;
+  if (!entry.resident || entry.state != MuonServiceState::Failed || entry.generation != generation ||
+      !entry.forced_stop_reason.empty() || impl_->closing) return;
+  entry.next_reason = MUON_SERVICE_START_APP;
+  StartIfNeeded(*impl_, entry);
+}
+
 std::optional<MuonServiceReference> MuonServiceLifecycle::Acquire(
     const std::string& service_id, const std::string& owner_id) {
   const auto found = impl_->services.find(service_id);

@@ -116,7 +116,7 @@ Each new generation calls `start(context)`. Its `context.startReason` tells the 
 | Start reason | Trigger |
 | --- | --- |
 | `acquire` | A page acquired a reference. |
-| `app-start` | The application started normally with autostart enabled for the service. |
+| `app-start` | The service started because autostart was enabled on app launch or, on Android, after a device reboot. |
 | `login-autostart` | The desktop's login registration started the application. |
 | `autostart-enabled` | The user enabled service autostart while the application was running. |
 | `development-update` | The development host applied a service update. |
@@ -469,7 +469,7 @@ Android services run in a process separate from the UI, as foreground services w
 
 Add this `android` property under `services.<id>`. Select the type matching the actual work and meet its permission and runtime requirements. `specialUse` also requires `specialUseSubtype`. See [Android service types](https://developer.android.com/develop/background-work/services/fgs/service-types).
 
-Autostart ON does not guarantee continuous OS execution. Background starts, while-in-use permissions, and execution duration have OS restrictions. Rejected startup preserves the saved preference and reports the actual state and reason. See [background start restrictions](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start) and [foreground service timeouts](https://developer.android.com/develop/background-work/services/fgs/timeout).
+Once a service is running, Android can limit its execution time according to its type. [Foreground service timeouts](https://developer.android.com/develop/background-work/services/fgs/timeout)
 
 Closing the UI differs from an OS stop of the entire application. Android's Active apps stop action terminates the whole app without guaranteed cleanup callbacks. Reference counts do not override that action. See [user-initiated stopping](https://developer.android.com/develop/background-work/services/fgs/handle-user-stopping).
 
@@ -484,4 +484,17 @@ if (state.lastHostExit) {
 }
 ```
 
-This release does not register service startup on device boot. Saved preferences are evaluated on a normal application launch. See the [Android guide](android.md) for application builds, signing, and distribution formats.
+### Autostart after a reboot
+
+Once the user has opened the installed app, services can start at the first unlock after a reboot. Muon uses `services.<id>.autostart` as the default (OFF if omitted). A choice saved with `muon.services.setAutostart(id, enabled)` overrides that default in either direction. If all services are OFF, none start. Enabled services that meet Android's startup requirements run before the user opens the app. Opening the UI or receiving another boot notification keeps each running service in the same generation. [Android boot notification](https://developer.android.com/reference/android/content/Intent#ACTION_BOOT_COMPLETED) · [First launch after installation](https://developer.android.com/develop/background-work/services/alarms)
+
+For APKs built by Muon, any of the following types defers the service until the app is visible. This applies even when the service declares multiple types. [Android restrictions by service type](https://developer.android.com/about/versions/15/changes/foreground-service-types)
+
+| Device OS | Foreground service types restricted at boot |
+| --- | --- |
+| Android 14 and later | `microphone` |
+| Additional types on Android 15 and later | `camera`, `dataSync`, `mediaPlayback`, `mediaProjection`, `phoneCall` |
+
+Android can also reject a start when a required permission is missing, for example for a location service. Muon keeps that service's autostart setting ON and reports the reason in the `error` field of `getState(id)`. Other eligible services still start. Muon retries deferred services when the user opens or returns to the app, so a service can start after the user grants the required permission. [Background start restrictions](https://developer.android.com/develop/background-work/services/fgs/restrictions-bg-start) · [Build-time permissions and runtime grants](android.md#build-time-permissions-and-runtime-grants)
+
+After a force stop, the user must open the app again. On Android 13 and later, if the user restricts the app's background battery usage, Android delays the boot notification until the app starts for another reason. [Boot notification after leaving the stopped state](https://developer.android.com/reference/android/content/Intent#ACTION_BOOT_COMPLETED) · [Battery usage restrictions](https://developer.android.com/about/versions/13/behavior-changes-13#battery-resource-utilization)

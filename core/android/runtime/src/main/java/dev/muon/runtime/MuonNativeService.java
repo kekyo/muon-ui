@@ -60,7 +60,7 @@ public abstract class MuonNativeService extends Service {
             else startForeground(process.notificationId(serviceId()), status);
             process.foregroundReady(this, serviceId(), generation);
         } catch (JSONException | RuntimeException error) {
-            process.startFailed(serviceId(), generation, error.toString());
+            process.startFailed(serviceId(), generation, intent.getLongExtra("bootAttemptEpoch", -1), error);
             stopGeneration(generation);
         }
         return START_NOT_STICKY;

@@ -41,6 +41,27 @@ static bool DefaultsAndOverrides() {
                 "resident starts must not create page references");
 }
 
+static bool RetryDeniedResidentStart() {
+  auto manager = MuonServiceLifecycle({{"worker", true, std::nullopt}});
+  manager.TakeEvents();
+  manager.CompleteStart("worker", 1, "background launch denied");
+  manager.TakeEvents();
+  manager.RetryResidentStart("worker", 1);
+  manager.RetryResidentStart("worker", 1);
+  if (!Expect(Count(manager.TakeEvents(), MuonServiceEventKind::Start) == 1 &&
+              manager.GetSnapshot("worker")->client_references == 0 &&
+              manager.GetSnapshot("worker")->start_reason == MUON_SERVICE_START_APP,
+              "foreground eligibility retries one resident generation without adding a page reference")) return false;
+  manager.CompleteStart("worker", 2, "permission missing");
+  manager.RetryResidentStart("worker", 1);
+  if (!Expect(manager.GetSnapshot("worker")->generation == 2,
+              "an older failed generation cannot retry its replacement")) return false;
+  manager.CompleteAutostart("worker", manager.SetAutostart("worker", false), "");
+  manager.RetryResidentStart("worker", 2);
+  return Expect(manager.GetSnapshot("worker")->generation == 2 && !manager.GetSnapshot("worker")->resident,
+                "a saved OFF prevents a later foreground retry");
+}
+
 static bool GenerationReasons() {
   auto manager = MuonServiceLifecycle({{"sync", true, std::nullopt}}, MUON_SERVICE_START_LOGIN_AUTOSTART);
   if (!Expect(manager.GetSnapshot("sync")->start_reason == MUON_SERVICE_START_LOGIN_AUTOSTART,
@@ -540,6 +561,7 @@ static bool OsStopDuringPolicySave() {
 int main() {
   const auto tests = std::vector<std::pair<const char*, bool (*)()>>{
       {"defaults and overrides", DefaultsAndOverrides},
+      {"retry denied resident start", RetryDeniedResidentStart},
       {"shared acquisition", SharedAcquisition},
       {"exact reference identity", ExactReferenceIdentity},
       {"owner disappears during start", OwnerDisappearsDuringStart},

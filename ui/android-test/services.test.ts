@@ -84,6 +84,7 @@ it("packages one factory as separate logical Android components for both ABIs", 
   expect(getAndroidServicePermissions(services)).toEqual([
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.POST_NOTIFICATIONS",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
     "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
     "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
   ]);
@@ -108,6 +109,7 @@ it("does not add the permission of another foreground type to a short service", 
   expect(getAndroidServicePermissions(services)).toEqual([
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.POST_NOTIFICATIONS",
+    "android.permission.RECEIVE_BOOT_COMPLETED",
   ]);
 });
 

@@ -109,7 +109,7 @@ npx muon build --target android --assets ./dist
 | `versionName` | 表示バージョン。既定は`package.json`のversion |
 | `abis` | 収録するABI。既定は両対応ABI |
 | `icon` | PNG画像のパス |
-| `permissions` | Manifestに追加する`android.permission.…`の配列。既定は空 |
+| `permissions` | アプリが明示する権限の完全名の配列。既定は空。[ビルド時に追加される権限と実行時の許可](#ビルド時に追加される権限と実行時の許可) |
 | `sdkPath` | SDKの場所。省略時は`ANDROID_HOME`、`ANDROID_SDK_ROOT`、PATH上のadbから検出 |
 | `plugins` | 後述の事前ビルド済みプラグイン。既定は空 |
 | `systemBars` | 起動時のシステムバーとコンテンツ配置 |
@@ -133,6 +133,38 @@ const note = await window.muon.fs.readTextFile('note.txt', 'utf8');
 ```
 
 simpleモードでは`plugin.plugins`を省略すると対応している組込み関数を公開します。通知関数の公開には、別途`notifications.enabled: true`が必要です。明示した場合は、そのリストだけが対象です。空配列、または`internal`を含まないリストでは組込み関数を公開しません。各エントリーの`allow`で関数を限定でき、直接RPCを組み立てた場合もネイティブ側で権限を検査します。
+
+### ビルド時に追加される権限と実行時の許可
+
+muonはアプリが `android.permissions` に指定した権限と、利用する機能に応じて追加する権限を合わせ、重複を除いてAPKのManifestに宣言します。設定ファイルに表の権限を書くときは、名前の先頭に `android.permission.` を付けてください。
+
+| アプリの機能・設定 | muonがビルド時に追加する権限 | 開発者が指定または要求するもの |
+| --- | --- | --- |
+| WebViewの外部通信 | WebViewの使用だけでは追加なし | `INTERNET` を宣言します。インストール時に付与されます。 |
+| サービスの `io.http.origins` に接続先がある、または `io.server.listen` を指定 | `INTERNET` | 同じ権限の追記は不要です。平文HTTPを使う場合は、許可する接続先を `http://` のoriginで指定します。muonはそのホストに限ってネットワークセキュリティ設定で平文通信を許可します。 |
+| Androidサービスを含む | `FOREGROUND_SERVICE`、サービスの種類に対応する `FOREGROUND_SERVICE_*`、`POST_NOTIFICATIONS`。`shortService` には種類固有の権限はありません。 | `services.<id>.android` に用途に合う `foregroundServiceType` と実行中の `notification` を指定します。`specialUse` には用途を示す `specialUseSubtype` も必要です。 |
+| nativeまたはQuickJSサービスを一つ以上含む | `RECEIVE_BOOT_COMPLETED` と、端末の起動完了を受け取るレシーバー1件。全サービスの初期値がOFFでも追加します。 | 権限とレシーバーの手動登録は不要です。受信権限はインストール時に付与されます。サービスがないAPKには、muonはどちらも自動追加しません。 |
+| ローカル通知を有効化（`notifications.enabled: true`） | `POST_NOTIFICATIONS` | Android 13以降で通常の通知を表示するには、画面から `muon.android.notifications.requestPermission()` で利用者の許可を求めます。フォアグラウンドサービスは、この許可がなくても開始できます。開始時の通知は必要です。 |
+
+端末の再起動後にサービスを自動起動するには、インストール後に一度アプリを開いてください。初回ロック解除時の設定は通常のアプリ起動時と共通です。`services.<id>.autostart` の初期値はOFFで、利用者が変更した場合は保存値を優先します。ONのサービスはAndroidの起動条件を満たせば、画面を開かずに起動します。[再起動後の自動起動](services.md#再起動後の自動起動)・[Androidの受信用権限](https://developer.android.com/reference/android/Manifest.permission#RECEIVE_BOOT_COMPLETED)
+
+例えば、WebViewから外部のHTTPSサイトに接続するには、次のように指定します。
+
+```json
+{
+  "android": { "permissions": ["android.permission.INTERNET"] }
+}
+```
+
+既定では `muon.json5`、`muon.jsonc`、`muon.json` の順に探し、最初に見つかったファイルを読みます。Viteの `build.android.permissions` を指定した場合は、その配列が設定ファイルの配列に優先します。次の例ではビルド後の権限一覧に `android.permission.INTERNET` が含まれます。変更するときは元の設定を編集して再度ビルドします。[Android SDKのapkanalyzer](https://developer.android.com/tools/apkanalyzer)
+
+```bash
+npx muon build --target android
+apkanalyzer manifest permissions dist-muon/android/com.example.notes-1-debug.apk
+apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
+```
+
+Manifestへの宣言だけでは実行時の許可ダイアログは開きません。例えば位置情報サービスでは、muonが追加する `FOREGROUND_SERVICE_LOCATION` に加えて、アプリ開発者が `ACCESS_COARSE_LOCATION` または `ACCESS_FINE_LOCATION` を宣言し、利用者の許可を得る必要があります。バックグラウンドからの開始には、条件に応じて `ACCESS_BACKGROUND_LOCATION` の許可も必要です。muonの公開JS APIには任意のAndroid権限の許可を求める機能はありません。[位置情報サービスの要件](https://developer.android.com/develop/background-work/services/fgs/service-types#location)・[Androidの通知権限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)・[ネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
 
 ### validateモードでimportする
 
@@ -171,7 +203,7 @@ const note = await readTextFile('note.txt', 'utf8');
 
 `muon.fs`の相対パスはアプリ専用のfiles領域を指します。同じアプリIDと署名鍵を使えば、更新後も保存データを利用できますが、アンインストールすると削除される点には注意が必要です。`content://`とファイル選択ダイアログは未提供です。APIの用途は[内蔵プラグインリファレンス](./muon-built-in-plugin-reference.md)を参照してください。Androidで未対応の関数は公開せず、no-opへ置き換えることもありません。
 
-外部通信が必要なら`permissions`に`android.permission.INTERNET`を追加します。Android版はCEF版の`network.allow`などによる宛先制限を適用しません。HTTPの平文通信は無効です。権限名をManifestに追加するだけでは、ユーザーへの実行時権限要求は行われません。ローカルネットワーク権限など、権限ダイアログが必要な機能は公開経路では未提供です。[Android版の制約](./limitation.md#android-webviewバックエンド)、[Androidのローカルネットワーク権限](https://developer.android.com/privacy-and-security/local-network-permission)
+Android版はCEF版の`network.allow`などによる宛先制限を適用しません。平文HTTPは既定で無効です。ローカルネットワーク権限など、個別の許可ダイアログが必要な通信機能は公開経路では未提供です。[ビルド時に追加される権限と実行時の許可](#ビルド時に追加される権限と実行時の許可)・[Android版の制約](./limitation.md#android-webviewバックエンド)・[Androidのローカルネットワーク権限](https://developer.android.com/privacy-and-security/local-network-permission)
 
 ## システムバーと安全領域
 
@@ -220,7 +252,7 @@ Androidのバージョンやマルチウインドウなどによって、OSが�
 
 `smallIcon`は24～1024ピクセルの正方形PNGで、透明な背景に白いシルエットを描いた画像が必要です。色付き画像、完全に不透明な画像、ランチャーアイコンの流用は受け付けません。ビルド時に各画面密度用の24 dpアイコンを生成します。通常のアプリアイコンは従来どおり`android.icon`などで指定します。
 
-通知有効ビルドでは`POST_NOTIFICATIONS`をManifestへ追加します。API 33以降の許可要求は、説明したうえで`muon.android.notifications.requestPermission()`を呼んでください。起動や投稿だけでは要求しません。通知を無効にしたビルドには通知APIを公開せず、ユーザー設定の`permissions`に同権限があっても自動では要求しません。[Androidの通知権限](https://developer.android.com/develop/ui/views/notifications/notification-permission)
+アプリの起動や通知の投稿で権限ダイアログが自動的に開くことはありません。通知を有効にしたビルドで、ユーザーに用途を説明してから許可を求めてください。通知を無効にしたビルドでは通知APIを公開しません。[ビルド時に追加される権限と実行時の許可](#ビルド時に追加される権限と実行時の許可)
 
 validateモードでは`muon:notifications`と`muon:android.notifications`からimportします。共通の投稿には`muon.notifications.post`、権限要求には`muon.android.notifications.requestPermission`など、実際に使う関数を許可してください。
 
@@ -347,6 +379,8 @@ validateモードではメタデータが必須です。ビルド時にABI別の
 登録名、SONAME、ABI、`muon_init_plugin`、依存ライブラリ、16 KiB整列もビルド前に検査します。プラグイン固有の設定値は文字列です。共通設定の`signature`・`salt`はAndroidでは受理せず、メタデータのABI別SHA-256を使います。バッファ、双方向コールバック、返された関数のプロキシとその解放は共通のプラグインABIに従います。[プラグインの開発](./muon-plugin-develop.md)
 
 ## サービスと未対応機能
+
+サービスの種類や通信設定によって、APKに必要な権限が変わります。[ビルド時に追加される権限と実行時の許可](#ビルド時に追加される権限と実行時の許可)
 
 FCMの通知配送とバックグラウンド処理は後続作業です。今回のAPKはFirebase設定なしで動作します。
 

@@ -60,8 +60,8 @@ apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
 
 ### 段階3　起動制限と画面からの再接続を検証する
 
-- [ ] 起動可能なサービスとブート起動に制限があるサービスを同じAPKで動かす。実行できたサービスの応答、保留したサービスの理由と保存値ONを確認する。制限を受けたサービスは、利用者が画面を開いて条件を満たしたときに開始できる。
-- [ ] 起動通知の重複と画面からの同時接続をテストで再現してから対処する。同じIDの起動処理は1回で、画面からは同じ実行世代に接続できる。nativeとQuickJSのどちらでも確認する。[既存の起動制限試験](../../../core/android-test/observer/src/androidTest/java/dev/muon/e2e/observer/ServiceConstraintsTest.java)
+- [x] 同じAPKでnativeとQuickJSのサービスを起動し、`specialUse|dataSync` を指定したサービスは画面を開くまで保留した。位置情報サービスは許可がない間も保存値がONで、`getState()` に権限不足の理由が残った。位置情報を許可して画面に戻るとサービスが開始した。
+- [x] 再起動後に起動通知を再送して画面から接続し、nativeとQuickJSの開始記録がそれぞれ1回であること、世代が変わらずQuickJSのメソッドが応答することを確認した。共通ライフサイクルでは、古い世代からの再試行と保存値OFFからの再起動を防ぐ試験を追加し、25件が通った。[配布APKの再起動試験](../../../ui/android-test/service-boot-e2e.test.ts)・[共通ライフサイクルの試験](../../../core/common-test/muon_service_lifecycle_test.cpp)
 
 ### 段階4　再起動と初回ロック解除を通して確認する
 

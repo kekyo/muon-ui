@@ -4,13 +4,14 @@
 // https://github.com/kekyo/muon-ui
 
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createConnection } from "@playwright/mcp";
+import { buildService, createServiceProject } from "muon-plugin-sdk";
 import { expect, it } from "vitest";
 import { buildMuonApp } from "../common/build.ts";
 
@@ -75,17 +76,47 @@ export default defineService({
         notification: { channelId: "worker", title: "Worker", text: "Running" },
       },
     };
+    const nativeDirectory = join(root, "native");
+    await createServiceProject({
+      directory: nativeDirectory,
+      name: "bootnative",
+      language: "c",
+      buildSystem: "make",
+    });
+    const artifact = await buildService({
+      configPath: join(nativeDirectory, "muon-plugin.build.json"),
+      target: "android-x86_64",
+    });
     const buildApk = async (disabledDefault: boolean) => {
       await writeFile(
         join(root, "muon.json"),
         JSON.stringify({
-          android: { applicationId: app, abis: ["x86_64"] },
+          android: {
+            applicationId: app,
+            abis: ["x86_64"],
+            permissions: ["android.permission.ACCESS_COARSE_LOCATION"],
+          },
           plugin: {
             mode: "simple",
             plugins: [{ name: "internal", allow: ["muon.services.*"] }],
           },
           services: {
             worker,
+            native: { runtime: "native", artifact, android: worker.android },
+            sync: {
+              ...worker,
+              android: {
+                ...worker.android,
+                foregroundServiceType: "specialUse|dataSync",
+              },
+            },
+            location: {
+              ...worker,
+              android: {
+                foregroundServiceType: "location",
+                notification: worker.android.notification,
+              },
+            },
             disabled: { ...worker, autostart: disabledDefault },
           },
         }),
@@ -102,6 +133,26 @@ export default defineService({
       return apk.packagePath;
     };
 
+    const dismissKeyguard = async () => {
+      // Only dismiss the keyguard when the test actually opens the UI. Restore the
+      // disposable emulator's PIN before launching the app or performing another reboot.
+      if (
+        (await shell("dumpsys", "window")).includes("isKeyguardShowing=true")
+      ) {
+        await shell("locksettings", "clear", "--old", pin);
+        try {
+          await shell("input", "keyevent", "KEYCODE_WAKEUP");
+          await shell("wm", "dismiss-keyguard");
+          await expect
+            .poll(async () => await shell("dumpsys", "window"), {
+              timeout: 30000,
+            })
+            .toContain("isKeyguardShowing=false");
+        } finally {
+          await shell("locksettings", "set-pin", pin);
+        }
+      }
+    };
     const page = async (body: string) => {
       await shell("am", "start", "-W", "-n", activity);
       const pid = await shell("pidof", app);
@@ -166,37 +217,18 @@ export default defineService({
       expect(await shell("dumpsys", "activity", "services", app)).not.toContain(
         "isForeground=true",
       );
-      await shell("input", "keyevent", "KEYCODE_WAKEUP");
+      // Verify the real lock credential through Android's lock service. This unlocks
+      // credential-protected storage without starting an Activity or depending on SystemUI animations.
+      await shell("locksettings", "verify", "--old", pin);
+      await expect.poll(userState, { timeout: 30000 }).toBe("RUNNING_UNLOCKED");
+      // User storage becomes available before Android finishes delivering BOOT_COMPLETED.
       await expect
         .poll(
-          async () => {
-            if ((await userState()) === "RUNNING_UNLOCKED") return true;
-            await shell("wm", "dismiss-keyguard");
-            await shell(
-              "uiautomator",
-              "dump",
-              "/data/local/tmp/muon-keyguard.xml",
-            );
-            const view = await shell(
-              "cat",
-              "/data/local/tmp/muon-keyguard.xml",
-            );
-            if (view.includes("com.android.systemui:id/pinEntry")) {
-              // SystemUI can recreate the PIN view during boot. Clear a partial entry
-              // before entering the credential and observe Android's actual user state.
-              await shell(
-                "input",
-                "keyevent",
-                ...Array.from(pin, () => "KEYCODE_DEL"),
-                ...Array.from(pin, (digit) => "KEYCODE_" + digit),
-                "KEYCODE_ENTER",
-              );
-            }
-            return (await userState()) === "RUNNING_UNLOCKED";
-          },
-          { timeout: 60000 },
+          async () =>
+            await adb("logcat", "-b", "system", "-d", "-s", "UserController:I"),
+          { timeout: 90000 },
         )
-        .toBe(true);
+        .toContain("Finished processing BOOT_COMPLETED for u0");
       await shell("cmd", "activity", "wait-for-broadcast-barrier");
     };
     const listed = await shell("pm", "list", "packages", app);
@@ -204,9 +236,10 @@ export default defineService({
       await adb("uninstall", app);
     await adb("install", await buildApk(false));
     try {
+      await dismissKeyguard();
       expect(
         await page(`await muon.services.setAutostart('disabled',false);
-        await muon.services.setAutostart('worker',true);
+        for (const id of ['worker','native','sync','location']) await muon.services.setAutostart(id,true);
         return (await muon.services.getState('worker')).autostart;`),
       ).toBe(true);
       await reboot();
@@ -214,6 +247,15 @@ export default defineService({
         .poll(serviceLog, { timeout: 30000 })
         .toContain("boot-test-start worker ");
       expect(await serviceLog()).not.toContain("boot-test-start disabled ");
+      await expect
+        .poll(serviceLog, { timeout: 30000 })
+        .toContain("native: native");
+      await expect
+        .poll(serviceLog, { timeout: 30000 })
+        .toMatch(/sync: .*BOOT_COMPLETED.*dataSync/u);
+      expect(await serviceLog()).not.toMatch(
+        /boot-test-start (sync|location) /u,
+      );
       expect(await shell("dumpsys", "activity", "services", app)).toContain(
         "isForeground=true",
       );
@@ -223,15 +265,64 @@ export default defineService({
       expect((await shell("ps", "-A", "-o", "NAME")).split("\n")).not.toContain(
         app,
       );
-      expect(
+      // Replay a system-only broadcast on the disposable userdebug image as the UI reconnects.
+      await dismissKeyguard();
+      const [broadcast] = await Promise.all([
+        shell(
+          "su",
+          "0",
+          "am",
+          "broadcast",
+          "-a",
+          "android.intent.action.BOOT_COMPLETED",
+          "-n",
+          app + "/dev.muon.runtime.MuonServiceBootReceiver",
+        ),
+        page("return true;"),
+      ]);
+      expect(broadcast).toContain("Broadcast completed");
+      // Opening the Activity alone restores eligible demand, even if the page never calls a service.
+      await expect
+        .poll(serviceLog, { timeout: 30000 })
+        .toContain("boot-test-start sync ");
+      const state =
         await page(`const handle=await muon.services.acquire('worker');
-        try { return await handle.call('echo',['after boot']); } finally { await handle.release(); }`),
-      ).toBe("after boot");
+        try { return { echo:await handle.call('echo',['after boot']), generation:handle.generation,
+          native:await muon.services.getState('native') }; } finally { await handle.release(); }`);
+      expect(state).toMatchObject({
+        echo: "after boot",
+        generation: "1",
+        native: { state: "running", generation: "1", clientReferences: 0 },
+      });
+      const denied = await page(
+        "return await muon.services.getState('location');",
+      );
+      expect(denied).toMatchObject({
+        state: "failed",
+        autostart: true,
+        clientReferences: 0,
+      });
+      expect(denied.error).toMatch(/permission/i);
+      await shell("input", "keyevent", "KEYCODE_HOME");
+      await shell(
+        "pm",
+        "grant",
+        app,
+        "android.permission.ACCESS_COARSE_LOCATION",
+      );
+      await page("return true;");
+      await expect
+        .poll(serviceLog, { timeout: 30000 })
+        .toContain("boot-test-start location ");
+      expect((await serviceLog()).match(/native: native\b/gu)).toHaveLength(1);
+      expect(
+        (await serviceLog()).match(/boot-test-start sync /gu),
+      ).toHaveLength(1);
       expect(
         (await serviceLog()).match(/boot-test-start worker /gu),
       ).toHaveLength(1);
       await page(
-        "await muon.services.setAutostart('worker',false); return true;",
+        "for (const id of ['worker','native','sync','location']) await muon.services.setAutostart(id,false); return true;",
       );
       // The saved OFF also wins over a new ON default in an application update.
       await adb("install", "-r", await buildApk(true));
@@ -240,26 +331,33 @@ export default defineService({
         "isForeground=true",
       );
       expect(await serviceLog()).not.toContain("boot-test-start");
+      expect(await serviceLog()).not.toContain("native: native");
+      await dismissKeyguard();
       expect(
         await page(
           "return (await muon.services.getState('disabled')).autostart;",
         ),
       ).toBe(false);
     } catch (error) {
-      const diagnostic = await Promise.all([
+      const diagnostic = await Promise.allSettled([
         shell("dumpsys", "package", app),
         shell("dumpsys", "activity", "broadcasts", app),
         adb("logcat", "-b", "system", "-d", "-t", "4000"),
       ]);
       await writeFile(
         join(root, "boot-diagnostics.log"),
-        diagnostic.join("\n"),
+        diagnostic
+          .map((entry) =>
+            entry.status === "fulfilled" ? entry.value : String(entry.reason),
+          )
+          .join("\n"),
       );
       console.error("Boot test diagnostics:", root);
       throw error;
     } finally {
       await adb("uninstall", app);
     }
+    await rm(root, { recursive: true, force: true });
   },
   360000,
 );

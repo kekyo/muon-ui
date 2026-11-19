@@ -42,6 +42,7 @@ final class MuonServiceClient implements AutoCloseable {
     private final Messenger reply = new Messenger(new Handler(Looper.getMainLooper(), this::receive));
     private Messenger remote;
     private boolean bound;
+    private boolean resumed;
     private boolean closed;
     private String terminalError = "Service page session was released";
     private int nextRequest = 1;
@@ -54,7 +55,7 @@ final class MuonServiceClient implements AutoCloseable {
             if (closed) return;
             remote = new Messenger(binder);
             try {
-                Message open = message(0, new JSONObject().put("operation", "open"));
+                Message open = message(0, new JSONObject().put("operation", "open").put("resumed", resumed));
                 remote.send(open);
                 for (Message command : queued) remote.send(command);
                 queued.clear();
@@ -66,6 +67,14 @@ final class MuonServiceClient implements AutoCloseable {
     };
 
     MuonServiceClient(Context context) { this.context = context.getApplicationContext(); }
+
+    void setResumed(boolean value) {
+        if (resumed == value) return;
+        resumed = value;
+        if (!value || closed || remote == null) return;
+        try { remote.send(message(0, new JSONObject().put("operation", "resume"))); }
+        catch (JSONException | RemoteException error) { disconnected(error.toString()); }
+    }
 
     void activate() {
         if (closed || bound) return;

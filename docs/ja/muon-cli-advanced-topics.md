@@ -30,9 +30,7 @@ npx muon run
 - localhostの開発用HTTPS証明書エラーを無視するには `--allow-insecure-localhost` を指定します。
   このrawフラグを配布用のmuon-launcherへ直接渡した場合は、引き続き起動前に拒否されます。
   配布用ビルドでこの動作が必要な場合は、`muon.json` の `network.localAccess.allowInsecureLocalhost` を設定してください。
-- `muon run` は起動前にmuon-builderを実行し、CEFと、`node.project` を指定した場合に必要な公式Node.js runtimeを準備します。Node.js runtimeの準備は `simple` と `validate` のどちらのモードでも行われます。
-  両方のdownloadが必要な場合は並行して実行され、Node.jsはstage directoryの `runtimes/node/bin/node`（Windowsでは `runtimes/node/bin/node.exe`）へ配置されます。
-  Node.js実行ファイルを指定するCLIオプションはなく、Node pluginはこの絶対pathだけを使用します。環境変数や `PATH` へのfallbackはありません。
+- `muon run`は起動前にCEFを準備します。Node.jsサービスを定義した場合はNode.jsも準備し、ステージ内の`runtimes/node/bin/node`（Windowsでは`node.exe`）を使用します。
 
 Viteプラグインを使用する場合と異なり、アセットホスト名部分によるページ管理の分割を自然に行うことが出来ます。
 例えば、 `asset://main/index.html` と `asset://sub/index.html` は、CEFが異なるオリジンとして扱います。
@@ -62,10 +60,7 @@ muon Viteプラグインが構成されていない場合、 `muon build` はコ
 また、`package.json` の `files` に `README.md` や `LICENSE` などの通常ファイルを指定すると、条件を満たすものは配布先ディレクトリ直下へコピーされます。
 muon Viteプラグインの `build.distributionFiles` が指定されている場合は、`package.json` の `files` ではなくそのリストを使用します。
 
-`node.project` を設定したアプリでは、`muon build` と `muon pack` が対象platformの `node.so` または `node.dll`、`node-bridge.mjs`、Nodeプロジェクトを成果物へコピーし、正規化済みNode runtime requirementをlauncherへ埋め込みます。
-Node.js実行ファイル、配布archive、download cacheはbuildまたはpackの成果物に含めません。
-配布用 `muon-launcher` は起動時にCEFと必要なNode.js runtimeを準備します。通常のinstallではアプリケーションルートとは別のruntime directoryへ配置し、portable配布物では展開先へ直接配置するため、準備後のportable runtimeにも必要なNode.jsが含まれます。
-実行中のNode.js runtimeは置き換えず、更新は次回のlauncher起動時に適用します。sidecarは準備済みの `runtimes/node/bin/node`（Windowsでは `.exe`）だけを起動し、環境変数や `PATH` へfallbackしません。
+デスクトップアプリにNode.jsサービスを定義すると、`muon build`と`muon pack`はサービスのコードと実行時の依存パッケージを収録します。配布用のランチャーは、起動時に各サービスのバージョン条件を満たすNode.jsを準備します。更新は次回の起動時に反映されます。
 
 ターゲットを指定する場合は `--target linux-amd64` のように指定し、すべての同梱ターゲットを生成する場合は `--all` を使用します。
 muon Viteプラグインが無い場合、 `muon build` の未指定ターゲットは実行中ホストのターゲットです。
@@ -89,8 +84,6 @@ npx muon build --icon icons/app.png --linux-name "My App"
   同じ値は `muon.json` の `linux.desktop` でも指定出来ます。
 
 > 注釈: Viteプラグインを使わず、生成済みアセットをmuon CLIで直接収録する場合、CLI自身はvirtual moduleの解決（`import`によるmuonプラグインの参照）を行いません。
-> `validate` モードの `muon:node` を使用するコードはViteで事前にbundleしてください。Viteを介さないアセットからNode.js機能を参照する場合は `simple` モードの `window.muon.node.createNode()`を使用します。
-
 ## AppImageの作成と実行
 
 AppImageは、インストーラーを使わずに起動できるLinux向けの単一ファイルです。CPUごとに次のコマンドで作成します。
@@ -112,7 +105,7 @@ chmod +x ./my-app-1.0.0-linux-amd64.AppImage
 ./my-app-1.0.0-linux-amd64.AppImage
 ```
 
-CEFは同梱しません。初回起動では既存のlauncherがCEFを取得し、`node.project`を使うアプリでは必要なNode.jsも取得します。CEF選択ポリシーはdebと共通で、`tested`以外もそのまま使用できます。準備済みランタイムや有効な取得キャッシュは再利用しますが、未取得のバージョンを選ぶ場合や必要なカタログがない場合には通信が必要です。初回からのオフライン起動を保証する形式ではありません。
+CEFは同梱しません。初回起動では既存のlauncherがCEFを取得し、Node.jsサービスを使うアプリでは必要なNode.jsも取得します。CEF選択ポリシーはdebと共通で、`tested`以外もそのまま使用できます。準備済みランタイムや有効な取得キャッシュは再利用しますが、未取得のバージョンを選ぶ場合や必要なカタログがない場合には通信が必要です。初回からのオフライン起動を保証する形式ではありません。
 
 取得アーカイブの共有キャッシュは`$XDG_CACHE_HOME/muon/`、未指定なら`~/.cache/muon/`に保存します。`MUON_CACHE_DIR`で別の保存先を指定できます。
 

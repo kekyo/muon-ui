@@ -239,16 +239,8 @@ const createFakeMuonPackageDist = async (
         }),
       );
     }
-    const nodePluginFileName = target.startsWith("windows-")
-      ? "node.dll"
-      : "node.so";
-    await mkdir(join(runtimeDirectory, "plugins"), { recursive: true });
     await writeFile(
-      join(runtimeDirectory, "plugins", nodePluginFileName),
-      `${target} node plugin\n`,
-    );
-    await writeFile(
-      join(runtimeDirectory, "plugins", "node-bridge.mjs"),
+      join(runtimeDirectory, "node-service-bridge.mjs"),
       "export const bridgeFixture = true;\n",
     );
     await writeFile(
@@ -778,95 +770,6 @@ describe("muon pack", () => {
     expect(portableCore).toContain("profile");
   });
 
-  it("packages an opted-in Node project and host bridge without a Node executable", async () => {
-    const root = await createTemporaryDirectory("muon-pack-node-project-");
-    const packageDirectory = await createFakeMuonPackageDist(root, [
-      "linux-amd64",
-    ]);
-    const backendDirectory = join(root, "backend");
-    const dependencyDirectory = join(
-      backendDirectory,
-      "node_modules",
-      "fixture-dependency",
-    );
-    await mkdir(dependencyDirectory, { recursive: true });
-    await writeFile(
-      join(backendDirectory, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "packed-node-project",
-          type: "module",
-          main: "./main.js",
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeFile(
-      join(backendDirectory, "main.js"),
-      [
-        'import dependency from "fixture-dependency";',
-        "process.stdout.write(`${dependency}\\n`);",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      join(dependencyDirectory, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "fixture-dependency",
-          type: "module",
-          exports: "./index.js",
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeFile(
-      join(dependencyDirectory, "index.js"),
-      'export default "packed dependency";\n',
-    );
-    await writeViteProject(root, packageDirectory, ["linux-amd64"], undefined, {
-      muonConfig: {
-        node: {
-          project: "./backend",
-        },
-      },
-    });
-
-    const result = await packMuonApp({
-      root,
-      types: ["tar.gz"],
-    });
-
-    const artifactPath = result.artifacts[0]?.path ?? "";
-    const entries = await readTarGzEntryNames(artifactPath);
-    const entryRoot = "packed-sample/linux-amd64";
-    expect(entries).toContain(`${entryRoot}/plugins/node.so`);
-    expect(entries).toContain(`${entryRoot}/plugins/node-bridge.mjs`);
-    expect(entries).toContain(`${entryRoot}/node-project/package.json`);
-    expect(entries).toContain(`${entryRoot}/node-project/main.js`);
-    expect(entries).toContain(
-      `${entryRoot}/node-project/node_modules/fixture-dependency/index.js`,
-    );
-    expect(entries).not.toContain(`${entryRoot}/node`);
-    expect(entries).not.toContain(`${entryRoot}/node.exe`);
-    expect(entries).not.toContain(`${entryRoot}/node-runtime.tar.xz`);
-    await expect(
-      readTarGzTextEntry(artifactPath, `${entryRoot}/plugins/node-bridge.mjs`),
-    ).resolves.toBe("export const bridgeFixture = true;\n");
-    const stagedExecution = await execFileAsync(process.execPath, [
-      join(root, "dist-muon", "linux-amd64", "node-project"),
-    ]);
-    expect(stagedExecution.stdout).toBe("packed dependency\n");
-    const assetEntries = await readZipEntryNames(
-      join(root, "dist-muon", "linux-amd64", "assets.zip"),
-    );
-    expect(
-      assetEntries.some((entry) => entry.startsWith("node-project/")),
-    ).toBe(false);
-  });
-
   it.each([
     ["the pack build root", ".muon/pack/backend"],
     ["the deb artifact work tree", "artifacts/deb/backend"],
@@ -881,13 +784,13 @@ describe("muon pack", () => {
         "linux-amd64",
       ]);
       const backendDirectory = join(root, ...projectPath.split("/"));
-      const markerPath = join(backendDirectory, "source-marker.txt");
+      const markerPath = join(backendDirectory, "entry.ts");
       await mkdir(backendDirectory, { recursive: true });
       await writeFile(
         join(backendDirectory, "package.json"),
         `${JSON.stringify({ name: "pack-cleanup-source", type: "module" })}\n`,
       );
-      await writeFile(markerPath, "preserve source\n");
+      await writeFile(markerPath, "export default {};\n");
       await writeViteProject(
         root,
         packageDirectory,
@@ -895,8 +798,12 @@ describe("muon pack", () => {
         undefined,
         {
           muonConfig: {
-            node: {
-              project: backendDirectory,
+            services: {
+              worker: {
+                runtime: "node",
+                project: backendDirectory,
+                entry: "./entry.ts",
+              },
             },
           },
         },
@@ -911,7 +818,7 @@ describe("muon pack", () => {
         "muon Node project and pack cleanup directory must not overlap",
       );
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
     },
   );
@@ -924,7 +831,7 @@ describe("muon pack", () => {
       "linux-amd64",
     ]);
     const backendDirectory = join(root, "web-dist", "backend");
-    const markerPath = join(backendDirectory, "source-marker.txt");
+    const markerPath = join(backendDirectory, "entry.ts");
     await writeViteProject(root, packageDirectory, ["linux-amd64"], undefined, {
       buildOptions: {
         configPath: "settings/plugin-muon.json",
@@ -936,10 +843,10 @@ describe("muon pack", () => {
       join(backendDirectory, "package.json"),
       `${JSON.stringify({ name: "pack-outdir-source", type: "module" })}\n`,
     );
-    await writeFile(markerPath, "preserve source\n");
+    await writeFile(markerPath, "export default {};\n");
     await writeFile(
       join(root, "settings", "plugin-muon.json"),
-      `${JSON.stringify({ node: { project: backendDirectory } }, null, 2)}\n`,
+      `${JSON.stringify({ services: { worker: { runtime: "node", project: backendDirectory, entry: "./entry.ts" } } }, null, 2)}\n`,
     );
 
     await expect(
@@ -949,7 +856,7 @@ describe("muon pack", () => {
       }),
     ).rejects.toThrow("muon Node project");
     await expect(readFile(markerPath, "utf8")).resolves.toBe(
-      "preserve source\n",
+      "export default {};\n",
     );
   });
 

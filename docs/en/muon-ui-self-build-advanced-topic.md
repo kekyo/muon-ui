@@ -24,7 +24,7 @@ android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 
 Runtime code lives in `core/`. The CLI, Vite integration, application builders, and packaging code live in `ui/`. In each component, `common/` contains shared code, while `cef/` and `android/` contain backend implementations. Tests sit beside those directories in `common-test/`, `cef-test/`, and `android-test/`.
 
-`core/android-poc/` contains the QuickJS experiment and its own tests. Native build tools live in `builder/`, and the Node.js host lives in `node/`. The public npm package names remain `muon-ui` for `ui/` and `muon-node` for `node/`.
+`builder/` contains the native build tools and `node/` contains the Node.js service runtime. The public `muon-ui` npm package is built from `ui/`.
 
 ## Build and test
 
@@ -47,13 +47,6 @@ The full suite builds APKs and performs static checks. After connecting through 
 ```bash
 ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-tester
 ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
-```
-
-Run the QuickJS experiment in its separate workspace:
-
-```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
 ```
 
 The independent npm consumer test covers the public CLI/Vite integration, signing, storage, restart, and updates preserving data. It recreates its dedicated device fixture, `dev.muon.e2e.publicconsumer`:

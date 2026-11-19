@@ -2,7 +2,7 @@
 
 muon-uiのnpmパッケージから、Webアセットを内蔵したAndroid APKを作れます。Viteのビルドと公開CLIを使い、GradleやJNIのソースを編集する必要はありません。配布したAPKの起動に開発サーバーは不要です。
 
-今回の公開範囲はdebug APKと署名済みrelease APKです。[バックグラウンドサービス](services.md)はC/C++またはQuickJSによるJS/TSで実装できます。FCM、Node.js sidecar、公開CLIによるAABの生成は提供していません。
+公開CLIでdebug APKと署名済みrelease APKを作成できます。[バックグラウンドサービス](services.md)にはC/C++またはQuickJSで動くJS/TSを使えます。FCMと公開CLIによるAABの生成は未対応です。
 
 ## 必要な環境
 

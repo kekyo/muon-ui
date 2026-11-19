@@ -120,15 +120,6 @@ declare module "muon:fs" {
   export const watch: MuonFsApi["watch"];
 }
 
-declare module "muon:node" {
-  /**
-   * Create an isolated out-of-process Node.js runtime.
-   *
-   * @returns A promise for a releaseable Node.js runtime instance.
-   */
-  export const createNode: MuonNodeApi["createNode"];
-}
-
 declare module "muon:browser" {
   /** Reload the current page. */
   export const reload: () => Promise<void>;

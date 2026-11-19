@@ -38,15 +38,15 @@ await writeFile(join(root, 'services.json'), JSON.stringify({ services: {
   ...httpDriver.services,
   ...listenerDriver.services,
   worker: { runtime: 'node', project: assets, entry: './service.mjs',
-    executable: process.execPath, bridge: join(assets, 'node-bridge.mjs'), autostart: true,
+    executable: process.execPath, bridge: join(assets, 'node-service-bridge.mjs'), autostart: true,
     config: { origin: `http://127.0.0.1:${address.port}`, marker } },
   lifecycle: { runtime: 'node', project: assets, entry: './lifecycle.mjs',
-    executable: process.execPath, bridge: join(assets, 'node-bridge.mjs'),
+    executable: process.execPath, bridge: join(assets, 'node-service-bridge.mjs'),
     config: { origin: `http://127.0.0.1:${address.port}`, control, pid: childPid, marker: join(root, 'lifecycle-marker') } },
   disconnected: { runtime: 'node', project: assets, entry: './service.mjs',
     executable: process.execPath, bridge: join(assets, 'disconnect-bridge.mjs') },
   absent: { runtime: 'node', project: assets, entry: './service.mjs',
-    executable: join(root, 'absent-node'), bridge: join(assets, 'node-bridge.mjs') },
+    executable: join(root, 'absent-node'), bridge: join(assets, 'node-service-bridge.mjs') },
 } }));
 const workEntered = once(observer, 'request');
 const host = spawn(join(binaries, process.platform === 'win32' ? 'muon-service-host.exe' : 'muon-service-host'), [

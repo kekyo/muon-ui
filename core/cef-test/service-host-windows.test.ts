@@ -83,12 +83,12 @@ beforeAll(async () => {
   ]);
   for (const name of ["localhost-cert.pem", "localhost-key.pem"])
     await copyFile(
-      join("../android-poc/android/app/src/androidTest/assets", name),
+      join("../service-host/test-assets", name),
       join(nodeAssets, name),
     );
   await copyFile(
-    resolve("../../node/dist/node-bridge.mjs"),
-    join(nodeAssets, "node-bridge.mjs"),
+    resolve("../../node/dist/node-service-bridge.mjs"),
+    join(nodeAssets, "node-service-bridge.mjs"),
   );
 }, 600000);
 

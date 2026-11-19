@@ -358,7 +358,7 @@ static cardio::promise<void> StartChild(const std::shared_ptr<NodeServiceEntry> 
     entry->child.session_token = CreateMuonNodeSessionToken();
     // Hand the launch operation its callback before suspending. Its owning capture
     // must be destroyed exactly once, independently of the awaiter's lifetime.
-    auto launched = StartMuonNodeProcess(&entry->child, true, [entry] {
+    auto launched = StartMuonNodeProcess(&entry->child, [entry] {
       ++entry->tasks;
       cardio::fire_and_forget(Monitor(entry));
     });

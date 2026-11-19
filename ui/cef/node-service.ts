@@ -216,7 +216,7 @@ export const stageMuonNodeService = async (
   destination: string,
   onInput?: MuonServiceInputObserver,
 ): Promise<void> => {
-  await assertMuonNodeProjectStagingIsSafe(project, destination);
+  await assertMuonNodeProjectStagingIsSafe([project], destination);
   await copyProjectFiles(project.sourcePath, destination);
   const copied = new Map<string, string>();
   const pending = [

@@ -119,11 +119,6 @@ export default defineService({
     const native = await window.muon.services.acquire('native');
     const quickjs = await window.muon.services.acquire('quickjs');
     const service = await window.muon.services.acquire('node');
-    const node = await window.muon.node.createNode();
-    try {
-      const path = await node.importModule('node:path');
-      if (await path.basename('/a/page-node.txt') !== 'page-node.txt') throw new Error('Page Node regression');
-    } finally { await node.release(); }
     const result = {
       replies: [await native.call('echo', ['native reply']), await quickjs.call('echo', ['QuickJS reply']), await service.call('echo', ['reply'])],
       generations: [String(native.generation), String(quickjs.generation), String(service.generation)],
@@ -149,7 +144,6 @@ export default defineService({
       await writeFile(
         join(root, "muon.json"),
         JSON.stringify({
-          node: { project: resolve("fixtures/node-project") },
           services: {
             node: {
               runtime: "node",

@@ -256,17 +256,10 @@ export default defineService({ interface: defineServiceInterface({ schemaVersion
           await mkdir(join(stagePath, "runtimes/node/bin"), {
             recursive: true,
           });
-          await mkdir(join(stagePath, "plugins"));
           await cp(process.execPath, join(stagePath, "runtimes/node/bin/node"));
           await cp(
-            resolve("../node/dist/node-bridge.mjs"),
-            join(stagePath, "plugins/node-bridge.mjs"),
-          );
-          await cp(
-            resolve(
-              "../core/cef/.run/test-linux-amd64-release/plugins/node.so",
-            ),
-            join(stagePath, "plugins/node.so"),
+            resolve("../node/dist/node-service-bridge.mjs"),
+            join(stagePath, "node-service-bridge.mjs"),
           );
         }
         definition = {

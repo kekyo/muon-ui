@@ -1,7 +1,0 @@
-.gradle/
-.cxx/
-.native-dependencies/
-.generated/
-build/
-app/build/
-local.properties

@@ -11,7 +11,6 @@ import {
 import {
   access as nodeAccess,
   appendFile as nodeAppendFile,
-  chmod as nodeChmod,
   constants,
   copyFile as nodeCopyFile,
   mkdir as nodeMkdir,
@@ -770,72 +769,6 @@ export const TEST_PLUGIN_DIRECTORY =
         "test-plugins",
       );
 
-/**
- * Gets the framework-managed Node executable path for a running Muon process.
- *
- * @param running Running Muon process.
- * @returns Absolute path used to launch the Node sidecar.
- * @throws Error when the effective runtime directory is unavailable.
- */
-export const getBundledNodeExecutable = (running: RunningMuon): string => {
-  if (running.runtimeDirectory === undefined) {
-    throw new Error("Muon runtime directory is unavailable");
-  }
-  return join(
-    running.runtimeDirectory,
-    "runtimes",
-    "node",
-    "bin",
-    process.platform === "win32" || running.remoteWindows !== undefined
-      ? "node.exe"
-      : "node",
-  );
-};
-
-/**
- * Gets the Node.js project fixture path for the active E2E platform.
- *
- * @returns Local fixture path or its staged remote-Windows path.
- */
-export const getNodeProjectFixtureDirectory = (): string =>
-  getWindowsRemoteContext()?.runtime.nodeProjectDirectory ??
-  resolve("fixtures", "node-project");
-
-/**
- * Gets the Express project fixture path for the active E2E platform.
- *
- * @returns Local fixture source path or its dependency-installed
- * remote-Windows path.
- */
-export const getNodeExpressProjectFixtureDirectory = (): string =>
-  getWindowsRemoteContext()?.runtime.nodeExpressProjectDirectory ??
-  resolve("fixtures", "node-express-project");
-
-/**
- * Gets a command-line marker that identifies Node sidecars in process lists.
- *
- * @returns Platform-specific process marker.
- */
-export const getNodeSidecarCommandMarker = (): string =>
-  isWindowsRemoteE2e() ? "node.exe" : "node-bridge.mjs";
-
-const prepareBundledNodeExecutable = async (
-  running: RunningMuon,
-): Promise<void> => {
-  if (process.platform !== "linux" || isWindowsRemoteE2e()) {
-    return;
-  }
-  const executable = getBundledNodeExecutable(running);
-  const temporaryExecutable = `${executable}.tmp-${String(process.pid)}`;
-  await nodeMkdir(nodeDirname(executable), { recursive: true });
-  try {
-    await nodeCopyFile(process.execPath, temporaryExecutable);
-    await nodeChmod(temporaryExecutable, 0o755);
-    await nodeRename(temporaryExecutable, executable);
-  } finally {
-    await nodeRm(temporaryExecutable, { force: true });
-  }
-};
 export const PLUGIN_SUFFIX = isWindowsRemoteE2e()
   ? ".dll"
   : process.platform === "win32"
@@ -2538,7 +2471,6 @@ export const writeMuonConfig = async (
   browserProfilePath: string | undefined = undefined,
   applicationConfig: Readonly<Record<string, string>> = {},
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
-  nodeProject: string | undefined = undefined,
   pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
 ): Promise<string> => {
   const network: Record<string, unknown> = { allow: allowPatterns };
@@ -2562,9 +2494,7 @@ export const writeMuonConfig = async (
   if (Object.keys(applicationConfig).length > 0) {
     config.config = applicationConfig;
   }
-  if (nodeProject !== undefined) {
-    config.node = { project: nodeProject };
-  }
+
   if (logConfig !== undefined) {
     config.log = logConfig;
   }
@@ -2664,7 +2594,6 @@ interface StartWindowsRemoteMuonOptions {
   networkAllowPatterns: string[];
   networkAuthorizedOrigins: NetworkAuthorizedOriginConfig[];
   networkLocalAccess: NetworkLocalAccessConfig | undefined;
-  nodeProject: string | undefined;
   pluginAllowPatterns: string[];
   pluginCapabilities: readonly PluginCapabilityConfigEntry[];
   pluginSaltByName: Readonly<Record<string, string>>;
@@ -3090,7 +3019,6 @@ const startWindowsRemoteMuon = async (
         profilePath,
         options.applicationConfig,
         options.networkLocalAccess,
-        options.nodeProject,
         options.pluginCapabilities,
       ),
   );
@@ -3228,7 +3156,6 @@ export const startMuon = async (
   pluginConfigByName: Readonly<Record<string, Record<string, string>>> = {},
   applicationConfig: Readonly<Record<string, string>> = {},
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
-  nodeProject: string | undefined = undefined,
   pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
   windowsRemoteKillTreeOnRelease = true,
 ): Promise<RunningMuon> => {
@@ -3257,7 +3184,6 @@ export const startMuon = async (
         networkAllowPatterns,
         networkAuthorizedOrigins,
         networkLocalAccess,
-        nodeProject,
         pluginAllowPatterns,
         pluginCapabilities,
         pluginConfigByName,
@@ -3321,7 +3247,6 @@ export const startMuon = async (
     undefined,
     applicationConfig,
     networkLocalAccess,
-    nodeProject,
     pluginCapabilities,
   );
   const args = shouldForceX11Ozone
@@ -3416,7 +3341,6 @@ export const startDebugMuon = async (
   useValgrind = shouldUseValgrind,
   applicationConfig: Readonly<Record<string, string>> = {},
   networkLocalAccess: NetworkLocalAccessConfig | undefined = undefined,
-  nodeProject: string | undefined = undefined,
   pluginCapabilities: readonly PluginCapabilityConfigEntry[] = [],
   windowsRemoteKillTreeOnRelease = true,
 ): Promise<RunningMuon> =>
@@ -3452,102 +3376,9 @@ export const startDebugMuon = async (
     pluginConfigByName,
     applicationConfig,
     networkLocalAccess,
-    nodeProject,
     pluginCapabilities,
     windowsRemoteKillTreeOnRelease,
   );
-
-/**
- * Options used to start a debug runtime with a Node project.
- */
-export interface StartDebugMuonWithNodeProjectOptions {
-  /**
-   * Page patterns that receive the simple plugin facade, or null to keep
-   * validate mode.
-   */
-  browserPluginAllowPatterns?: string[] | null;
-
-  /**
-   * Environment inherited by the runtime and Node sidecar.
-   */
-  environment?: NodeJS.ProcessEnv;
-
-  /**
-   * Network request patterns authorized for the test application.
-   */
-  networkAllowPatterns?: string[];
-
-  /**
-   * Local network access policy for the test application.
-   */
-  networkLocalAccess?: NetworkLocalAccessConfig;
-
-  /**
-   * Absolute Node project directory used by the test runtime.
-   */
-  nodeProject: string;
-
-  /**
-   * Capability policies used by validate-mode calls.
-   */
-  pluginCapabilities?: readonly PluginCapabilityConfigEntry[];
-}
-
-/**
- * Starts a debug runtime with a Node project configured.
- *
- * @param options Runtime and Node project configuration.
- * @returns The running debug runtime.
- */
-export const startDebugMuonWithNodeProject = async (
-  options: StartDebugMuonWithNodeProjectOptions,
-): Promise<RunningMuon> => {
-  const {
-    browserPluginAllowPatterns = TEST_BROWSER_PLUGIN_ALLOW_PATTERNS,
-    environment = {},
-    networkAllowPatterns = TEST_NETWORK_ALLOW_PATTERNS,
-    networkLocalAccess = undefined,
-    nodeProject,
-    pluginCapabilities = [],
-  } = options;
-  const running = await startDebugMuon(
-    [],
-    networkAllowPatterns,
-    environment,
-    undefined,
-    TEST_PLUGIN_ALLOW_PATTERNS,
-    [],
-    browserPluginAllowPatterns,
-    [],
-    null,
-    true,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    {},
-    {},
-    {},
-    true,
-    shouldUseValgrind,
-    {},
-    networkLocalAccess,
-    nodeProject,
-    pluginCapabilities,
-  );
-  try {
-    await prepareBundledNodeExecutable(running);
-    return running;
-  } catch (error) {
-    await stopMuon(running, undefined);
-    throw error;
-  }
-};
 
 export const startDebugMuonLauncher = async (
   pluginNames: string[],
@@ -4435,7 +4266,6 @@ export const withMuonEnvironment = async (
     true,
     shouldUseValgrind,
     {},
-    undefined,
     undefined,
     [],
     windowsRemoteKillTreeOnRelease,

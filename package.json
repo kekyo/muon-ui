@@ -27,7 +27,6 @@
     "sdk",
     "core/android",
     "core/android-test",
-    "core/android-poc",
     "builder",
     "node",
     "ui",

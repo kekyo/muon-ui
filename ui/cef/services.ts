@@ -93,7 +93,7 @@ export const stageMuonDesktopServices = async (
           "runtimes/node/bin/" +
             (target.startsWith("windows-") ? "node.exe" : "node"),
         ),
-        bridge: runtimeFile("plugins/node-bridge.mjs"),
+        bridge: runtimeFile("node-service-bridge.mjs"),
         autostart: definition.autostart,
         config: definition.config,
         ...(definition.io ? { io: definition.io } : {}),

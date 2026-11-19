@@ -33,14 +33,11 @@ import {
   resolveMuonRuntimePath,
 } from "./vite-internals.js";
 import {
-  assertMuonNodeHostArtifacts,
   assertMuonNodeProjectAssetSourceIsSafe,
   assertMuonNodeProjectStagingIsSafe,
   assertMuonNodeProjectViteBuildIsSafe,
   createMuonNodeRuntimeRequirement,
-  resolveMuonNodeProject,
   resolveMuonNodeServiceProjects,
-  stageMuonNodeProject,
 } from "./node-project.ts";
 import {
   flattenVitePluginOptions,
@@ -91,9 +88,6 @@ interface MuonDevOverrideConfig {
   serviceHost: MuonDevelopmentServiceConfig["serviceHost"];
   asset?: {
     sourcePath: string;
-  };
-  node?: {
-    project: string;
   };
   cdp?: {
     enable: true;
@@ -427,25 +421,16 @@ const prepareViteRunAssets = async (
     project.root,
     effectiveConfigPath,
   );
-  const nodeProject = await resolveMuonNodeProject(
+
+  if (project.viteOutputDirectory === undefined) {
+    throw new Error("Vite output directory could not be resolved.");
+  }
+  const nodeProjects = await resolveMuonNodeServiceProjects(
     projectConfig.config,
     projectConfig.configPath === undefined
       ? project.root
       : dirname(projectConfig.configPath),
   );
-
-  if (project.viteOutputDirectory === undefined) {
-    throw new Error("Vite output directory could not be resolved.");
-  }
-  const nodeProjects = [
-    ...(nodeProject === undefined ? [] : [nodeProject]),
-    ...(await resolveMuonNodeServiceProjects(
-      projectConfig.config,
-      projectConfig.configPath === undefined
-        ? project.root
-        : dirname(projectConfig.configPath),
-    )),
-  ];
   await assertMuonNodeProjectViteBuildIsSafe(
     nodeProjects,
     project.viteOutputDirectory,
@@ -644,7 +629,6 @@ const createMuonDevOverrideConfig = (
   allowInsecureLocalhost: boolean | undefined,
   browserStartPage: string | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig | undefined,
-  nodeProjectPath: string | undefined,
   serviceConfig: MuonDevelopmentServiceConfig,
 ): MuonDevOverrideConfig => {
   const browser =
@@ -671,13 +655,6 @@ const createMuonDevOverrideConfig = (
       : {
           asset: {
             sourcePath: assetSourcePath,
-          },
-        }),
-    ...(nodeProjectPath === undefined
-      ? {}
-      : {
-          node: {
-            project: nodeProjectPath,
           },
         }),
     ...(enableDebugger
@@ -803,12 +780,6 @@ const runMuonDevOnce = async (
     [target],
     { root, environment },
   );
-  const nodeProject = await resolveMuonNodeProject(
-    projectConfig.config,
-    projectConfig.configPath === undefined
-      ? root
-      : dirname(projectConfig.configPath),
-  );
   const asset =
     preparedViteAssets === undefined
       ? await resolveAssetSource(root, options.assetSourcePath, projectConfig)
@@ -823,12 +794,9 @@ const runMuonDevOnce = async (
       : undefined;
   const overrideConfigPath = join(root, ".muon", "run", "muon.run.json");
 
-  const nodeProjects = [
-    ...(nodeProject === undefined ? [] : [nodeProject]),
-    ...services.flatMap((service) =>
-      service.runtime === "node" ? [service.project] : [],
-    ),
-  ];
+  const nodeProjects = services.flatMap((service) =>
+    service.runtime === "node" ? [service.project] : [],
+  );
   await assertMuonNodeProjectStagingIsSafe(nodeProjects, stagePath);
   await assertMuonNodeProjectAssetSourceIsSafe(
     nodeProjects,
@@ -842,10 +810,7 @@ const runMuonDevOnce = async (
     stageDir: stagePath,
     target,
     cacheDir: environment.MUON_CACHE_DIR,
-    nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(
-      nodeProjects,
-      true,
-    ),
+    nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(nodeProjects),
     force: false,
     quiet: options.quietPrepare === true,
     prepareExecutablePath: undefined,
@@ -855,12 +820,8 @@ const runMuonDevOnce = async (
   if (preparedRuntime.stagePath === undefined) {
     throw new Error("muon-builder did not return a staged runtime path.");
   }
-  const nodeProjectPath = await stageMuonNodeProject(
-    nodeProject,
-    preparedRuntime.stagePath,
-  );
   if (nodeProjects.length > 0) {
-    await assertMuonNodeHostArtifacts(preparedRuntime.stagePath, platform);
+    await access(join(preparedRuntime.stagePath, "node-service-bridge.mjs"));
   }
   session.services ??= await startMuonDevelopmentServices(
     root,
@@ -879,7 +840,6 @@ const runMuonDevOnce = async (
       allowInsecureLocalhost,
       browserStartPage,
       preparedViteAssets?.runtimePluginConfig,
-      nodeProjectPath,
       session.services.config,
     ),
   );

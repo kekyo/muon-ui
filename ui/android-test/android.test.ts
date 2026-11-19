@@ -402,7 +402,6 @@ describe("public Android builds", () => {
   it.each([
     [{ android: { fcm: true } }, /FCM.*unavailable/i],
     [{ android: { quickjs: true } }, /QuickJS.*unavailable/i],
-    [{ node: { project: "server" } }, /node.project.*unavailable/],
     [{ android: { applicationId: "invalid-id" } }, /applicationId/],
     [{ android: { versionCode: 0 } }, /versionCode/],
     [{ android: { abis: ["armeabi-v7a"] } }, /abis/],

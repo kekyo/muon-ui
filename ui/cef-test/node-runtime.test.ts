@@ -54,7 +54,6 @@ const createNodeProject = async (
 ): Promise<{
   root: string;
   projectPath: string;
-  config: Readonly<Record<string, unknown>>;
 }> => {
   const root = await createTemporaryDirectory("muon-node-runtime-");
   const projectPath = join(root, "backend");
@@ -63,11 +62,6 @@ const createNodeProject = async (
   return {
     root,
     projectPath,
-    config: {
-      node: {
-        project: "./backend",
-      },
-    },
   };
 };
 
@@ -75,9 +69,11 @@ const resolveNodeRuntimeProject = async (
   packageJson: string,
 ): Promise<ResolvedNodeRuntimeProject> => {
   const fixture = await createNodeProject(packageJson);
-  const project = await resolveMuonNodeProject(fixture.config, fixture.root);
-  expect(project).toBeDefined();
-  return project as ResolvedNodeRuntimeProject;
+  const project = await resolveMuonNodeProject(
+    fixture.projectPath,
+    fixture.root,
+  );
+  return project;
 };
 
 afterEach(async () => {
@@ -87,7 +83,7 @@ afterEach(async () => {
 });
 
 describe("muon Node runtime requirement", () => {
-  it("selects one runtime satisfying the page and every service project", async () => {
+  it("selects one runtime satisfying every service project", async () => {
     const projects = await Promise.all(
       ["^22.12 || ^24", ">=24.3 <25", "^24.4"].map(
         async (node) =>
@@ -96,7 +92,7 @@ describe("muon Node runtime requirement", () => {
           ),
       ),
     );
-    const requirement = createMuonNodeRuntimeRequirement(projects, true)!;
+    const requirement = createMuonNodeRuntimeRequirement(projects)!;
     const accepts = (version: string) =>
       requirement.comparatorSets.some((set) =>
         new SemverRange(set.join(" ")).test(version),
@@ -119,7 +115,7 @@ describe("muon Node runtime requirement", () => {
     );
     let message = "";
     try {
-      createMuonNodeRuntimeRequirement(projects, true);
+      createMuonNodeRuntimeRequirement(projects);
     } catch (error) {
       message = String(error);
     }

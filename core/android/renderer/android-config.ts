@@ -193,8 +193,5 @@ export const validateMuonAndroidConfig = (
     throw new Error('muon.json cdp.enable must be false on Android');
   }
 
-  const node = requireOptionalSection(config, 'node', 'node');
-  rejectConfiguredValue(node ?? {}, 'project', 'node.project');
-
   return Object.freeze({ warnings: Object.freeze(warnings) });
 };

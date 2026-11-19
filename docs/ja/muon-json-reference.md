@@ -1,6 +1,6 @@
 # muon.jsonリファレンス
 
-Android固有の`android`節、共通設定の対応範囲、署名の指定は[Androidアプリのビルド・配布](./android.md)を参照してください。以下のCEF設定とNode.js sidecarはdesktop版を対象とします。
+`android`節、共通設定の対応範囲、署名の指定は[Androidアプリのビルド・配布](./android.md)を参照してください。CEFの設定はデスクトップ版に適用されます。
 
 `muon.json` は、muonの動作を決定し、いくつかの機能はこのファイルでのみ決定出来ます。
 特に、動作を許可するホワイトリストは、プログラマブルに変更出来ません。
@@ -94,8 +94,7 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 | `config`   | `readonly object` | `{}`             | rendererコードから参照できるアプリケーション用の文字列key-value設定です。 |
 | `notifications` | `object` | `{ "enabled": false }` | Android・CEF共通のローカル通知設定です。 |
 | `android` | `object` | なし | [Androidのビルド・表示設定](./android.md)です。 |
-| `node`     | `object`          | なし             | オプションのNode.js sidecarプロジェクトです。                        |
-| `services` | `object` | `{}` | UIから独立したnative・QuickJSサービスの一覧です。 |
+| `services` | `object` | `{}` | 画面とは独立して実行するサービスの一覧です。 |
 
 - `iconPath` は `.png` のみ受け付けます。相対パスは `muon.json` が置かれているディレクトリから解決されます。
 - `iconPath` はWindows PE/NSIS、Linux desktop、起動時タイトルバーアイコンの共通ソースです。
@@ -109,9 +108,10 @@ muon Viteプラグインから起動する場合 (`vite dev`) に設定ファイ
 
 | キー | 型 | 既定値・条件 | 内容 |
 | --- | --- | --- | --- |
-| `runtime` | `"native" \| "quickjs"` | 必須 | 実装方式。`node`は未対応です。 |
+| `runtime` | `"native" \| "quickjs" \| "node"` | 必須 | サービスの実行方式。`node`はデスクトップで利用できます。 |
 | `artifact` | `string` | nativeで必須 | SDKで生成したサービス成果物の`muon-plugin.json` |
-| `entry` | `string` | QuickJSで必須 | `defineService()`をdefault exportするJS/TSファイル |
+| `project` | `string` | Node.jsで必須 | サービスの`package.json`があるディレクトリ。相対パスの基準は`muon.json`です。 |
+| `entry` | `string` | QuickJS・Node.jsで必須 | `defineService()`をdefault exportするJS/TSファイル。Node.jsでは`project`からの相対パスです。 |
 | `autostart` | `boolean` | `false` | 利用者による上書きがない場合の常駐設定 |
 | `config` | `object` | `{}` | サービスへ渡す文字列のキーと値。NULは含められません。 |
 | `plugins` | `object` | QuickJSのみ | nativeプラグイン名ごとの`native`、`allow`、任意の`config` |
@@ -164,26 +164,6 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 
 通知からのアプリ起動には、OSの対応機能と配布先への登録も必要です。`enabled: true`だけでは起動対応を保証しません。[共通通知API](./muon-built-in-plugin-reference.md#共通通知api)、[通知の配布登録](./package-install-location-advanced-topics.md#通知の配布登録)
 
-
-## nodeキー
-
-`node.project`に通常のNode.jsプロジェクトのディレクトリを指定すると、out-of-process Node.js sidecarが有効になります。相対パスは、この値を定義した設定ファイルのディレクトリから解決され、絶対パスも指定できます。
-
-```json
-{
-  "node": {
-    "project": "./backend"
-  }
-}
-```
-
-`node`を指定する場合、`project`は空ではないstringでなければなりません。参照先は通常のNode.jsプロジェクトであり、`package.json`の`type`、`main`、`exports`、`imports`、`dependencies`、`engines.node`は通常のNode.jsと同じ形式で管理します。muon固有の追加設定をNodeプロジェクトの`package.json`へ記述する必要はありません。Node.js機能の有効化は`node.project`だけで決まり、`plugin.mode`や`plugin.plugins[]`の設定には依存しません。
-
-`engines.node`を指定した場合、muonはそのrangeとNode bridgeの互換rangeの積集合を正規化し、内部`launcher.nodeRuntime`として成果物へ埋め込みます。省略した場合はNode bridgeの互換rangeが使用され、その範囲に一致する最新のLTS releaseが選択されます。一致するLTSがなければ失敗し、非LTS releaseへはfallbackしません。指定した場合は、一致するLTS releaseの最大version、該当するLTSがなければ一致する全releaseの最大versionが選択されます。launcherはNode.js公式の`https://nodejs.org/dist/index.json`とversion別の`SHASUMS256.txt`を使用し、archiveをSHA-256で検証してから`runtimes/node/`へ準備します。
-
-`muon build`と`muon pack`は、Nodeプロジェクト、`node.so`または`node.dll`、`node-bridge.mjs`、正規化済みランタイム要件を収録しますが、Node.js実行ファイル、配布archive、download cacheは収録しません。ランタイム要件が実行必須となる場合、実行ファイルは開発時の起動準備、`muon run`、または配布物のlauncherによって準備されます。配置内容は`runtimes/node/LICENSE`と`runtimes/node/bin/node`（Windowsでは`node.exe`）だけであり、npmとCorepackは含まれません。Nodeプラグインはこの実行ファイルの絶対パスだけを使用し、環境変数や`PATH`へfallbackしません。
-
-既定のvalidate modeではViteの`muon:node` virtual moduleから`createNode()`をimportし、simple modeでは`window.muon.node.createNode()`を使用します。どちらも`createNode()`ごとに独立したNode sidecar processを起動します。Node相互運用APIに`plugin.plugins[].imports`やallow設定は不要であり、`plugin.plugins[]`で予約名`node`を直接指定することもできません。Node.js runtimeは両方のmodeで準備されます。開発、ビルド、配布、ランタイム選択、APIと値の制約については[Node.js sidecarを使用する](./nodejs-sidecar.md)を参照してください。
 
 ## browserキー
 
@@ -499,4 +479,4 @@ muonアプリ起動時に複数の設定ファイルを指定した場合、各�
 | `defaultVersionPolicy` | `string` | `"tested"` | `muon-launcher.ini` に `versionPolicy` が保存されていない場合に使うCEF version policyです。 |
 
 > 注釈: ここに挙げられていない `appId` は、 `muon build` または `muon pack` 時に自動的に計算・挿入されます。
-> `node.project`を指定した場合は、NodeプロジェクトとNode bridgeから生成された正規化済み要件も内部`nodeRuntime`として挿入されます。ユーザーが `launcher.nodeRuntime` を指定するとbuild errorになります。
+> Node.jsサービスを定義すると、muonは各サービスの`engines.node`とmuonの対応範囲から`launcher.nodeRuntime`を生成します。この値をユーザー設定に指定するとビルドエラーになります。

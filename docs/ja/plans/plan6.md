@@ -47,8 +47,7 @@ QuickJSは、利用者のJavaScriptコードをどのようにビルド・同梱
 - npm配布の入口は[ui/package.json](../../../ui/package.json)と[build_package.sh](../../../build_package.sh)を参照する。
 - Androidの固定設定と署名は[app/build.gradle.kts](../../../core/android-test/android/app/build.gradle.kts)、初期化処理は[prototype.ts](../../../core/android-test/src/test-host.ts)と[MuonActivity.java](../../../core/android-test/android/app/src/main/java/dev/muon/runtime/MuonActivity.java)を参照する。
 - リポジトリ依存は[build-native-dependencies.mjs](../../../core/android-test/scripts/build-native-dependencies.mjs)、[CMakeLists.txt](../../../core/android-test/android/app/src/main/cpp/CMakeLists.txt)、[generate-android-plugin-registry.mjs](../../../core/android-test/scripts/generate-android-plugin-registry.mjs)を参照する。
-- QuickJSの読み込みは[MuonJavaScriptRuntimeService.java](../../../core/android-poc/android/app/src/main/java/dev/muon/runtime/MuonJavaScriptRuntimeService.java)を参照する。
-- 検証方法は[試作README](../../../core/android-poc/README.md)、[試作package.json](../../../core/android-test/package.json)、[release検証スクリプト](../../../core/android-test/scripts/test-android-release-packages.mjs)を参照する。
+- 検証手順とテストホストの設定は[Androidテストホスト](../../../core/android-test/README.md)を参照する。
 
 生成済みAPK/AABが作業環境に存在していても、現在のブランチに対する成功結果とはみなさない。調査時に接続端末はなく、端末テストを再実行していない。旧計画に記録されたWindows E2Eの失敗やテスト件数も過去の情報であり、ステップ0で現在の結果を確認する。
 
@@ -181,39 +180,6 @@ FCMを追加する場合は明示的に有効化する。無効なアプリに�
 今回FCMを提供しない場合は、有効化を要求された時点で未対応と説明する。動作しないAPIを成功したように見せない。将来、制限付きで提供する場合は、受信できる条件と保証しない範囲を実装・テスト・文書で一致させる。
 
 永続inbox、再配送、ACK、バックグラウンド処理などの詳細は[plan5.md](./plan5.md)へ残す。これらを今回すべて実装する必要はない。
-
-## 8. QuickJSのJavaScriptデプロイメント方針
-
-### 8.1 今回確定する方針
-
-| 項目 | 方針 |
-| --- | --- |
-| 入力 | 利用者がバックエンドJavaScriptのエントリーポイントを指定する |
-| ビルド場所 | 開発PCまたはCI上で依存コードをまとめる |
-| 出力形式 | 初期対応は単一のESMソースとし、QuickJSが提供する組み込みモジュールは別扱いにする |
-| 配置 | WebView用アセットと区別し、APK/AABへ同梱する |
-| 更新単位 | Androidアプリの更新と同時にJavaScriptも更新する |
-| 識別情報 | アプリ用コードのハッシュと、必要なランタイム機能を記録する |
-| データ | 実行コードと永続データの保存先を分ける |
-| 初期対象 | 同梱できるESMと、明示した対応済み組み込みAPIを対象にする |
-
-固定の`backend.mjs`を利用者のアプリ用bundleへ置き換える方向とする。Muonが提供するランタイム初期化コードと、利用者が提供するアプリコードを分けて管理する。エントリーポイントと依存を開発PC上で解決し、Android端末上でnpmや任意のパッケージ探索を実行しない。
-
-初期対応ではJavaScriptの独立ダウンロード更新を扱わない。実行コードはインストールされたアプリのアセットから読む。将来、展開キャッシュを設ける場合は、コードのハッシュとランタイムの識別情報で区別し、更新前のコードを誤って再利用しない方式にする。アプリ更新で永続データを上書きしない。
-
-### 8.2 実装を後続へ回せる範囲
-
-利用者コードのbundle処理、コードの識別情報を記録するmanifestの生成、QuickJSへの接続、実機実行の完成は今回のマージ条件にしない。必要な入力、出力、配置、更新単位が本節の方針に沿って説明できればよい。
-
-公開API名と設定キーは正式提供前に確定する。試作の`muon.node.createNode()`が実際のNode.jsを返すとは説明せず、QuickJSであることと対応範囲を明示する。仮のAPIを使用可能な公開機能として掲載しない。
-
-CommonJS、動的な`require`、native addon、Node-API、任意のNode.js互換性を初期対応の前提にしない。dynamic import、JavaScript以外のアセット、source map、WASMの対応範囲は、同梱処理を実装する前に確定する。対応できない入力はビルド時に診断する。
-
-### 8.3 未提供時に維持する動作
-
-QuickJSを無効にした通常アプリは、QuickJSの初期化やサービス接続を待たずに起動する。試作用の`backend.mjs`や試験専用APIを利用者の成果物へ混入させない。無効な構成ではQuickJS固有のサービス、ネイティブライブラリ、アセット、権限を追加しない。
-
-有効化を要求されてもまだ使用できない場合は、ビルド時に未対応と診断する。試作コードとその回帰テストを保持することは、正式な公開機能として有効化することとは区別する。FCM受信のためにQuickJSを必須にしない。
 
 ## 9. テストとE2E
 
@@ -722,8 +688,6 @@ muonのarm64アプリ配布を、この修正のOTA普及待ちにする必要�
 更新情報、ディスク比較結果、移行前後の識別情報、画面、通知・復帰・RPCの結果、再起動後の検証、Androidテストと全体テストのログをartifacts/plan6-avd-updateへ保存した。一時AVD2個と作業用のディスクコピーは削除し、既存のPixel_6も検証後に停止した。AVD一覧は元と同じPixel_4とPixel_6である。今回の完了条件を照合し、修正済み公式イメージへの更新、16 KiBの維持、データ保持、muonの動作、Androidと全体テスト、後片付けが完了したことを確認した。
 
 #### CIのTCP受信順序に依存するテストの修正
-
-[CI実行37607932190](https://github.com/kekyo/muon-ui/actions/runs/37607932190/job/112747883581)では、Androidのinstrumentation 45件のうち、MuonJavaScriptRuntimeServiceTest.isolatesAndClosesTcpSocketsForEachRuntimeが失敗した。期待値one-1two-2に対し、実際の値はtwo-2one-1だった。45件は最後まで実行され、独立npm利用アプリの検証に進む前に停止した。
 
 このテストは、2つのQuickJS runtimeから別々のTCP接続で送った識別子を、サーバー側の2つの受信スレッドで文字列へ連結していた。先に送った接続の読み取りが先に完了する保証はなく、連結順を固定した検証が誤りだった。失敗した比較より前にある、片方のruntime終了後も他方の接続が開いていることと、両runtime終了後に両接続が閉じることの検証は通過していた。
 

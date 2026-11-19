@@ -334,10 +334,7 @@ export const resolveMuonServices = async (
           path: resolve(directory, text(value.project, `${label}.project`)),
           kind: "tree",
         });
-        const project = (await resolveMuonNodeProject(
-          { node: { project: text(value.project, `${label}.project`) } },
-          directory,
-        ))!;
+        const project = await resolveMuonNodeProject(value.project, directory);
         const build = await buildMuonNodeService(
           project,
           text(value.entry, `${label}.entry`),

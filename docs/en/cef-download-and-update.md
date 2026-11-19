@@ -5,8 +5,8 @@ When a vulnerability is found in CEF, the CEF binaries need to be updated.
 If a muon app directly included those binaries, updating CEF would require updating the entire muon app distribution.
 
 To reduce muon app distribution size and simplify CEF binary updates, muon downloads the required CEF binaries when the muon app starts and prepares the runtime environment.
-For an app that configures a Node.js project through `node.project`, the same preparation process also downloads the required Node.js runtime regardless of plugin mode.
-`muon build` and `muon pack` include the Node.js project, the muon Node bridge, and the runtime requirement in their output, but do not include the Node.js executable itself.
+For desktop apps that define [Node.js services](services.md), muon also prepares a Node.js runtime that satisfies the `engines.node` ranges in the service projects.
+`muon build` and `muon pack` include the service code, runtime dependencies, and Node.js version requirements. The launcher prepares the Node.js executable.
 
 When you run `npm run dev`, build `muon-core`, or distribute generated build output and an end user starts the muon app, required CEF binaries are automatically downloaded from the official CEF distribution site if they are not present locally.
 This takes some time, but downloaded CEF tarballs are cached locally, so later launches use the cache.
@@ -36,9 +36,9 @@ The cache directory contains catalogs, verification data, and downloaded archive
 
 Node.js release information comes from the official `https://nodejs.org/dist/index.json`.
 The selected archive is verified with the SHA-256 value in that release's `SHASUMS256.txt`.
-The Node.js version is selected from the intersection of the project's `package.json` `engines.node` range and the muon Node bridge compatibility range.
-When `engines.node` is omitted, muon selects the latest compatible LTS release. If none matches, preparation fails without falling back to a non-LTS release.
-When it is specified, muon prefers the greatest matching LTS version and otherwise selects the greatest matching version from all releases.
+For Node.js services, muon selects an official release for the target platform that satisfies every service’s `engines.node` range and the versions muon supports.
+If all services omit `engines.node`, muon selects the latest compatible LTS release. Preparation fails if no compatible LTS is available.
+If any service specifies `engines.node`, muon still prefers the latest compatible LTS. When none is available, it selects the latest compatible release.
 
 For `muon build` output and normal installer runtimes, the distributed `dist-muon/<target>` directory is treated as read-only source data.
 When an end user starts the application, `muon-launcher` stages the whole dist directory into `runtime/` under the user state directory before execution, extracts the CEF binaries and, when required, the Node.js runtime there, and then launches `muon-core`.

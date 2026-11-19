@@ -163,7 +163,7 @@ static cardio::promise<size_t> WriteMuonNodeTransport(
     throw std::runtime_error("Node IPC socket is unavailable");
   }
   for (;;) {
-    // A sidecar exit must become an IPC error, never a process-wide SIGPIPE.
+    // A service process exit must become an IPC error, never a process-wide SIGPIPE.
     const auto count =
         ::send(runtime->socket_fd, buffer.data(), buffer.size(), MSG_NOSIGNAL);
     if (count >= 0) {
@@ -351,7 +351,7 @@ static std::vector<wchar_t> CreateMuonNodeWindowsEnvironment(
   auto* environment = GetEnvironmentStringsW();
   if (environment == nullptr) {
     throw std::runtime_error(
-        "GetEnvironmentStringsW failed for Node sidecar");
+        "GetEnvironmentStringsW failed for Node service process");
   }
   auto environment_guard =
       std::unique_ptr<wchar_t, decltype(&FreeEnvironmentStringsW)>(
@@ -427,7 +427,7 @@ static HANDLE CreateMuonNodeInheritedStandardHandle(
   if (handle == INVALID_HANDLE_VALUE) {
     throw std::system_error(
         static_cast<int>(GetLastError()), std::system_category(),
-        "Failed to open NUL for the Node sidecar");
+        "Failed to open NUL for the Node service process");
   }
   return handle;
 }
@@ -456,7 +456,7 @@ static cardio::promise<void> ConnectMuonNodeWindowsPipe(
       if (error != ERROR_IO_PENDING) {
         throw std::system_error(
             static_cast<int>(error), std::system_category(),
-            "ConnectNamedPipe failed for Node sidecar");
+            "ConnectNamedPipe failed for Node service process");
       }
       pending = true;
       (void)co_await cardio::from_win32_overlapped(
@@ -478,7 +478,7 @@ static cardio::promise<void> ConnectMuonNodeWindowsPipe(
 }
 
 cardio::promise<void> StartMuonNodeProcess(
-    MuonNodeProcess* runtime, bool service, std::function<void()> spawned) {
+    MuonNodeProcess* runtime, std::function<void()> spawned) {
   const auto pipe_name =
       std::wstring(L"\\\\.\\pipe\\muon-node-") +
       std::to_wstring(GetCurrentProcessId()) + L"-" +
@@ -493,7 +493,7 @@ cardio::promise<void> StartMuonNodeProcess(
   if (runtime->pipe == INVALID_HANDLE_VALUE) {
     throw std::system_error(
         static_cast<int>(GetLastError()), std::system_category(),
-        "CreateNamedPipeW failed for Node sidecar");
+        "CreateNamedPipeW failed for Node service process");
   }
 
   const auto executable =
@@ -502,7 +502,6 @@ cardio::promise<void> StartMuonNodeProcess(
   auto command_line =
       QuoteMuonNodeWindowsArgument(executable) + L" " +
       QuoteMuonNodeWindowsArgument(bridge);
-  if (service) command_line += L" --service";
   std::vector<wchar_t> command_line_buffer(
       command_line.begin(), command_line.end());
   command_line_buffer.push_back(L'\0');
@@ -514,10 +513,10 @@ cardio::promise<void> StartMuonNodeProcess(
   try {
     inherited_standard_handles[0] =
         CreateMuonNodeInheritedStandardHandle(
-            STD_INPUT_HANDLE, GENERIC_READ, !service);
+            STD_INPUT_HANDLE, GENERIC_READ, false);
     inherited_standard_handles[1] =
         CreateMuonNodeInheritedStandardHandle(
-            service ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE, GENERIC_WRITE, true);
+            STD_ERROR_HANDLE, GENERIC_WRITE, true);
     inherited_standard_handles[2] =
         CreateMuonNodeInheritedStandardHandle(
             STD_ERROR_HANDLE, GENERIC_WRITE, true);
@@ -546,7 +545,7 @@ cardio::promise<void> StartMuonNodeProcess(
             launch_options, &runtime->process, &launch_error)) {
       const auto* message =
           launch_error.message == nullptr
-              ? "Failed to launch Node sidecar"
+              ? "Failed to launch Node service process"
               : launch_error.message;
       throw std::system_error(
           static_cast<int>(launch_error.windows_error),
@@ -574,7 +573,7 @@ cardio::promise<void> StartMuonNodeProcess(
           runtime->pipe, &pipe_client_process_id) == FALSE) {
     throw std::system_error(
         static_cast<int>(GetLastError()), std::system_category(),
-        "GetNamedPipeClientProcessId failed for Node sidecar");
+        "GetNamedPipeClientProcessId failed for Node service process");
   }
   if (runtime->process.process_id == 0 ||
       pipe_client_process_id != runtime->process.process_id) {
@@ -602,12 +601,12 @@ static std::vector<std::string> CreateMuonNodePosixEnvironment(
 }
 
 cardio::promise<void> StartMuonNodeProcess(
-    MuonNodeProcess* runtime, bool service, std::function<void()> spawned) {
+    MuonNodeProcess* runtime, std::function<void()> spawned) {
   int sockets[2] = {-1, -1};
   if (::socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets) != 0) {
     throw std::system_error(
         errno, std::generic_category(),
-        "socketpair failed for Node sidecar");
+        "socketpair failed for Node service process");
   }
   runtime->socket_fd = sockets[0];
   auto child_socket = sockets[1];
@@ -619,7 +618,7 @@ cardio::promise<void> StartMuonNodeProcess(
       runtime->socket_fd = -1;
       throw std::system_error(
           errno, std::generic_category(),
-          "Failed to reserve the Node sidecar descriptor");
+          "Failed to reserve the Node service process descriptor");
     }
     (void)::close(child_socket);
     child_socket = duplicated;
@@ -658,15 +657,15 @@ cardio::promise<void> StartMuonNodeProcess(
   }
   // The service host's stdin/stdout carry supervisor ownership and readiness.
   // Author reads must not consume that pipe, and logs belong on stderr.
-  if (service && action_error == 0)
+  if (action_error == 0)
     action_error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
-  if (service && action_error == 0)
+  if (action_error == 0)
     action_error = posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDOUT_FILENO);
   if (action_error != 0) {
     close_sockets();
     throw std::system_error(
         action_error, std::generic_category(),
-        "Failed to configure Node sidecar descriptors");
+        "Failed to configure Node service process descriptors");
   }
   const auto current_flags = fcntl(runtime->socket_fd, F_GETFL, 0);
   if (current_flags < 0 ||
@@ -681,7 +680,6 @@ cardio::promise<void> StartMuonNodeProcess(
   auto arguments_storage =
       std::vector<std::string>{runtime->executable_path,
                                runtime->bridge_path};
-  if (service) arguments_storage.push_back("--service");
   std::vector<char*> arguments;
   for (auto& argument : arguments_storage) {
     arguments.push_back(argument.data());
@@ -718,7 +716,7 @@ cardio::promise<void> StartMuonNodeProcess(
     CloseMuonNodeTransport(runtime);
     throw std::system_error(
         pidfd_error, std::generic_category(),
-        "pidfd_open failed for Node sidecar");
+        "pidfd_open failed for Node service process");
   }
   runtime->process_fd = process_fd;
 #else
@@ -727,7 +725,7 @@ cardio::promise<void> StartMuonNodeProcess(
   (void)::waitpid(process_id, &ignored_status, 0);
   CloseMuonNodeTransport(runtime);
   throw std::runtime_error(
-      "pidfd_open is required for the Node sidecar");
+      "pidfd_open is required for the Node service process");
 #endif
   runtime->process_id = process_id;
   runtime->process_started = true;
@@ -751,7 +749,7 @@ cardio::promise<MuonNodeProcessExit> WaitMuonNodeProcess(MuonNodeProcess* runtim
             runtime->process.process, &native_exit_code) == FALSE) {
       throw std::system_error(
           static_cast<int>(GetLastError()), std::system_category(),
-          "GetExitCodeProcess failed for Node sidecar");
+          "GetExitCodeProcess failed for Node service process");
     }
     exit_code = static_cast<int>(native_exit_code);
     exit_status_available = true;
@@ -779,7 +777,7 @@ cardio::promise<MuonNodeProcessExit> WaitMuonNodeProcess(MuonNodeProcess* runtim
       }
       throw std::system_error(
           wait_error, std::generic_category(),
-          "waitpid failed for Node sidecar");
+          "waitpid failed for Node service process");
     }
     if (exit_status_available && WIFEXITED(status)) {
       exit_code = WEXITSTATUS(status);

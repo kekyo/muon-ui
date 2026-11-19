@@ -24,7 +24,7 @@ android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 
 実行時の機能は`core/`、CLI・Vite連携・アプリのビルドと配布機能は`ui/`に置いています。それぞれの`common/`は共通処理、`cef/`と`android/`はバックエンド固有の処理です。テストは実装と同じ階層の`common-test/`、`cef-test/`、`android-test/`に置きます。
 
-`core/android-poc/`にはQuickJSの試作と固有テストがあります。周辺機能はネイティブビルド支援を`builder/`、Node.jsホストを`node/`に分けています。`ui/`の公開npmパッケージ名は`muon-ui`、`node/`は`muon-node`です。
+`builder/`にはネイティブのビルドツール、`node/`にはNode.jsサービスの実行に使うコードがあります。利用者向けnpmパッケージ`muon-ui`のソースは`ui/`にあります。
 
 ## ビルドとテスト
 
@@ -47,13 +47,6 @@ npm run dev
 ```bash
 ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-tester
 ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
-```
-
-QuickJSの試作は別のworkspaceで検証します。
-
-```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
 ```
 
 npm配布物だけを使う独立アプリの検証対象は、公開CLI/Vite、署名、保存、再起動、更新後のデータ保持です。端末上の専用テストアプリ`dev.muon.e2e.publicconsumer`は検証のために作り直します。

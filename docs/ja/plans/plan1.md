@@ -179,7 +179,7 @@ Android版ではネイティブプラグイン互換を求めず、
    メインフレーム、iframe、fetch、XHR、WebSocket、リダイレクト、Service Worker、`blob:`、ローカルネットワークをdeny-by-defaultで検証します。現行契約を満たせなければ、Android仕様を変更するかGeckoViewへ進みます。
 
 4. Android API対応表を定義する
-   reload、fullscreen、zoomなどは実装候補です。一方、minimize、maximize、title bar、window bounds、system tray、launcher updater、Node sidecar、executorはAndroidでは非対応または別APIにすべきです。[ブラウザー組み込み機能一覧](../../../core/cef/src/browser/muon_builtin_browser.h)
+   reload、fullscreen、zoomなどは実装候補です。一方、minimize、maximize、title bar、window bounds、system tray、launcher updater、executorはAndroidでは非対応または別APIにすべきです。[ブラウザー組み込み機能一覧](../../../core/cef/src/browser/muon_builtin_browser.h)
 
 5. ネイティブプラグインをNDK対応する
    まず`arm64-v8a`とエミュレーター用`x86_64`を対象にし、プラグインはビルド時同梱とします。cardioはAndroidメインスレッドの既存Looperへ自動接続し、tra-fficはAndroid向けlibffiと静的リンクします。詳細な事前検証、upstreamとの分担、完了条件は次節のとおりです。

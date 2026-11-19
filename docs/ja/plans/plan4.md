@@ -12,13 +12,12 @@
 
 1. Android WebView backend、Muon API、NDK plugin、APK/AABを正式な`android` targetとして製品化する。
 2. providerからnative層へ到達した通知を永続化し、実行可能になったページJSへ取りこぼさず配送する。
-3. 現在試作されているQuickJS runtime、または実際のNode.js runtimeを、誤解のない公開契約として採否、製品化する。
 
 Android coreと通知配送の正式化は、JavaScript runtimeの正式採用を待たずに進められる。初回通知機能ではQuickJSによるbackground handlerを保留し、WebViewがinactiveな間に開発者JSを実行しない。初回Android releaseへJavaScript runtimeを含めない場合は、該当APIと設定を明示的に非公開またはunsupportedとし、暗黙のfallbackを設けない。
 
 ## 2. plan3から更新した前提
 
-plan3作成後、現在のブランチでは実Node.jsではなくQuickJSを使う限定JavaScript runtimeが追加された。一方、公開targetと製品build/packは未着手のままである。
+公開targetと製品向けのbuild・packを実装する必要がある。
 
 | plan3の項目                   | 現在の状態                                          | plan4での扱い                                     |
 | ----------------------------- | --------------------------------------------------- | ------------------------------------------------- |
@@ -28,12 +27,9 @@ plan3作成後、現在のブランチでは実Node.jsではなくQuickJSを使�
 | APK/AABと両ABI                | 試作内では生成済み                                  | 成果を再利用し、公開packへ接続する                |
 | production署名                | 未実装                                              | P0として維持する                                  |
 | NDK plugin                    | 試作内で両ABI、VM、Pixel 6まで検証済み              | backendへ移植し、公開設定を追加する               |
-| Node.js実現可能性gate         | 現行ブランチでは実施せず、QuickJS案へ分岐           | runtime選択gateへ置き換える                       |
 | JavaScript project packaging  | 固定test moduleだけ                                 | 利用者projectのbuild-time packagingを新規実装する |
-| QuickJS runtime               | 限定module、network、resource limitまで試作済み     | API identityと互換範囲を決めてから製品化する      |
 | push通知                      | provider adapter、永続化、公開APIとも未実装         | native inboxとページconsumerをP0で新規実装する    |
 | QuickJS通知handler            | 未実装                                              | 初回通知scopeでは保留し、blocking gateにしない    |
-| 端末gate                      | 基礎runtimeは記録済み、現行QuickJS 44件は今回未実行 | refactor前後に現行HEADで再実行する                |
 | 文書整理                      | 履歴と現状が混在                                    | 公開前の必須作業とする                            |
 
 plan3が示した「最優先は正式target、build、pack、署名、配布物への接続」という結論は変えない。更新点は、Node.jsを単純な次工程とみなさず、すでに存在するQuickJS試作との関係を先に決めることと、通知配送をJavaScript runtimeから独立した初回製品scopeへ加えることである。
@@ -98,21 +94,6 @@ WebView自身の通常networkは包括的にinterceptせず、Android Manifest�
 - Muon RPCは完全一致する信頼済みasset originのmain frameからだけ受理する。
 - CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`がAndroidでは同じ保証を持たないことをvalidationと文書で示す。
 
-### 3.7 JavaScript runtime
-
-現行の`muon.node.createNode()`はQuickJSを返し、実Node.js互換ではない。この名前のまま正式公開しないことを推奨する。
-
-初回releaseでは、次のいずれかを公開契約として選ぶ。
-
-1. QuickJSをAndroid固有の限定runtimeとして、Node.jsを名乗らない新しいnamespaceと型で公開する。
-2. 限定Node.js互換runtimeとして、対応module、非対応機能、versioning、feature detectionを明示し、`createNode`という名前を維持する。
-3. QuickJSを初回releaseから除外し、実際のNode.jsを別途検証、統合するまでNode APIを非対応にする。
-
-推奨は1である。現在の実装を再利用しつつ、Node.js package、CommonJS、npm、native addon、V8などを期待させない契約にできる。後方互換性を考慮する公開release前では、試作API名を維持する理由はない。
-
-API名と設定keyは公開契約stepで確定する。仮に`muon.javascript.createRuntime()`と`javascript.project`を候補としても、仕様決定前に実装へ固定しない。実Node.jsを選ぶ場合は、後述の独立gateを先に通す。
-
-[plan3-2.md](./plan3-2.md)で保留したQuickJS対応は、通知のbackground handlerへ適用する。一般用途JavaScript runtimeとしての採否は3.7の独立gateとして維持し、通知配送とは結び付けない。QuickJSを一般用途runtimeとして採用した場合でも、初回通知機能ではinactive時のbackground JS実行を提供しない。background handlerは、native inboxからページJSへの配送が完成した後に、別の公開契約、resource制限、lifecycle gateを伴う後続課題として検討する。
 
 ### 3.8 push通知
 
@@ -508,122 +489,6 @@ provider-managed notification messageは、tap前にMuon inboxへ保存できず
 9. inactive時に開発者JSを実行せず、QuickJS Serviceが存在しない構成でも同じ配送契約を満たす。
 10. VMとPixel 6のnotification lifecycle gateおよびrepository全体テストがPASSする。
 
-## 10. 課題F: QuickJS runtimeの製品化
-
-この課題は、3.7の選択でQuickJSを一般用途runtimeとして正式対象にした場合だけ実施する。初回Android releaseから除外する場合は、該当API、Service、QuickJS、module asset、network permissionをartifactへ含めないことをtestする。採用する場合も課題Eの通知配送には使用せず、inactive時のpush background handlerは後続scopeとして保留する。
-
-### 10.1 公開identityとcapability
-
-- runtimeがQuickJSでありNode.jsではないことを型とruntime情報で取得できるようにする。
-- 対応moduleと機能flagをmachine-readableに返す。
-- Node.js versionを偽装しない。
-- moduleごとの対応export、option、limit、error codeをversioned contractにする。
-- 一覧外moduleはmodule-not-found、未対応optionは明瞭なerrorにする。
-- 現行`muon.node.createNode()`を変更する場合は、正式公開前にtestとcodeから旧名を除く。
-
-### 10.2 利用者JavaScript projectのpackage
-
-現在の固定`backend.mjs`を、利用者projectのbuild-time pipelineへ置き換える。
-
-- entry pointとdependencyを開発host上でbundleまたは収集する。
-- Android端末上でpackage managerを実行しない。
-- ESMと対応組み込みmoduleだけを初期対象にする。
-- dynamic import、asset、source map、WASMの対象範囲を決める。
-- CommonJS、`require`、native addon、Node-API、runtime package探索をbuild時に拒否する。
-- module graph、content hash、licenseをmanifest化する。
-- incompleteまたは古いassetをruntimeが再利用しない更新方式を定義する。
-- writable data、cache、temporary directoryをapp private storageへ分離する。
-
-### 10.3 filesystemとnetwork
-
-- filesystemは現在のprivate virtual rootを既定とする。
-- `content://`とshared storageをpathへ偽装しない。
-- Storage Access Frameworkが必要になった場合は別APIとpermission leaseを設計する。
-- network moduleを有効にした構成から`INTERNET`を導出する。
-- LANを許可する構成では`ACCESS_LOCAL_NETWORK`、実行時request、拒否後のerrorを統合testする。
-- HTTPS certificate検証を必須とし、検証無効化optionを追加しない。
-- server listenは初期版ではloopbackだけに制限する。
-- CEF版network policyがQuickJS codeへ適用されないことを公開文書へ明記する。
-
-### 10.4 lifecycleと障害処理
-
-次を状態遷移としてtestする。
-
-- cold start
-- 複数runtimeの独立性
-- renderer reload
-- Activity再生成
-- foregroundからbackgroundへの移行
-- Service bind切断
-- Service process killと再生成
-- app process kill後のcold start
-- runtime release中の未完了timer、DNS、socket、HTTP
-- app更新後のmodule asset切替
-- resource limit到達後の別runtime継続
-
-UI側とService側でgenerationを持ち、旧processの応答を新しいruntimeへ混入させない。Androidがprocessをkillした場合に正常shutdown callbackが必ず呼ばれる前提を置かない。
-
-### 10.5 security、resource、保守
-
-- QuickJS version、source URL、archive hash、build flag、licenseを固定する。
-- CVEとupstream releaseの追従期限を決める。
-- heap、stack、連続実行、runtime数、socket、listener、HTTP、body、乱数など現在の上限を公開contractへ含める。
-- timeoutとinterrupt後にServiceが再利用できることをtestする。
-- runtimeとmodule packageのlicense/NOTICEを成果物へ含める。
-- debug diagnosticへ利用者code、secret、certificate private keyを不用意に出力しない。
-
-### 10.6 QuickJS製品化の完了条件
-
-1. API名からNode.js完全互換と誤認しない公開契約になっている。
-2. クリーンな利用者ESM projectをAPK/AABへpackageし、VMとPixel 6で実行できる。
-3. 対応module、非対応module、option、limitが実装、test、文書で一致する。
-4. Activity、renderer、Service、OS kill、app updateのlifecycle testがPASSする。
-5. 異常JS、memory limit、network limit後にもServiceと他runtimeが継続する。
-6. QuickJSとmodule assetのversion、hash、license、security update手順がある。
-7. npm pack後のクリーン環境でも同じartifactを生成できる。
-8. 全体テストがPASSする。
-
-## 11. 課題G: 実Node.jsを選ぶ場合の独立gate
-
-実Node.jsが製品要件である場合は、QuickJSをNode.jsの代替とみなさず、plan3の実現可能性gateを独立して実施する。
-
-### 11.1 build gate
-
-実装時点で保守中かつmuon-nodeのversion要件を満たすNode.js版を選び、公式documentとsource内API commentを確認する。
-
-- `arm64-v8a`と`x86_64`向けlibnodeを再現可能にbuildする。
-- API Level 24のappから初期化する。
-- 4 KiBと16 KiB page、ELF alignment、W^X、JITを検証する。
-- source、patch、toolchain、configure flag、artifact hashを固定する。
-- Node.js、V8、OpenSSL、ICU、libuvのlicenseとsecurity更新方法を定義する。
-
-古い非保守版へmuon-nodeの要件を下げることを既定の回避策にしない。
-
-### 11.2 execution model
-
-初期候補は、exportしない別process Android Serviceにruntimeを置く方式とする。
-
-- UI processからcrashを分離する。
-- Binderはlifecycle制御に限定し、既存`node/1` protocolを運べるtransport境界を維持する。
-- singleton、同時1 runtime、複数runtime poolのどれを公開するか決める。
-- 複数`createNode`が同じglobalを暗黙共有しない。
-- Service kill、rebind、generation、pending request、shutdown timeoutをtestする。
-
-### 11.3 projectとAPI
-
-- pure JavaScript dependencyをbuild hostで収集しAPK/AABへ入れる。
-- device上でnpmを実行しない。
-- `fs`、timer、DNS、TCP、HTTP/HTTPS、WASMを初期対象として実機検証する。
-- `child_process`、worker、signal、inspector、native addonの対応可否を明示する。
-- native addonを初期対象外にする場合は`.node`をbuild時に拒否する。
-- private storage、`content://`、cache、temporary directoryの意味を定義する。
-
-### 11.4 採用判定
-
-採用する場合は、両ABI build、VMとPixel 6のruntime/RPC/lifecycle、project package、API対応表、license/security保守、公開CLIまでを完了条件にする。
-
-不採用の場合は、再現可能な失敗条件、検証環境、将来再検証する上流条件を記録し、AndroidのNode APIと`node.project`を明瞭に拒否する。
-
 ## 12. 課題H: APK/AAB、署名、配布物
 
 ### 12.1 artifact
@@ -779,7 +644,6 @@ icon、adaptive icon、splash、notification small iconなどのmaster画像を�
 
 - Windows Settings E2Eを確実な同期へ修正し、root testをGREENにする。
 - 現行QuickJS込みのVMとPixel 6 baselineを記録する。
-- 初回releaseへQuickJSまたは実Node.jsを含めるか決める。
 - `android` target、artifact、plugin、network、署名の契約を決める。
 - provider非依存push API、FCM標準経路、inbox、ACK、lifecycle、queue policyを決める。
 - 完了条件: 課題Aをすべて満たす。
@@ -813,14 +677,6 @@ icon、adaptive icon、splash、notification small iconなどのmaster画像を�
 - `consumeMessages()`のdocument generation handshake、lease、ACK、再配送を実装する。
 - cold/warm start、reload、kill、未登録、permission拒否、queue上限をVMとPixel 6で検証する。
 - 完了条件: 課題Eをすべて満たす。
-
-### ステップ5: JavaScript runtimeを接続する
-
-- QuickJSを採用した場合は課題Fを実施する。
-- 実Node.jsを選んだ場合は、先に課題Gの独立gateを完了する。
-- 初回releaseから除外した場合は、runtimeがartifactとAPIへ混入しないtestを追加する。
-- いずれを選んでも、初回scopeではpush messageをinactive時のruntimeへ配送しない。
-- 完了条件: 選択した公開scopeと実装、test、文書が一致する。
 
 ### ステップ6: pack、署名、npm配布物を実装する
 
@@ -858,7 +714,6 @@ icon、adaptive icon、splash、notification small iconなどのmaster画像を�
 | P0     | VM、Pixel 6、全体回帰                    | 正式support判定のため                               |
 | P0     | 利用者向け制約文書                       | network、通知、permission、runtimeの誤解を防ぐため  |
 | P1     | QuickJS製品化                            | 初回scopeに含める場合はP0へ昇格する                 |
-| P1     | 実Node.js gate                           | 実Node.jsが製品要件の場合はP0へ昇格する             |
 | P2     | `content://`、picker、Android固有API     | 具体的な利用者要件ごとに追加するため                |
 | P2     | push background JS handler               | native inboxからページへの配送完成後に検討するため  |
 | P2     | 16 KiB arm64 runtime追加環境             | 成果物整列は必須、runtimeは環境確保後に追加するため |

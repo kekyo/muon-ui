@@ -33,9 +33,9 @@ The default is 7 days (`604800`), and specifying `0` disables interval-based aut
 If a refresh fails while an existing catalog remains available, the existing catalog is used as a fallback.
 
 For CEF, an artifact is selected from the official CEF catalog according to the policy.
-For Node.js, muon considers releases in the official `https://nodejs.org/dist/index.json` that provide a file for the target platform and satisfy both the project's `package.json` `engines.node` range and the muon Node bridge compatibility range.
-When `engines.node` is omitted, muon uses the latest compatible LTS release. If none matches, preparation fails without falling back to a non-LTS release.
-When it is specified, muon prefers the greatest matching LTS version and otherwise uses the greatest matching version from all releases.
+For Node.js services, muon selects an official release for the target platform that satisfies every service’s `engines.node` range and the versions muon supports. See the [official Node.js release index](https://nodejs.org/dist/index.json).
+If all services omit `engines.node`, muon selects the latest compatible LTS release. Preparation fails if no compatible LTS is available.
+If any service specifies `engines.node`, muon still prefers the latest compatible LTS. When none is available, it selects the latest compatible release.
 
 The cache layout is:
 

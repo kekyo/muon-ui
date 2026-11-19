@@ -39,7 +39,6 @@ describe('muon Android configuration', () => {
           localAccess: { allowInsecureLocalhost: false },
         },
         cdp: { enable: false },
-        node: {},
       })
     ).toEqual({
       warnings: [
@@ -114,11 +113,6 @@ describe('muon Android configuration', () => {
       name: 'CEF developer protocol',
       config: { cdp: { enable: true } },
       diagnostic: 'cdp.enable',
-    },
-    {
-      name: 'Node sidecar project',
-      config: { node: { project: 'node-project' } },
-      diagnostic: 'node.project',
     },
     {
       name: 'runtime plugin search path',

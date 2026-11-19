@@ -384,7 +384,7 @@ Copy the SDK's `examples/services/node-files.ts` and `node-greeting.txt` into th
 
 TS is compiled to ES modules, preserving relative directory structure and assets in the distribution. File access relative to `import.meta.url` is supported. Runtime npm dependencies and their transitive dependencies are also included, so install dependencies compatible with the target OS beforehand. Preparation fails if required packages are missing. Muon's build does not run `npm install` or package scripts.
 
-Muon prepares the Node.js executable. An application using only Node.js services does not need the page-level `node.project` setting. The runtime must satisfy the page project's `engines.node`, every service project's range, and Muon's supported range. Incompatible requirements fail preparation with the affected projects and ranges.
+Muon prepares a Node.js version that satisfies every service project’s `engines.node` range and the range supported by muon. If no version meets all requirements, the error identifies the conflicting projects and ranges.
 
 Normal shutdown waits for pending methods and callbacks to clean up and for the service's asynchronous `stop()` to finish. The example saves the last name in `context.dataDirectory`, provided to `start`. This directory stores persistent data for the service. Startup and shutdown each have a 10-second deadline. Deadline expiry, child-process crashes, and disconnection are reported as failures.
 

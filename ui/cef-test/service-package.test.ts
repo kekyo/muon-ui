@@ -116,8 +116,8 @@ it.each(["native", "source", "node"] as const)(
         await cp(process.execPath, join(original, "runtimes/node/bin/node"));
         await mkdir(join(original, "plugins"));
         await cp(
-          resolve("../node/dist/node-bridge.mjs"),
-          join(original, "plugins/node-bridge.mjs"),
+          resolve("../node/dist/node-service-bridge.mjs"),
+          join(original, "node-service-bridge.mjs"),
         );
       }
       const relocated = join(root, "relocated");

@@ -299,7 +299,7 @@ const createFakeTarEntryItems = async function* (
       date: fakeTarDate,
     };
     if (entry.kind === "directory") {
-      yield await createDirectoryItem(entry.path, "none", metadata);
+      yield await createDirectoryItem(entry.path, metadata);
     } else {
       yield await createFileItem(entry.path, entry.content, metadata);
     }
@@ -309,14 +309,12 @@ const createFakeTarEntryItems = async function* (
 const collectTarPacker = async (
   entries: readonly FakeTarEntry[],
 ): Promise<Buffer> => {
-  const chunks: Buffer[] = [];
+  const chunks: Uint8Array[] = [];
   for await (const chunk of createTarPacker(
     createFakeTarEntryItems(entries),
     "none",
   )) {
-    chunks.push(
-      Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array),
-    );
+    chunks.push(chunk);
   }
   return Buffer.concat(chunks);
 };

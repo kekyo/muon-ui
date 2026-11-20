@@ -88,6 +88,7 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
           "funcity",
           "sharp",
           "tar-vern",
+          "tar-vern/node",
           "vite",
         ],
         output: {

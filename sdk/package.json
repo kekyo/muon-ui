@@ -3,7 +3,6 @@
   "version": "0.0.1",
   "description": "Native C and C++ plugin development kit for muon-ui",
   "type": "module",
-  "license": "MIT",
   "bin": {
     "muon-plugin": "./dist/cli.mjs"
   },
@@ -61,7 +60,7 @@
   },
   "dependencies": {
     "commander": ">=14.0.0",
-    "funcity": "^1.5.0"
+    "funcity": ">=1.5.0"
   },
   "devDependencies": {
     "@types/node": ">=24.0.0",
@@ -73,11 +72,5 @@
     "vitest": ">=4.0.0",
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@playwright/mcp": "^0.0.83"
-  },
-  "author": "Kouji Matsui (@kekyo@mi.kekyo.net)",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/kekyo/muon-ui.git",
-    "directory": "sdk"
   }
 }

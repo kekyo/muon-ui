@@ -3,7 +3,7 @@
   "serviceAbi": 3,
   "ndkVersion": "29.0.14206865",
   "androidApi": 24,
-  "cardioHeaderSha256": "9c479b0487588cee284dc0f525916008e2277132a81052a9a7291212ee202af4",
+  "cardioHeaderSha256": "0c4fb4e7a7593d72aae248b32dd05eaa4d535f3b2bb3d01d60ded7e728c27fa4",
   "cardioDefinitions": {
     "linux": [
       "CARDIO_SHARED_LIB=1",

@@ -109,8 +109,14 @@ beforeAll(async () => {
     win32.join(native, "muon.png"),
     await readFile(resolve("../../images/muon-256.png")),
   );
-  for (const name of ["store", "service", "maintenance", "windows_driver"]) {
-    const executable = `muon_notification_${name}${name === "windows_driver" ? "" : "_test"}.exe`;
+  for (const name of [
+    "store_test",
+    "service_test",
+    "maintenance_test",
+    "windows_driver",
+    "windows_observer",
+  ]) {
+    const executable = `muon_notification_${name}.exe`;
     await agent.files.writeFile(
       win32.join(native, executable),
       await readFile(
@@ -188,6 +194,30 @@ describeWindowsE2e(suiteName, () => {
       }
     },
   );
+
+  it("returns the notification center state without standard output", async () => {
+    if (agent === undefined) throw new Error("Windows agent is unavailable");
+    const observer = win32.join(
+      root,
+      "native",
+      "muon_notification_windows_observer.exe",
+    );
+    const resultPath = win32.join(root, `center-${randomUUID()}.json`);
+    const command = await agent.processes.launchManaged({
+      path: observer,
+      arguments: ["center", "", "", "", resultPath],
+      captureStderr: true,
+      createNoWindow: true,
+    });
+    try {
+      const result = await command.waitForExit({ timeoutMs: 35000 });
+      expect(result.root.exitCode, await command.stderrText()).toBe(0);
+      const response = await agent.files.readFile(resultPath);
+      expect(typeof JSON.parse(response.toString("utf8"))).toBe("boolean");
+    } finally {
+      await command.releaseAsync();
+    }
+  });
 
   it.each(["simple", "validate"] as const)(
     "delivers OS interactions and preserves pending events in %s mode",

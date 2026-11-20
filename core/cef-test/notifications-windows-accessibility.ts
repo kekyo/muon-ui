@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -132,22 +133,24 @@ export const createWindowsNotificationDriver = async (
   const target = resolveWindowsRuntimeTarget(
     process.env.MUON_E2E_WINDOWS_TARGET,
   );
-  const observer = win32.join(
+  const observerDirectory = win32.join(
     environment.workDir,
     "notifications",
     target.target,
-    `observer-${process.pid}`,
+    `observer-${randomUUID()}`,
+  );
+  const observer = win32.join(
+    observerDirectory,
     "muon_notification_windows_observer.exe",
   );
   const execute = async (
     path: string,
     args: string[],
     timeoutMs: number,
-  ): Promise<string> => {
+  ): Promise<void> => {
     const process = await agent.processes.launchManaged({
       path,
       arguments: args,
-      captureStdout: true,
       captureStderr: true,
       createNoWindow: true,
     });
@@ -155,7 +158,6 @@ export const createWindowsNotificationDriver = async (
       const result = await process.waitForExit({ timeoutMs });
       if (result.root.exitCode !== 0)
         throw new Error(`${path}: ${await process.stderrText()}`);
-      return (await process.stdoutText()).trim();
     } catch (error) {
       const [snapshot] = await Promise.allSettled([process.snapshot()]);
       console.error(
@@ -167,7 +169,7 @@ export const createWindowsNotificationDriver = async (
       await process.releaseAsync();
     }
   };
-  const powershell = async (script: string): Promise<string> =>
+  const powershell = async (script: string): Promise<void> =>
     await execute(
       "powershell.exe",
       [
@@ -181,16 +183,38 @@ export const createWindowsNotificationDriver = async (
       ],
       30000,
     );
+  const observe = async (
+    operation: string,
+    title: string,
+    action: string,
+  ): Promise<string> => {
+    // Each invocation publishes its own reply before exiting, including actions
+    // that must only be performed once.
+    const resultPath = win32.join(observerDirectory, `${randomUUID()}.json`);
+    try {
+      await execute(
+        observer,
+        [operation, title, displayName, action, resultPath],
+        35000,
+      );
+      return (await agent.files.readFile(resultPath)).toString("utf8");
+    } catch (error) {
+      throw new Error(
+        `Windows notification ${operation}: ${title}; action=${action || "<default>"}`,
+        { cause: error },
+      );
+    }
+  };
   const setting = async (desired: boolean | undefined): Promise<boolean> => {
     await agent.applications.launch({
       path: "explorer.exe",
       arguments: ["ms-settings:notifications"],
     });
     await agent.waitForWindow({ title: "Settings" }, { timeoutMs: 10000 });
-    const result = await execute(
-      observer,
-      ["setting", "", "", desired === undefined ? "" : desired ? "1" : "0"],
-      35000,
+    const result = await observe(
+      "setting",
+      "",
+      desired === undefined ? "" : desired ? "1" : "0",
     );
     if (result !== "0" && result !== "1")
       throw new Error(`Unknown notification switch: ${result}`);
@@ -199,24 +223,6 @@ export const createWindowsNotificationDriver = async (
   let initial: boolean | undefined;
   let closed = false;
   let openedCenter = false;
-  const observe = async (
-    operation: string,
-    title: string,
-    action: string,
-  ): Promise<string> => {
-    try {
-      return await execute(
-        observer,
-        [operation, title, displayName, action],
-        35000,
-      );
-    } catch (error) {
-      throw new Error(
-        `Windows notification ${operation}: ${title}; action=${action || "<default>"}`,
-        { cause: error },
-      );
-    }
-  };
   const center = async (): Promise<void> => {
     if ((await observe("center", "", "")) === "false") {
       await agent.keyboard.press("n", { modifiers: ["Meta"] });
@@ -250,15 +256,15 @@ try{$key=$root.OpenSubKey('Software\\Classes\\AppUserModelId',$true);if($null -n
       try {
         if (initial !== undefined) await setting(initial);
       } finally {
-        if (await agent.files.exists(win32.dirname(observer)))
-          await agent.files.remove(win32.dirname(observer), {
+        if (await agent.files.exists(observerDirectory))
+          await agent.files.remove(observerDirectory, {
             recursive: true,
           });
       }
     }
   };
   try {
-    await agent.files.mkdir(win32.dirname(observer), { recursive: true });
+    await agent.files.mkdir(observerDirectory, { recursive: true });
     await agent.files.writeFile(
       observer,
       await readFile(
@@ -271,13 +277,14 @@ try{$key=$root.OpenSubKey('Software\\Classes\\AppUserModelId',$true);if($null -n
       ),
     );
     for (const name of [
+      "libcardio.dll",
       "libstdc++-6.dll",
       target.target === "windows-amd64"
         ? "libgcc_s_seh-1.dll"
         : "libgcc_s_dw2-1.dll",
     ]) {
       await agent.files.writeFile(
-        win32.join(win32.dirname(observer), name),
+        win32.join(observerDirectory, name),
         await readFile(
           resolve(
             fileURLToPath(new URL("../../", import.meta.url)),

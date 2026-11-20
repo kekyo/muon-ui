@@ -5,7 +5,7 @@
 
 import prettierMax from "prettier-max";
 import screwUp from "screw-up";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 import type { UserConfig } from "vite";
 import { buildMuonNotificationRenderer } from "../common/build-notification-renderer.mjs";
 import { buildMuonServerRenderer } from "../cef/build-server-renderer.ts";
@@ -16,6 +16,10 @@ const isValgrindRun = process.env.MUON_TEST_USE_VALGRIND === "1";
 // Local launcher startup may legitimately use its 120-second runtime staging
 // timeout. Keep the enclosing test alive long enough to finish cleanup.
 const testTimeout = isValgrindRun ? 600000 : 180000;
+const linuxServiceHostTests = [
+  "service-{bootstrap,host,native-plugins,node,policy,rpc}.test.ts",
+  "services-linux.test.ts",
+];
 
 export default defineConfig(async (): Promise<UserConfig> => ({
   define: {
@@ -55,5 +59,22 @@ export default defineConfig(async (): Promise<UserConfig> => ({
     restoreMocks: true,
     hookTimeout: testTimeout,
     testTimeout,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "cef",
+          exclude: [...configDefaults.exclude, ...linuxServiceHostTests],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "linux-service-host",
+          include: linuxServiceHostTests,
+          globalSetup: "./linux-service-host-setup.ts",
+        },
+      },
+    ],
   },
 }));

@@ -7,7 +7,6 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import {
   access,
-  mkdir,
   mkdtemp,
   readFile,
   rename,
@@ -19,24 +18,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import { beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   createMuonServicesApi,
   type MuonServiceState,
 } from "../common/renderer/services.ts";
 
 const execute = promisify(execFile);
-beforeAll(async () => {
-  await mkdir("../service-host/.build", { recursive: true });
-  await execute("flock", [
-    "../service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../service-host",
-    "all",
-    "test",
-  ]);
-});
 
 it("persists independent autostart overrides through host death while observers own no references", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muon-service-policy-"));

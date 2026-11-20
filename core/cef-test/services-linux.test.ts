@@ -60,14 +60,6 @@ beforeAll(async () => {
     resolve("../common-test/services/quickjs-native-service.ts"),
     ["fixture:api"],
   );
-  await mkdir("../service-host/.build", { recursive: true });
-  await execute("flock", [
-    "../service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../service-host",
-    "all",
-  ]);
 });
 
 it.each(["simple", "validate"] as const)(

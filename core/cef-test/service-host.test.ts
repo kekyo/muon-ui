@@ -6,29 +6,17 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import { afterEach, beforeAll, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 
 const execute = promisify(execFile);
 const children: ChildProcess[] = [];
 const directories: string[] = [];
-
-beforeAll(async () => {
-  await mkdir("../service-host/.build", { recursive: true });
-  await execute("flock", [
-    "../service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../service-host",
-    "all",
-    "test",
-  ]);
-});
 
 afterEach(async () => {
   for (const child of children.splice(0)) {

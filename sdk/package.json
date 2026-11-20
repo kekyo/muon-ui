@@ -64,6 +64,7 @@
   },
   "devDependencies": {
     "@types/node": ">=24.0.0",
+    "base64-js": "^1.5.1",
     "prettier-max": ">=1.16.0",
     "resolved-killer": ">=1.1.0",
     "screw-up": ">=1.35.0",

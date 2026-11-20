@@ -490,10 +490,7 @@ try {
     );
     // Notification Center can close while the maintenance launcher runs.
     // Read the application's Windows history on each side of the command.
-    const history = `[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]::History.GetHistory(${quote(appId)})`;
-    await powershell(
-      `if (@(${history}).Count -eq 0) { throw 'The posted notification is missing from Windows history.' }`,
-    );
+    expect(await driver.getHistoryTitles()).toContain(clearTitle);
     const maintenance = await agent.processes.launchManaged({
       path: launcher,
       arguments: ["--muon-notification-clear-history"],
@@ -509,9 +506,7 @@ try {
     } finally {
       await maintenance.releaseAsync();
     }
-    await powershell(
-      `if (@(${history}).Count -ne 0) { throw 'The launcher left notifications in Windows history.' }`,
-    );
+    expect(await driver.getHistoryTitles()).toEqual([]);
     expect(
       await evaluate("return await notificationApi.getPendingEvents();"),
     ).toEqual([pending]);

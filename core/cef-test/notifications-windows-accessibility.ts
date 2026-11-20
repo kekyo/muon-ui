@@ -30,9 +30,13 @@ export interface WindowsNotificationDriver {
     actionTitle: string | null,
     screenshotPath: string,
   ): Promise<void>;
-  /** Observes absence in an open notification center.
+  /** Reads the titles currently stored by Windows for this application.
+   * @returns One title per notification in the application's history.
+   */
+  getHistoryTitles(): Promise<string[]>;
+  /** Checks removal after the application completes cancellation or replacement.
    * @param title Exact test notification title.
-   * @returns When the notification is absent from the visible center.
+   * @returns When the notification is absent from history and the visible UI.
    */
   waitForRemoval(title: string): Promise<void>;
   /** Changes the OS notification switch through the Settings UI.
@@ -183,6 +187,22 @@ export const createWindowsNotificationDriver = async (
       ],
       30000,
     );
+  const getHistoryTitles = async (): Promise<string[]> => {
+    const path = win32.join(observerDirectory, `${randomUUID()}.json`);
+    await powershell(`
+$history = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]::History.GetHistory(${psLiteral(appId)})
+$titles = @(foreach ($toast in $history) {
+  $document = [xml]($toast.Content.GetXml())
+  $title = $document.SelectSingleNode('/toast/visual/binding/text[1]')
+  if ($null -eq $title) { throw 'Windows notification history entry has no title.' }
+  $title.InnerText
+})
+[IO.File]::WriteAllText(${psLiteral(path)}, (ConvertTo-Json -InputObject $titles -Compress))
+`);
+    return JSON.parse(
+      (await agent.files.readFile(path)).toString("utf8"),
+    ) as string[];
+  };
   const observe = async (
     operation: string,
     title: string,
@@ -305,8 +325,12 @@ try{$key=$root.OpenSubKey('Software\\Classes\\AppUserModelId',$true);if($null -n
       await capture(title, action ?? "", path);
       await observe("activate", title, action ?? "");
     },
+    getHistoryTitles,
     waitForRemoval: async (title) => {
-      await center();
+      if ((await getHistoryTitles()).includes(title))
+        throw new Error(
+          `Notification still in Windows notification history: ${title}`,
+        );
       await observe("removed", title, "");
     },
     setEnabled: async (enabled) => {

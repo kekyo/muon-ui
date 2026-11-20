@@ -229,49 +229,53 @@ static int Observe(const std::wstring& operation, const std::wstring& title,
       }
       auto center = operation == L"setting" ? ComPointer<IUIAutomationElement>{}
           : Center(automation.value, root.value);
-      if (center.value) {
-        RECT bounds{};
-        auto notification = Notification(automation.value, center.value, title, app_name, bounds);
-        if (operation == L"removed" && !notification.value) {
-          WriteObservation(result_path, "null");
-          break;
-        }
-        if (notification.value && operation != L"removed") {
-          auto target = ComPointer<IUIAutomationElement>{};
-          if (action.empty()) {
-            notification.value->AddRef();
-            target.value = notification.value;
-          } else {
-            target = FindProperty(automation.value, notification.value,
-                UIA_NamePropertyId, action, TreeScope_Descendants);
-            if (!target.value && !expanded) {
-              const auto expand = FindProperty(automation.value, notification.value,
-                  UIA_AutomationIdPropertyId, L"ExpandButton", TreeScope_Descendants);
-              if (!expand.value) throw std::runtime_error("Dedicated notification expand control is absent");
-              Invoke(expand.value);
-              expanded = true;
-              continue;
-            }
+      RECT bounds{};
+      auto notification = center.value ? Notification(automation.value, center.value, title, app_name, bounds)
+          : ComPointer<IUIAutomationElement>{};
+      // The caller already verified removal from WinRT history. A closed
+      // panel has no visible notification to wait for.
+      if (operation == L"removed" && !notification.value) {
+        WriteObservation(result_path, "null");
+        break;
+      }
+      if (notification.value && operation != L"removed") {
+        auto target = ComPointer<IUIAutomationElement>{};
+        if (action.empty()) {
+          notification.value->AddRef();
+          target.value = notification.value;
+        } else {
+          target = FindProperty(automation.value, notification.value,
+              UIA_NamePropertyId, action, TreeScope_Descendants);
+          if (!target.value && !expanded) {
+            const auto expand = FindProperty(automation.value, notification.value,
+                UIA_AutomationIdPropertyId, L"ExpandButton", TreeScope_Descendants);
+            if (!expand.value) throw std::runtime_error("Dedicated notification expand control is absent");
+            Invoke(expand.value);
+            expanded = true;
+            continue;
           }
-          if (target.value) {
-            BOOL hidden = TRUE;
-            Check(target.value->get_CurrentIsOffscreen(&hidden), "Read notification visibility");
-            if (!hidden) {
-              if (operation == L"activate") Invoke(target.value);
-              std::ostringstream result;
-              result << "{\"x\":" << bounds.left << ",\"y\":" << bounds.top
-                  << ",\"width\":" << bounds.right - bounds.left << ",\"height\":"
-                  << bounds.bottom - bounds.top << "}";
-              WriteObservation(result_path, result.str());
-              break;
-            }
+        }
+        if (target.value) {
+          BOOL hidden = TRUE;
+          Check(target.value->get_CurrentIsOffscreen(&hidden), "Read notification visibility");
+          if (!hidden) {
+            if (operation == L"activate") Invoke(target.value);
+            std::ostringstream result;
+            result << "{\"x\":" << bounds.left << ",\"y\":" << bounds.top
+                << ",\"width\":" << bounds.right - bounds.left << ",\"height\":"
+                << bounds.bottom - bounds.top << "}";
+            WriteObservation(result_path, result.str());
+            break;
           }
         }
       }
       const auto now = GetTickCount64();
-      if (now >= deadline || WaitForSingleObject(changes.value->changed,
-          static_cast<DWORD>(deadline - now)) != WAIT_OBJECT_0)
+      if (now >= deadline)
         throw std::runtime_error("Notification UI did not reach the requested state");
+      // Read the current tree once more at the deadline, even when the shell
+      // did not deliver a final structure or property event.
+      if (WaitForSingleObject(changes.value->changed, static_cast<DWORD>(deadline - now)) == WAIT_FAILED)
+        throw std::runtime_error("Wait for notification UI change failed");
     }
     Check(automation.value->RemoveAllEventHandlers(), "Remove UIA events");
   } catch (...) {

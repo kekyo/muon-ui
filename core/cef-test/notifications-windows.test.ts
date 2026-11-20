@@ -519,6 +519,11 @@ describeWindowsE2e(suiteName, () => {
           async () => await evaluate("return globalThis.ready === true;"),
           { timeout: 30000, interval: 100 },
         );
+        // The popup can take focus away from Notification Center while the
+        // notification still belongs to this application's Windows history.
+        await expect(driver.waitForRemoval(popupTitle)).rejects.toThrow(
+          "still in Windows notification history",
+        );
         await evaluate(
           "await beginWatch(); await notificationApi.cancel('popup-cancel'); return true;",
         );

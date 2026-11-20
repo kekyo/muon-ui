@@ -19,9 +19,9 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { expect, it } from "vitest";
 import { createPluginProject, buildPlugin } from "muon-plugin-sdk";
-import { resolveMuonServices } from "../../ui/common/service-config.ts";
-import { stageMuonDesktopServices } from "../../ui/cef/services.ts";
-import { createMuonServicesApi } from "../common/renderer/services.ts";
+import { resolveMuonServices } from "../../../ui/common/service-config.ts";
+import { stageMuonDesktopServices } from "../../../ui/cef/services.ts";
+import { createMuonServicesApi } from "../../common/renderer/services.ts";
 
 it("calls an SDK-built native plugin from independent QuickJS services and reloads after the last release", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muon-service-ffi-"));

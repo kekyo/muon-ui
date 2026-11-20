@@ -16,16 +16,7 @@ const isValgrindRun = process.env.MUON_TEST_USE_VALGRIND === "1";
 // Local launcher startup may legitimately use its 120-second runtime staging
 // timeout. Keep the enclosing test alive long enough to finish cleanup.
 const testTimeout = isValgrindRun ? 600000 : 180000;
-const linuxServiceHostSuites = [
-  "service-bootstrap",
-  "service-host",
-  "service-native-plugins",
-  "service-node",
-  "service-policy",
-  "service-rpc",
-  "services-linux",
-].join("|");
-const testFileSuffix = ".{test,spec}.?(c|m)[jt]s?(x)";
+const testFile = "*.{test,spec}.?(c|m)[jt]s?(x)";
 
 export default defineConfig(async (): Promise<UserConfig> => ({
   define: {
@@ -70,15 +61,14 @@ export default defineConfig(async (): Promise<UserConfig> => ({
         extends: true,
         test: {
           name: "cef",
-          // Split by suite name so both projects inherit command-line exclusions.
-          include: [`**/!(${linuxServiceHostSuites})${testFileSuffix}`],
+          include: [testFile],
         },
       },
       {
         extends: true,
         test: {
           name: "linux-service-host",
-          include: [`**/@(${linuxServiceHostSuites})${testFileSuffix}`],
+          include: [`linux-service-host/**/${testFile}`],
           globalSetup: "./linux-service-host-setup.ts",
         },
       },

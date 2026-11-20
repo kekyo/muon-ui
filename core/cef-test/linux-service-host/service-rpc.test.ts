@@ -12,7 +12,7 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
-import { createMuonServicesApi } from "../common/renderer/services.ts";
+import { createMuonServicesApi } from "../../common/renderer/services.ts";
 
 const execute = promisify(execFile);
 

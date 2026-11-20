@@ -26,8 +26,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createConnection as createMcp } from "@playwright/mcp";
 import { beforeAll, expect, it } from "vitest";
-import { buildMuonQuickJsService } from "../../ui/common/service-build.ts";
-import { createMuonCapabilityModuleResolver } from "../../ui/common/capability.js";
+import { buildMuonQuickJsService } from "../../../ui/common/service-build.ts";
+import { createMuonCapabilityModuleResolver } from "../../../ui/common/capability.js";
 
 const runtime = resolve(
   process.env.MUON_TEST_SERVICE_RUNTIME ?? "../cef/.run/test-linux-amd64-debug",

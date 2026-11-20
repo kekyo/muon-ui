@@ -22,7 +22,7 @@ import { expect, it } from "vitest";
 import {
   createMuonServicesApi,
   type MuonServiceState,
-} from "../common/renderer/services.ts";
+} from "../../common/renderer/services.ts";
 
 const execute = promisify(execFile);
 

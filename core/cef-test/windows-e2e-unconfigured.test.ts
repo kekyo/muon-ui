@@ -13,6 +13,23 @@ import { promisify } from "node:util";
 import { expect, it } from "vitest";
 
 const execFileAsync = promisify(execFile);
+const vitestCli = fileURLToPath(
+  new URL("../../node_modules/vitest/vitest.mjs", import.meta.url),
+);
+
+it("selects the Linux host suite once when Windows E2E files are excluded", async () => {
+  const { stdout } = await execFileAsync(process.execPath, [
+    vitestCli,
+    "list",
+    "--filesOnly",
+    "--exclude",
+    "service-host-windows.test.ts",
+    "service-host.test.ts",
+    "service-host-windows.test.ts",
+  ]);
+  expect(stdout.match(/service-host\.test\.ts/g)).toHaveLength(1);
+  expect(stdout).not.toContain("service-host-windows.test.ts");
+});
 
 it.each([
   "windows-path.test.ts",
@@ -27,9 +44,7 @@ it.each([
       const result = await execFileAsync(
         process.execPath,
         [
-          fileURLToPath(
-            new URL("../../node_modules/vitest/vitest.mjs", import.meta.url),
-          ),
+          vitestCli,
           "run",
           file,
           "--config",

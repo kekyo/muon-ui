@@ -5,7 +5,7 @@
 
 import prettierMax from "prettier-max";
 import screwUp from "screw-up";
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 import type { UserConfig } from "vite";
 import { buildMuonNotificationRenderer } from "../common/build-notification-renderer.mjs";
 import { buildMuonServerRenderer } from "../cef/build-server-renderer.ts";
@@ -16,10 +16,16 @@ const isValgrindRun = process.env.MUON_TEST_USE_VALGRIND === "1";
 // Local launcher startup may legitimately use its 120-second runtime staging
 // timeout. Keep the enclosing test alive long enough to finish cleanup.
 const testTimeout = isValgrindRun ? 600000 : 180000;
-const linuxServiceHostTests = [
-  "service-{bootstrap,host,native-plugins,node,policy,rpc}.test.ts",
-  "services-linux.test.ts",
-];
+const linuxServiceHostSuites = [
+  "service-bootstrap",
+  "service-host",
+  "service-native-plugins",
+  "service-node",
+  "service-policy",
+  "service-rpc",
+  "services-linux",
+].join("|");
+const testFileSuffix = ".{test,spec}.?(c|m)[jt]s?(x)";
 
 export default defineConfig(async (): Promise<UserConfig> => ({
   define: {
@@ -64,14 +70,15 @@ export default defineConfig(async (): Promise<UserConfig> => ({
         extends: true,
         test: {
           name: "cef",
-          exclude: [...configDefaults.exclude, ...linuxServiceHostTests],
+          // Split by suite name so both projects inherit command-line exclusions.
+          include: [`**/!(${linuxServiceHostSuites})${testFileSuffix}`],
         },
       },
       {
         extends: true,
         test: {
           name: "linux-service-host",
-          include: linuxServiceHostTests,
+          include: [`**/@(${linuxServiceHostSuites})${testFileSuffix}`],
           globalSetup: "./linux-service-host-setup.ts",
         },
       },

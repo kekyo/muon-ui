@@ -8,20 +8,7 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { build } from "vite";
-import { beforeAll, expect, it } from "vitest";
-
-beforeAll(async () => {
-  await mkdir("../service-host/.build", { recursive: true });
-  await promisify(execFile)("flock", [
-    "../service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../service-host",
-    ".build/muon-service-host",
-    ".build/http-service.so",
-    ".build/server-service.so",
-  ]);
-}, 600000);
+import { expect, it } from "vitest";
 
 it("owns a Node service independently of UI and drains asynchronous stop", async () => {
   await mkdir("../../.build", { recursive: true });

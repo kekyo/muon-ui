@@ -11,19 +11,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import { beforeAll, expect, it } from "vitest";
-import { createMuonServicesApi } from "../common/renderer/services.ts";
+import { expect, it } from "vitest";
+import { createMuonServicesApi } from "../../common/renderer/services.ts";
 
 const execute = promisify(execFile);
-beforeAll(async () => {
-  await execute("flock", [
-    "../service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../service-host",
-    "all",
-  ]);
-}, 600000);
 
 it.each(["native", "quickjs"] as const)(
   "routes typed %s calls, callbacks and events across independent page sockets",

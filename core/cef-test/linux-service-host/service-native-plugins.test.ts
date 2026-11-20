@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   copyFile,
@@ -17,22 +17,11 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
-import { beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createPluginProject, buildPlugin } from "muon-plugin-sdk";
-import { resolveMuonServices } from "../../ui/common/service-config.ts";
-import { stageMuonDesktopServices } from "../../ui/cef/services.ts";
-import { createMuonServicesApi } from "../common/renderer/services.ts";
-
-beforeAll(async () => {
-  await promisify(execFile)("flock", [
-    "../service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../service-host",
-    "all",
-  ]);
-}, 600000);
+import { resolveMuonServices } from "../../../ui/common/service-config.ts";
+import { stageMuonDesktopServices } from "../../../ui/cef/services.ts";
+import { createMuonServicesApi } from "../../common/renderer/services.ts";
 
 it("calls an SDK-built native plugin from independent QuickJS services and reloads after the last release", async () => {
   const directory = await mkdtemp(join(tmpdir(), "muon-service-ffi-"));

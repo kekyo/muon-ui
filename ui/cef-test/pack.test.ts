@@ -4,7 +4,7 @@
 // https://github.com/kekyo/muon-ui
 
 import { execFile } from "node:child_process";
-import { createReadStream } from "node:fs";
+import { constants, createReadStream } from "node:fs";
 import {
   access,
   chmod,
@@ -535,7 +535,7 @@ const readTarGzBinaryEntry = async (
     "gzip",
   )) {
     if (entry.kind === "file" && entry.path === entryName) {
-      return await entry.getContent("buffer");
+      return Buffer.from(await entry.getContent("bytes"));
     }
   }
   throw new Error(`tar.gz entry was not found: ${entryName}`);
@@ -739,6 +739,11 @@ describe("muon pack", () => {
     expect(entries).not.toContain("dist-muon/linux-amd64/assets.zip");
     expect(entries).not.toContain("dist-muon/linux-amd64/muon-install.json");
     expect(entries).not.toContain("packed-sample/linux-amd64/libcef.so");
+    await execFileAsync("tar", ["-xzf", artifact!.path, "-C", root]);
+    await access(
+      join(root, "packed-sample/linux-amd64/muon-core"),
+      constants.X_OK,
+    );
     await expect(
       readTarGzTextEntry(
         artifact?.path ?? "",

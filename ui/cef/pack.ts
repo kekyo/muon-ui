@@ -18,13 +18,12 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import AdmZip from "adm-zip";
+import { createTarPacker, type EntryItem } from "tar-vern";
 import {
-  createDirectoryItem,
+  createReadDirectoryItem,
   createReadFileItem,
-  createTarPacker,
   storeReaderToFile,
-  type EntryItem,
-} from "tar-vern";
+} from "tar-vern/node";
 
 import {
   buildMuonApp,
@@ -461,9 +460,7 @@ const createTarGzEntryGenerator = async function* (
   directory: string,
   entryRoot: string,
 ): AsyncGenerator<EntryItem, void, unknown> {
-  yield await createDirectoryItem(entryRoot, "exceptName", {
-    directoryPath: directory,
-  });
+  yield await createReadDirectoryItem(entryRoot, directory);
 
   const walk = async function* (
     currentDirectory: string,
@@ -475,12 +472,10 @@ const createTarGzEntryGenerator = async function* (
       const relativePath = toArchivePath(relative(directory, path));
       const entryName = `${entryRoot}/${relativePath}`;
       if (entry.isDirectory()) {
-        yield await createDirectoryItem(entryName, "exceptName", {
-          directoryPath: path,
-        });
+        yield await createReadDirectoryItem(entryName, path);
         yield* walk(path);
       } else if (entry.isFile()) {
-        yield await createReadFileItem(entryName, path, "exceptName");
+        yield await createReadFileItem(entryName, path);
       }
     }
   };

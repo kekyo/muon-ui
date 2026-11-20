@@ -6,9 +6,12 @@
 #include <windows.h>
 #include <initguid.h>
 #include <uiautomation.h>
+#include <cardio.h>
 #include <atomic>
 #include <iostream>
 #include <optional>
+#include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -34,6 +37,26 @@ struct ComPointer {
 static void Check(HRESULT result, const char* operation) {
   if (FAILED(result)) throw std::runtime_error(std::string(operation) +
       " failed: " + std::to_string(static_cast<unsigned long>(result)));
+}
+
+static void WriteObservation(const wchar_t* path, const std::string& value) {
+  auto dispatcher = cardio::dispatcher_host_win32(cardio::dispatcher_thread_policy::current_thread);
+  const auto file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, nullptr);
+  if (file == INVALID_HANDLE_VALUE)
+    throw std::runtime_error("Create notification observer result: " + std::to_string(GetLastError()));
+  try {
+    const auto bytes = std::as_bytes(std::span(value));
+    auto writing = cardio::win32::write(file, bytes);
+    dispatcher.park();
+    const auto count = writing.try_result();
+    if (!count || *count != bytes.size()) throw std::runtime_error("Incomplete notification observer result");
+  } catch (...) {
+    CloseHandle(file);
+    throw;
+  }
+  if (!CloseHandle(file))
+    throw std::runtime_error("Close notification observer result: " + std::to_string(GetLastError()));
 }
 
 static std::wstring Name(IUIAutomationElement* element) {
@@ -171,14 +194,14 @@ class Changes final : public IUIAutomationStructureChangedEventHandler,
 };
 
 static int Observe(const std::wstring& operation, const std::wstring& title,
-    const std::wstring& app_name, const std::wstring& action) {
+    const std::wstring& app_name, const std::wstring& action, const wchar_t* result_path) {
   ComPointer<IUIAutomation> automation;
   Check(CoCreateInstance(CLSID_CUIAutomation8, nullptr, CLSCTX_INPROC_SERVER,
       IID_IUIAutomation, reinterpret_cast<void**>(&automation.value)), "Create native UIA");
   ComPointer<IUIAutomationElement> root;
   Check(automation.value->GetRootElement(&root.value), "Get UIA root");
   if (operation == L"center") {
-    std::cout << (Center(automation.value, root.value).value ? "true\n" : "false\n");
+    WriteObservation(result_path, Center(automation.value, root.value).value ? "true" : "false");
     return 0;
   }
   ComPointer<Changes> changes;
@@ -200,53 +223,59 @@ static int Observe(const std::wstring& operation, const std::wstring& title,
       if (operation == L"setting") {
         const auto state = Setting(automation.value, root.value, action, toggled);
         if (state) {
-          std::cout << (*state ? "1\n" : "0\n");
+          WriteObservation(result_path, *state ? "1" : "0");
           break;
         }
       }
       auto center = operation == L"setting" ? ComPointer<IUIAutomationElement>{}
           : Center(automation.value, root.value);
-      if (center.value) {
-        RECT bounds{};
-        auto notification = Notification(automation.value, center.value, title, app_name, bounds);
-        if (operation == L"removed" && !notification.value) {
-          std::cout << "null\n";
-          break;
-        }
-        if (notification.value && operation != L"removed") {
-          auto target = ComPointer<IUIAutomationElement>{};
-          if (action.empty()) {
-            notification.value->AddRef();
-            target.value = notification.value;
-          } else {
-            target = FindProperty(automation.value, notification.value,
-                UIA_NamePropertyId, action, TreeScope_Descendants);
-            if (!target.value && !expanded) {
-              const auto expand = FindProperty(automation.value, notification.value,
-                  UIA_AutomationIdPropertyId, L"ExpandButton", TreeScope_Descendants);
-              if (!expand.value) throw std::runtime_error("Dedicated notification expand control is absent");
-              Invoke(expand.value);
-              expanded = true;
-              continue;
-            }
+      RECT bounds{};
+      auto notification = center.value && operation != L"center-closed"
+          ? Notification(automation.value, center.value, title, app_name, bounds)
+          : ComPointer<IUIAutomationElement>{};
+      if ((operation == L"center-closed" && !center.value) ||
+          (operation == L"removed" && center.value && !notification.value)) {
+        WriteObservation(result_path, "null");
+        break;
+      }
+      if (notification.value && operation != L"removed") {
+        auto target = ComPointer<IUIAutomationElement>{};
+        if (action.empty()) {
+          notification.value->AddRef();
+          target.value = notification.value;
+        } else {
+          target = FindProperty(automation.value, notification.value,
+              UIA_NamePropertyId, action, TreeScope_Descendants);
+          if (!target.value && !expanded) {
+            const auto expand = FindProperty(automation.value, notification.value,
+                UIA_AutomationIdPropertyId, L"ExpandButton", TreeScope_Descendants);
+            if (!expand.value) throw std::runtime_error("Dedicated notification expand control is absent");
+            Invoke(expand.value);
+            expanded = true;
+            continue;
           }
-          if (target.value) {
-            BOOL hidden = TRUE;
-            Check(target.value->get_CurrentIsOffscreen(&hidden), "Read notification visibility");
-            if (!hidden) {
-              if (operation == L"activate") Invoke(target.value);
-              std::cout << "{\"x\":" << bounds.left << ",\"y\":" << bounds.top
-                  << ",\"width\":" << bounds.right - bounds.left << ",\"height\":"
-                  << bounds.bottom - bounds.top << "}\n";
-              break;
-            }
+        }
+        if (target.value) {
+          BOOL hidden = TRUE;
+          Check(target.value->get_CurrentIsOffscreen(&hidden), "Read notification visibility");
+          if (!hidden) {
+            if (operation == L"activate") Invoke(target.value);
+            std::ostringstream result;
+            result << "{\"x\":" << bounds.left << ",\"y\":" << bounds.top
+                << ",\"width\":" << bounds.right - bounds.left << ",\"height\":"
+                << bounds.bottom - bounds.top << "}";
+            WriteObservation(result_path, result.str());
+            break;
           }
         }
       }
       const auto now = GetTickCount64();
-      if (now >= deadline || WaitForSingleObject(changes.value->changed,
-          static_cast<DWORD>(deadline - now)) != WAIT_OBJECT_0)
+      if (now >= deadline)
         throw std::runtime_error("Notification UI did not reach the requested state");
+      // Read the current tree once more at the deadline, even when the shell
+      // did not deliver a final structure or property event.
+      if (WaitForSingleObject(changes.value->changed, static_cast<DWORD>(deadline - now)) == WAIT_FAILED)
+        throw std::runtime_error("Wait for notification UI change failed");
     }
     Check(automation.value->RemoveAllEventHandlers(), "Remove UIA events");
   } catch (...) {
@@ -257,13 +286,12 @@ static int Observe(const std::wstring& operation, const std::wstring& title,
 }
 
 int wmain(int argc, wchar_t** argv) {
-  if (argc < 2) return 2;
+  if (argc != 6) return 2;
   const auto initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (FAILED(initialized)) return 3;
   int result = 1;
   try {
-    result = Observe(argv[1], argc > 2 ? argv[2] : L"",
-        argc > 3 ? argv[3] : L"", argc > 4 ? argv[4] : L"");
+    result = Observe(argv[1], argv[2], argv[3], argv[4], argv[5]);
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
   }

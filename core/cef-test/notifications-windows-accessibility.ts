@@ -243,18 +243,22 @@ $titles = @(foreach ($toast in $history) {
   let initial: boolean | undefined;
   let closed = false;
   let openedCenter = false;
-  const center = async (): Promise<void> => {
-    if ((await observe("center", "", "")) === "false") {
+  const openCenter = async (refresh: boolean): Promise<void> => {
+    const wasOpen = (await observe("center", "", "")) === "true";
+    if (wasOpen) {
+      if (!refresh) return;
       await agent.keyboard.press("n", { modifiers: ["Meta"] });
-      openedCenter = true;
+      await observe("center-closed", "", "");
     }
+    await agent.keyboard.press("n", { modifiers: ["Meta"] });
+    if (!wasOpen) openedCenter = true;
   };
   const capture = async (
     title: string,
     action: string,
     path: string,
   ): Promise<void> => {
-    await center();
+    await openCenter(false);
     const image = await captureWindowsNotification(
       async () =>
         JSON.parse(await observe("prepare", title, action)) as ScreenRect,
@@ -331,6 +335,9 @@ try{$key=$root.OpenSubKey('Software\\Classes\\AppUserModelId',$true);if($null -n
         throw new Error(
           `Notification still in Windows notification history: ${title}`,
         );
+      // The open Windows panel can retain a removed row until it is reopened.
+      // Check the visible contents of a fresh panel after verifying OS history.
+      await openCenter(true);
       await observe("removed", title, "");
     },
     setEnabled: async (enabled) => {

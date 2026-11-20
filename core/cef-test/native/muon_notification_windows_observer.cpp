@@ -230,11 +230,11 @@ static int Observe(const std::wstring& operation, const std::wstring& title,
       auto center = operation == L"setting" ? ComPointer<IUIAutomationElement>{}
           : Center(automation.value, root.value);
       RECT bounds{};
-      auto notification = center.value ? Notification(automation.value, center.value, title, app_name, bounds)
+      auto notification = center.value && operation != L"center-closed"
+          ? Notification(automation.value, center.value, title, app_name, bounds)
           : ComPointer<IUIAutomationElement>{};
-      // The caller already verified removal from WinRT history. A closed
-      // panel has no visible notification to wait for.
-      if (operation == L"removed" && !notification.value) {
+      if ((operation == L"center-closed" && !center.value) ||
+          (operation == L"removed" && center.value && !notification.value)) {
         WriteObservation(result_path, "null");
         break;
       }

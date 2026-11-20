@@ -2,7 +2,7 @@
 
 The muon-ui npm package can build Android APKs containing your web assets. Use Vite and the public CLI without editing Gradle or JNI sources. Installed applications do not need a development server.
 
-This release supports debug APKs and signed release APKs. FCM, QuickJS, the Node.js sidecar, and AAB generation are not publicly available.
+The public CLI builds debug APKs and signed release APKs. [Background services](services.md) can use C/C++ or JS/TS hosted by QuickJS. FCM and AAB generation through the public CLI are unsupported.
 
 ## Requirements
 
@@ -109,7 +109,7 @@ You can also provide Android settings through Vite's `build.android`. Precedence
 | `versionName` | Display version; defaults to `package.json` version |
 | `abis` | Included ABIs; both supported ABIs by default |
 | `icon` | PNG image path |
-| `permissions` | Array of `android.permission.…` manifest entries; empty by default |
+| `permissions` | Fully qualified permissions requested by the app. Defaults to an empty array. [Build-time permissions and runtime grants](#build-time-permissions-and-runtime-grants) |
 | `sdkPath` | SDK directory; otherwise detected from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or adb on PATH |
 | `plugins` | Prebuilt plugins described below; empty by default |
 | `systemBars` | Initial system bar and content layout settings |
@@ -133,6 +133,38 @@ const note = await window.muon.fs.readTextFile('note.txt', 'utf8');
 ```
 
 In simple mode, omitting `plugin.plugins` exposes supported builtin functions. Notification functions additionally require `notifications.enabled: true`. An explicit list loads only its entries: an empty list or a list without `internal` exposes no builtins. Each entry's `allow` restricts functions. Native policy checks also apply to directly constructed RPC calls.
+
+### Build-time permissions and runtime grants
+
+Muon combines the permissions in `android.permissions` with those required by the features you configure. Each permission appears once in the APK manifest. Prefix the permission names in this table with `android.permission.` when adding them to your configuration.
+
+| Feature or configuration | Permissions added by Muon | What the app developer supplies |
+| --- | --- | --- |
+| External requests from a WebView | None for the WebView alone | Declare `INTERNET`. Android grants it at install time. |
+| Any service with a nonempty `io.http.origins` or a configured `io.server.listen` | `INTERNET` | The service configuration supplies the declaration. For cleartext HTTP, list the allowed `http://` origins. Muon permits cleartext for those hosts in the network security configuration. |
+| Android services | `FOREGROUND_SERVICE`, the corresponding `FOREGROUND_SERVICE_*` permissions, and `POST_NOTIFICATIONS`. There is no type-specific permission for `shortService`. | Set `foregroundServiceType` and the ongoing `notification` in `services.<id>.android`. For `specialUse`, describe its purpose in `specialUseSubtype`. |
+| One or more native or QuickJS services | `RECEIVE_BOOT_COMPLETED` and one receiver for the system boot notification, even if every service defaults to OFF. | Android grants the permission at install time. An APK with no services has no receiver and includes this permission only if you request it explicitly. |
+| Local notifications enabled with `notifications.enabled: true` | `POST_NOTIFICATIONS` | On Android 13 and later, call `muon.android.notifications.requestPermission()` from the UI to display ordinary notifications. A foreground service can start without this grant and must still supply its ongoing notification. |
+
+Open the app once after installation to enable service autostart on reboot. When the user first unlocks the device after a reboot, Muon uses the same settings as on a normal app launch. Each service defaults to OFF unless you set `services.<id>.autostart`. The user's saved choice takes precedence. Eligible services start before the user opens the app. [Autostart after a reboot](services.md#autostart-after-a-reboot) · [Android boot permission](https://developer.android.com/reference/android/Manifest.permission#RECEIVE_BOOT_COMPLETED)
+
+For example, a WebView that connects to an external HTTPS site can request network access in the app configuration:
+
+```json
+{
+  "android": { "permissions": ["android.permission.INTERNET"] }
+}
+```
+
+Muon reads the first existing file in the order `muon.json5`, `muon.jsonc`, `muon.json`. An explicit Vite `build.android.permissions` array overrides the array in that file. Build the example and check for `android.permission.INTERNET` in the packaged permission list. To change these declarations, edit the source configuration and rebuild. [Android SDK apkanalyzer](https://developer.android.com/tools/apkanalyzer)
+
+```bash
+npx muon build --target android
+apkanalyzer manifest permissions dist-muon/android/com.example.notes-1-debug.apk
+apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
+```
+
+Declaring a permission in the manifest does not prompt the user. For example, Muon adds `FOREGROUND_SERVICE_LOCATION` for a location service. The app must also declare and obtain `ACCESS_COARSE_LOCATION` or `ACCESS_FINE_LOCATION`. Starting the service from the background may also require an `ACCESS_BACKGROUND_LOCATION` grant. Muon has no general-purpose JavaScript API for requesting Android runtime permissions. [Location service requirements](https://developer.android.com/develop/background-work/services/fgs/service-types#location) · [Android notification permissions](https://developer.android.com/develop/ui/compose/notifications/notification-permission) · [Network security configuration](https://developer.android.com/privacy-and-security/security-config)
 
 ### Import with validate mode
 
@@ -171,7 +203,7 @@ Omitting `plugin.pages` accepts RPC from the trusted asset origin's main frame. 
 
 Relative `muon.fs` paths refer to the application's private files directory. Data survives updates with the same application ID and signing key, and is removed by uninstalling. `content://` URIs and file dialogs are unavailable. See the [builtin reference](./muon-built-in-plugin-reference.md) for API usage. Unsupported Android functions are not exposed and are not replaced with no-ops.
 
-For external networking, add `android.permission.INTERNET` to `permissions`. Android does not enforce CEF's destination policies such as `network.allow`. Cleartext HTTP is disabled. Manifest permissions alone do not request runtime permissions from the user. Features requiring permission dialogs, including local network access, are not available through the public build path. See [Android limitations](./limitation.md#android-webview-backend) and [Android local network permission](https://developer.android.com/privacy-and-security/local-network-permission).
+Android does not enforce CEF destination policies such as `network.allow`. Cleartext HTTP is disabled by default. Network features requiring their own permission dialog, including local network access, are unavailable through the public build path. [Build-time permissions and runtime grants](#build-time-permissions-and-runtime-grants) · [Android limitations](./limitation.md#android-webview-backend) · [Android local network permission](https://developer.android.com/privacy-and-security/local-network-permission)
 
 ## System bars and safe areas
 
@@ -220,7 +252,7 @@ Enable notifications through the shared `notifications` configuration, and speci
 
 `smallIcon` must be a square PNG, 24–1024 pixels, containing a white silhouette on a transparent background. Colored images, fully opaque images, and reuse of a launcher icon are rejected. The build generates 24 dp icons for each density. Configure the ordinary application icon separately, for example through `android.icon`.
 
-Notification-enabled builds add `POST_NOTIFICATIONS` to the Manifest. On API 33 and later, explain the request and call `muon.android.notifications.requestPermission()` explicitly. Startup and posting do not request it. Disabled builds expose no notification APIs and do not automatically request the permission even if it appears in user-supplied `permissions`. See [Android notification permissions](https://developer.android.com/develop/ui/views/notifications/notification-permission).
+Startup and posting a notification do not trigger a permission prompt. Explain the purpose before requesting permission in a notification-enabled build. Disabling notifications also disables the notification APIs. [Build-time permissions and runtime grants](#build-time-permissions-and-runtime-grants)
 
 In validate mode, import from `muon:notifications` and `muon:android.notifications`. Allow the functions actually used, such as `muon.notifications.post` and `muon.android.notifications.requestPermission`.
 
@@ -245,7 +277,7 @@ Use `muon.android.settings.open()` for application details, application notifica
 
 Notification operations can start an exited application. Events received before page initialization are also saved. Combine a subscription with pending-event retrieval, deduplicate by `eventId`, and acknowledge processed events. APK replacement may remove OS notifications, but updates preserving application ID and data retain saved pending events. Muon does not repost automatically. See [events and storage limits](./muon-built-in-plugin-reference.md#notification-events-and-acknowledgement) and [Android update behavior](https://android.googlesource.com/platform/frameworks/base/+/1cdfff555f4a21f71ccc978290e2e212e2f8b168/services/core/java/com/android/server/notification/NotificationManagerService.java#2010).
 
-Scheduled notifications, FCM, persistent services, and background actions that complete work directly are unavailable. Notification buttons open this application and deliver an action ID.
+Scheduled notifications, FCM, and notification actions that complete work directly in the background are unavailable. Notification buttons open this application and deliver an action ID. Use [services](services.md) for work that continues after the UI closes.
 
 
 ## Sign a release APK
@@ -347,8 +379,10 @@ Metadata is required in validate mode. The build checks ABI hashes and resolves 
 
 The builder also validates registration names, SONAME, ABI, `muon_init_plugin`, dependencies, and 16 KiB alignment. Plugin-specific configuration values must be strings. Common `signature` and `salt` settings are rejected on Android; use the metadata's ABI-specific SHA-256 hashes. Buffers, callbacks in both directions, returned native function proxies, and their release follow the shared plugin ABI. See [plugin development](./muon-plugin-develop.md).
 
-## Follow-up scope
+## Services and unsupported features
+
+The service types and network settings you configure determine which permissions appear in the APK. [Build-time permissions and runtime grants](#build-time-permissions-and-runtime-grants)
 
 FCM notification delivery and background processing remain follow-up work. Current APKs run without Firebase configuration.
 
-The intended QuickJS deployment model bundles JavaScript into a single ESM file on the build host, keeping builtin modules external. Code, its hash, and required feature metadata will be included in APK assets and updated with the application. Persistent data stays separate. Arbitrary npm packages, full Node.js compatibility, and independent JavaScript updates are outside this initial model.
+QuickJS services are bundled into a single ESM file on the build host, keeping allowed native modules external. Code is included in the APK and updated with the application. Persistent data stays separate. Arbitrary npm packages, full Node.js compatibility, and independent JavaScript updates are unsupported. See the [service guide](services.md) for configuration and runtime facilities.

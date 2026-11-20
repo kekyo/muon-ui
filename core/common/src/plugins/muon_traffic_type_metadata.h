@@ -16,7 +16,7 @@
  * Owns a tra-ffic type descriptor and any nested signature it points to.
  */
 struct MuonTypeDescriptorStorage {
-  tra_ffic_type descriptor = {TRA_FFIC_TYPE_VOID, nullptr};
+  tra_ffic_type descriptor = {TRA_FFIC_TYPE_VOID, nullptr, 0, nullptr};
   std::unique_ptr<struct MuonFunctionSignatureStorage> function_signature;
 };
 

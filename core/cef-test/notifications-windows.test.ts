@@ -24,7 +24,11 @@ import { resolveWindowsRuntimeTarget } from "./plugin-e2e/windows-matrix.js";
 import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.js";
 import { stageWindowsRuntimeDirectory } from "./plugin-e2e/windows-staging.js";
 import { runNotificationDesktopCase } from "./notifications-desktop-case.js";
-import { createWindowsNotificationDriver } from "./notifications-windows-accessibility.js";
+import {
+  captureWindowsNotificationOpening,
+  createWindowsNotificationArtifacts,
+  createWindowsNotificationDriver,
+} from "./notifications-windows-accessibility.ts";
 import { runWindowsNotificationLaunchCase } from "./notifications-windows-launch-case.js";
 import type { MuonNotificationEvent } from "../common/renderer/notifications.js";
 
@@ -105,8 +109,14 @@ beforeAll(async () => {
     win32.join(native, "muon.png"),
     await readFile(resolve("../../images/muon-256.png")),
   );
-  for (const name of ["store", "service", "maintenance", "windows_driver"]) {
-    const executable = `muon_notification_${name}${name === "windows_driver" ? "" : "_test"}.exe`;
+  for (const name of [
+    "store_test",
+    "service_test",
+    "maintenance_test",
+    "windows_driver",
+    "windows_observer",
+  ]) {
+    const executable = `muon_notification_${name}.exe`;
     await agent.files.writeFile(
       win32.join(native, executable),
       await readFile(
@@ -185,6 +195,30 @@ describeWindowsE2e(suiteName, () => {
     },
   );
 
+  it("returns the notification center state without standard output", async () => {
+    if (agent === undefined) throw new Error("Windows agent is unavailable");
+    const observer = win32.join(
+      root,
+      "native",
+      "muon_notification_windows_observer.exe",
+    );
+    const resultPath = win32.join(root, `center-${randomUUID()}.json`);
+    const command = await agent.processes.launchManaged({
+      path: observer,
+      arguments: ["center", "", "", "", resultPath],
+      captureStderr: true,
+      createNoWindow: true,
+    });
+    try {
+      const result = await command.waitForExit({ timeoutMs: 35000 });
+      expect(result.root.exitCode, await command.stderrText()).toBe(0);
+      const response = await agent.files.readFile(resultPath);
+      expect(typeof JSON.parse(response.toString("utf8"))).toBe("boolean");
+    } finally {
+      await command.releaseAsync();
+    }
+  });
+
   it.each(["simple", "validate"] as const)(
     "delivers OS interactions and preserves pending events in %s mode",
     async (mode) => {
@@ -192,12 +226,9 @@ describeWindowsE2e(suiteName, () => {
       const remote = agent;
       const directory = win32.join(root, mode);
       const assets = win32.join(directory, "assets", "main");
-      const artifacts = resolve(
-        ".run/notifications-windows",
-        target.target,
-        mode,
+      const artifacts = await createWindowsNotificationArtifacts(
+        resolve(".run/notifications-windows", target.target, mode),
       );
-      await mkdir(artifacts, { recursive: true });
       await remote.files.mkdir(assets, { recursive: true });
       const appId = `dev.muon.NotificationTest.${target.target}.${mode}.run${process.pid}`;
       const appName = `Muon Notifications ${target.target} ${mode}`;
@@ -380,10 +411,16 @@ describeWindowsE2e(suiteName, () => {
         await evaluate(
           `await notificationApi.post({id:'status-probe',title:${JSON.stringify(statusTitle)},body:'Register this notification source'}); return true;`,
         );
-        await driver.waitForNotification(
-          statusTitle,
-          join(artifacts, "status-probe.png"),
+        // Retain the opening animation as evidence alongside the stable crop.
+        const opening = await captureWindowsNotificationOpening(
+          remote.recordVideo(3000, join(artifacts, "status-probe-opening.mp4")),
+          driver.waitForNotification(
+            statusTitle,
+            join(artifacts, "status-probe.png"),
+          ),
         );
+        expect(opening.frameCount).toBeGreaterThan(1);
+        expect(opening.clipped).toBe(false);
         await evaluate(
           "await notificationApi.cancel('status-probe'); return true;",
         );
@@ -481,6 +518,11 @@ describeWindowsE2e(suiteName, () => {
         await vi.waitUntil(
           async () => await evaluate("return globalThis.ready === true;"),
           { timeout: 30000, interval: 100 },
+        );
+        // The popup can take focus away from Notification Center while the
+        // notification still belongs to this application's Windows history.
+        await expect(driver.waitForRemoval(popupTitle)).rejects.toThrow(
+          "still in Windows notification history",
         );
         await evaluate(
           "await beginWatch(); await notificationApi.cancel('popup-cancel'); return true;",

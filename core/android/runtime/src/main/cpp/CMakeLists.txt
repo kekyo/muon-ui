@@ -10,7 +10,18 @@ endforeach()
 set(MUON_COMMON_ROOT "${MUON_REPOSITORY_ROOT}/core/common")
 set(CARDIO_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/cardio")
 set(TRA_FFIC_ROOT_RESOLVED "${MUON_REPOSITORY_ROOT}/deps/tra-ffic")
+set(MUON_ANDROID_QUICKJS_ROOT "${MUON_ANDROID_DEPENDENCY_ROOT}/quickjs")
 set(MUON_ANDROID_DEPENDENCY_ROOT "${MUON_ANDROID_DEPENDENCY_ROOT}/${ANDROID_ABI}")
+file(READ "${MUON_COMMON_ROOT}/quickjs-source.json" MUON_QUICKJS_PROFILE)
+string(JSON MUON_QUICKJS_VERSION GET "${MUON_QUICKJS_PROFILE}" version)
+include("${MUON_COMMON_ROOT}/cmake/MuonQuickJs.cmake")
+muon_add_quickjs(muon_service_quickjs
+  "${MUON_ANDROID_QUICKJS_ROOT}/quickjs-${MUON_QUICKJS_VERSION}")
+set(MUON_YYJSON_SOURCE "${MUON_REPOSITORY_ROOT}/builder/.deps/src/yyjson-0.12.0/src")
+add_library(muon_service_json STATIC "${MUON_YYJSON_SOURCE}/yyjson.c")
+set_target_properties(muon_service_json PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_compile_features(muon_service_json PRIVATE c_std_99)
+target_include_directories(muon_service_json PUBLIC "${MUON_YYJSON_SOURCE}")
 
 add_subdirectory(
   "${MUON_COMMON_ROOT}/src/rpc"
@@ -87,6 +98,11 @@ include("${MUON_COMMON_ROOT}/cmake/MuonPluginRuntimeCore.cmake")
 muon_add_plugin_runtime_core(muon_plugin_runtime_core)
 
 add_library(muon_android_rpc SHARED
+  muon_android_service_client_jni.cpp
+  muon_android_service_transport.cpp
+  "${MUON_COMMON_ROOT}/src/services/muon_service_client.cpp"
+  muon_android_dispatcher.cpp
+  muon_android_utf.cpp
   muon_android_process_runtime.cpp
   muon_android_rpc_jni.cpp
   )
@@ -111,7 +127,50 @@ target_link_libraries(muon_android_rpc PRIVATE
   dl
   log
   muon_rpc_core
+  muon_service_json
   )
 target_link_options(muon_android_rpc PRIVATE
   -Wl,-z,max-page-size=16384
   )
+
+# The background process owns this host independently of the page plugin runtime.
+include("${MUON_COMMON_ROOT}/cmake/MuonServer.cmake")
+add_library(muon_sha1 STATIC "${MUON_REPOSITORY_ROOT}/builder/src/sha1.c")
+target_include_directories(muon_sha1 PUBLIC "${MUON_REPOSITORY_ROOT}/builder/src")
+
+add_library(muon_android_services SHARED
+  ${MUON_SERVER_SOURCES}
+  "${MUON_COMMON_ROOT}/src/muon_json_helpers.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_server.cpp"
+  muon_android_service_plugins.cpp
+  muon_android_service_peer.cpp
+  muon_android_service_transport.cpp
+  muon_android_utf.cpp
+  muon_android_services_jni.cpp
+  muon_android_service_http.cpp
+  "${MUON_COMMON_ROOT}/src/muon_filesystem.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_lifecycle.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_controller.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_broker.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_execution_router.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_quickjs_service_host.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_quickjs_service_plugins.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_plugin_pool.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_quickjs_plugin_bindings.cpp"
+  "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_engine.cpp"
+  "${MUON_COMMON_ROOT}/src/quickjs/muon_quickjs_module.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_http.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_io.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_files.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_native_service_host.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_value.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_service_interface.cpp"
+  "${MUON_COMMON_ROOT}/src/services/muon_native_service_library.cpp"
+  )
+target_compile_features(muon_android_services PRIVATE cxx_std_20)
+target_compile_options(muon_android_services PRIVATE -Wall -Wextra -Wpedantic -Werror -Wno-c99-extensions)
+target_include_directories(muon_android_services PRIVATE
+  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
+  "${MUON_REPOSITORY_ROOT}/sdk/include")
+target_link_libraries(muon_android_services PRIVATE muon_sha1 muon_wslay muon_llhttp muon_plugin_runtime_core muon_cardio muon_service_json muon_service_quickjs android dl log)
+target_link_options(muon_android_services PRIVATE -Wl,-z,max-page-size=16384)

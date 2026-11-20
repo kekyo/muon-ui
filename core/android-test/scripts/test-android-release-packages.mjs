@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = resolve(
   process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
 );
-const includeQuickJs = process.argv.includes('--quickjs');
 const androidRoot = join(projectRoot, 'android');
 const releaseApk = join(
   androidRoot,
@@ -22,7 +21,7 @@ const releaseApk = join(
   'release',
   'app-release.apk'
 );
-const packageName = includeQuickJs ? 'dev.muon.prototype' : 'dev.muon.testhost';
+const packageName = 'dev.muon.testhost';
 const activityName = `${packageName}/dev.muon.runtime.MuonActivity`;
 const pageReadyMarker =
   'Muon page ready: https://main.asset.muon.invalid/index.html';
@@ -146,9 +145,7 @@ adb(['install', '-r', releaseApk]);
 await launchAndAwaitPage('signed release APK');
 
 execFileSync(
-  includeQuickJs
-    ? resolve(projectRoot, '../android/gradlew')
-    : join(androidRoot, 'gradlew'),
+  join(androidRoot, 'gradlew'),
   ['-p', androidRoot, 'installReleaseBundleApks'],
   {
     cwd: androidRoot,

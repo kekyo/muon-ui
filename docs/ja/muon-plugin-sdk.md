@@ -2,6 +2,8 @@
 
 `muon-plugin-sdk`を開発用依存へ追加すると、muon-uiのリポジトリを取得せずにC/C++のプラグインを作れます。CEFのLinux・WindowsとAndroidは同じC ABIを使用します。アプリへの登録とアクセス権限は、アプリ側の`muon.json`で指定します。
 
+サービスを実装する場合は`init --kind service`で専用の雛形を生成できます。QuickJS用のTS API、画面との通信、サービスからのnative呼び出しは[バックグラウンドサービス](services.md)を参照してください。
+
 ## 最初のプラグイン
 
 アプリのディレクトリで実行します。標準はC++20とcardio、Makeとpkg-configです。SDKはmuon-uiと同じリリースを使用してください。

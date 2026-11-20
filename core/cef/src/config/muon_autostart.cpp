@@ -9,6 +9,7 @@
 #include "config/muon_paths.h"
 #include "config/muon_startup.h"
 #include "muon_string_helpers.h"
+#include "muon_filesystem.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -71,12 +72,18 @@ static bool ValidateAutostartOptions(const MuonAutostartOptions& options,
     *error_message = "Autostart executable path has no file name";
     return false;
   }
+  for (const auto& argument : options.arguments) {
+    if (argument.find('\0') != std::string::npos) {
+      *error_message = "Autostart arguments cannot contain NUL";
+      return false;
+    }
+  }
   if (!options.appimage_id.empty() &&
       (options.appimage_id == "." || options.appimage_id == ".." ||
        options.appimage_id.find_first_not_of(
            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") !=
            std::string::npos)) {
-    *error_message = "Invalid AppImage application ID";
+    *error_message = "Invalid autostart application ID";
     return false;
   }
   return true;
@@ -216,11 +223,14 @@ static std::string EscapeDesktopExecArgument(std::string_view value) {
 }
 
 static std::string CreateDesktopExecCommand(
-    const std::filesystem::path& executable) {
-  const auto path = executable.string();
+    const MuonAutostartOptions& options) {
+  const auto path = options.executable_path.string();
   // GIO checks argv[0] before expanding %% in desktop command lines.
   const auto prefix = path.find('%') == std::string::npos ? "" : "/usr/bin/env ";
-  return prefix + EscapeDesktopExecArgument(path);
+  auto command = prefix + EscapeDesktopExecArgument(path);
+  for (const auto& argument : options.arguments)
+    command += " " + EscapeDesktopExecArgument(argument);
+  return command;
 }
 
 static std::string CreateEnabledDesktopEntry(
@@ -237,7 +247,7 @@ static std::string CreateEnabledDesktopEntry(
   content += "\n";
   content += kDesktopEntryExecKey;
   content += "=";
-  content += CreateDesktopExecCommand(options.executable_path);
+  content += CreateDesktopExecCommand(options);
   content += "\nTerminal=false\n";
   if (!options.appimage_id.empty()) {
     content += "X-muon-AppImage-ID=" + options.appimage_id + "\n";
@@ -496,7 +506,10 @@ static std::wstring QuoteWindowsCommandArgument(std::wstring_view value) {
 
 static std::wstring CreateWindowsRunCommand(
     const MuonAutostartOptions& options) {
-  return QuoteWindowsCommandArgument(options.executable_path.wstring());
+  auto command = QuoteWindowsCommandArgument(options.executable_path.wstring());
+  for (const auto& argument : options.arguments)
+    command += L" " + QuoteWindowsCommandArgument(muon_internal::FilesystemPathFromUtf8(argument).wstring());
+  return command;
 }
 
 static std::wstring ExtractWindowsCommandExecutable(
@@ -572,7 +585,8 @@ static bool GetWindowsAutostartStatus(const MuonAutostartOptions& options,
     return false;
   }
 
-  const auto value_name = options.executable_path.stem().wstring();
+  const auto value_name = options.appimage_id.empty() ? options.executable_path.stem().wstring() :
+      muon_internal::FilesystemPathFromUtf8(options.appimage_id).wstring();
   DWORD type = 0;
   DWORD byte_count = 0;
   result = RegQueryValueExW(key, value_name.c_str(), nullptr, &type, nullptr,
@@ -614,7 +628,8 @@ static bool GetWindowsAutostartStatus(const MuonAutostartOptions& options,
 static bool SetWindowsAutostart(const MuonAutostartOptions& options,
                                 bool enabled,
                                 std::string* error_message) {
-  const auto value_name = options.executable_path.stem().wstring();
+  const auto value_name = options.appimage_id.empty() ? options.executable_path.stem().wstring() :
+      muon_internal::FilesystemPathFromUtf8(options.appimage_id).wstring();
   if (enabled) {
     const auto command = CreateWindowsRunCommand(options);
     if (command.size() > kWindowsRunCommandMaxLength) {
@@ -764,7 +779,7 @@ bool RefreshMuonAppImageAutostart(const MuonAutostartOptions& options,
     return true;
   }
   const auto command =
-      muon_internal::CreateDesktopExecCommand(options.executable_path);
+      muon_internal::CreateDesktopExecCommand(options);
   if (entry.exec == command) return true;
 
   // Retain user-added keys such as OnlyShowIn when replacing the command.

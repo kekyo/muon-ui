@@ -488,6 +488,9 @@ try {
       clearTitle,
       join(artifacts, "maintenance-before.png"),
     );
+    // Notification Center can close while the maintenance launcher runs.
+    // Read the application's Windows history on each side of the command.
+    expect(await driver.getHistoryTitles()).toContain(clearTitle);
     const maintenance = await agent.processes.launchManaged({
       path: launcher,
       arguments: ["--muon-notification-clear-history"],
@@ -503,7 +506,7 @@ try {
     } finally {
       await maintenance.releaseAsync();
     }
-    await driver.waitForRemoval(clearTitle);
+    expect(await driver.getHistoryTitles()).toEqual([]);
     expect(
       await evaluate("return await notificationApi.getPendingEvents();"),
     ).toEqual([pending]);

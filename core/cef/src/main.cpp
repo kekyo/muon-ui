@@ -33,6 +33,8 @@
 #include "config/muon_startup.h"
 #include "log/muon_log.h"
 #include "muon_filesystem.h"
+#include "plugins/builtin/muon_builtin_services.h"
+#include "services/muon_service_session.h"
 
 #if defined(__linux__)
 #include "notifications/muon_notification_linux.h"
@@ -61,6 +63,27 @@ static CefMainArgs CreateMainArgs(int argc, char* argv[]) {
 #else
   return CefMainArgs(argc, argv);
 #endif
+}
+
+static cardio::promise<void> PrepareLogin(const MuonConfig& config,
+    const std::vector<std::filesystem::path>& paths, bool setup,
+    bool& show_ui, int& result, std::function<void()> finished) {
+  std::shared_ptr<MuonServiceSession> session;
+  result = 1;
+  try {
+    session = CreateMuonBuiltinServiceSession(config, paths, setup, !setup);
+    co_await session->Start();
+    show_ui = !setup && (co_await session->Call("@login", "getUiAutostart", "{}")) == "true";
+    result = 0;
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "muon login startup failed: %s\n", error.what());
+  }
+  try { if (session) co_await session->Stop(false); }
+  catch (const std::exception& error) {
+    result = 1;
+    std::fprintf(stderr, "muon login detach failed: %s\n", error.what());
+  }
+  finished();
 }
 
 NO_STACK_PROTECTOR static int RunMuon(int argc, char* argv[]) {
@@ -132,6 +155,37 @@ NO_STACK_PROTECTOR static int RunMuon(int argc, char* argv[]) {
     return result;
   }
 #endif
+
+  bool login = false;
+  bool setup = false;
+  bool subprocess = false;
+  for (const auto& argument : GetMuonStartupCommandLine()) {
+    login |= argument == "--muon-autostart";
+    setup |= argument == "--muon-register-autostart";
+    subprocess |= argument.starts_with("--type=");
+  }
+  if (!subprocess && (login || setup)) {
+    // Read persistent UI policy and activate services without initializing CEF.
+    // A regular launcher invocation still opens UI regardless of this policy.
+    bool show_ui = false;
+    int result = 1;
+#if CARDIO_WITH_GLIB
+    auto* loop = g_main_loop_new(nullptr, FALSE);
+    auto pending = PrepareLogin(config, config_paths, setup, show_ui, result,
+        [loop] { g_main_loop_quit(loop); });
+    if (!pending.is_ready()) g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+#elif CARDIO_HAS_WIN32_HANDLE
+    auto pending = PrepareLogin(config, config_paths, setup, show_ui, result, [] {});
+    while (!pending.is_ready()) {
+      MSG message{};
+      if (GetMessageW(&message, nullptr, 0, 0) <= 0) { result = 1; break; }
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
+#endif
+    if (result != 0 || !show_ui) { ShutdownMuonLogger(); return result; }
+  }
 
   auto main_args = CreateMainArgs(argc, argv);
 

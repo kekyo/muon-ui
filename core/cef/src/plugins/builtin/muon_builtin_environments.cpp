@@ -5,8 +5,8 @@
  */
 
 #include "plugins/builtin/muon_builtin_environments.h"
+#include "plugins/builtin/muon_builtin_services.h"
 
-#include "config/muon_autostart.h"
 #include "config/muon_startup.h"
 #include "muon_json_helpers.h"
 #include "plugins/builtin/muon_builtin_completion.h"
@@ -241,46 +241,22 @@ extern "C" void muon_builtin_environments_get_runtime_info(
 
 extern "C" void muon_builtin_environments_get_autostart(
     muon_completion_func completion) {
-  MuonAutostartOptions options;
-  std::string error_message;
-  if (!CreateDefaultMuonAutostartOptions(&options, &error_message)) {
-    CompleteMuonError(completion, error_message);
+  const auto source = GetMuonStartupLaunchSource();
+  if (source != kMuonLaunchSourceNone && source != kMuonLaunchSourceNormal) {
+    CompleteMuonString(completion, "null");
     return;
   }
-
-  MuonAutostartStatus status = kMuonAutostartStatusUnknown;
-  if (!GetMuonAutostartStatus(options, &status, &error_message)) {
-    CompleteMuonError(completion, error_message);
-    return;
-  }
-  switch (status) {
-    case kMuonAutostartStatusDisabled:
-      CompleteMuonString(completion, "false");
-      return;
-    case kMuonAutostartStatusEnabled:
-      CompleteMuonString(completion, "true");
-      return;
-    case kMuonAutostartStatusUnknown:
-      CompleteMuonString(completion, "null");
-      return;
-  }
-  CompleteMuonString(completion, "null");
+  GetMuonBuiltinUiAutostart(completion);
 }
 
 extern "C" void muon_builtin_environments_set_autostart(
-    muon_completion_func completion,
-    bool enabled) {
-  MuonAutostartOptions options;
-  std::string error_message;
-  if (!CreateDefaultMuonAutostartOptions(&options, &error_message)) {
-    CompleteMuonError(completion, error_message);
+    muon_completion_func completion, bool enabled) {
+  const auto source = GetMuonStartupLaunchSource();
+  if (source != kMuonLaunchSourceNone && source != kMuonLaunchSourceNormal) {
+    CompleteMuonError(completion, "Autostart launch source is unsupported: " + source);
     return;
   }
-  if (!SetMuonAutostart(options, enabled, &error_message)) {
-    CompleteMuonError(completion, error_message);
-    return;
-  }
-  CompleteMuonVoid(completion);
+  SetMuonBuiltinUiAutostart(completion, enabled);
 }
 
 static const muon_plugin_function_metadata get_variables_function = {

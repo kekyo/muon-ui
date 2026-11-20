@@ -3,8 +3,9 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve, win32 } from "node:path";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RemoteAgent, ScreenRect } from "agent-rover";
 import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.js";
@@ -29,9 +30,13 @@ export interface WindowsNotificationDriver {
     actionTitle: string | null,
     screenshotPath: string,
   ): Promise<void>;
-  /** Observes absence in an open notification center.
+  /** Reads the titles currently stored by Windows for this application.
+   * @returns One title per notification in the application's history.
+   */
+  getHistoryTitles(): Promise<string[]>;
+  /** Checks removal after the application completes cancellation or replacement.
    * @param title Exact test notification title.
-   * @returns When the notification is absent from the visible center.
+   * @returns When the notification is absent from history and the visible UI.
    */
   waitForRemoval(title: string): Promise<void>;
   /** Changes the OS notification switch through the Settings UI.
@@ -47,6 +52,72 @@ export interface WindowsNotificationDriver {
 }
 
 const psLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
+/** Captures a notification after its screen position and pixels settle.
+ * @param bounds Reads the current notification group's physical screen bounds.
+ * @param screenshot Captures the supplied rectangle without changing the UI.
+ * @returns The complete notification image.
+ */
+export const captureWindowsNotification = async (
+  bounds: () => Promise<ScreenRect>,
+  screenshot: (rectangle: ScreenRect) => Promise<Buffer>,
+): Promise<Buffer> => {
+  const sameBounds = (left: ScreenRect, right: ScreenRect): boolean =>
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height;
+  const deadline = performance.now() + 30000;
+  let previous: { bounds: ScreenRect; image: Buffer } | undefined;
+  do {
+    const before = await bounds();
+    const image = await screenshot(before);
+    const after = await bounds();
+    // UIA visibility precedes the shell's slide/expand animation. Both the
+    // rectangle around this capture and the next captured frame must agree.
+    if (sameBounds(before, after)) {
+      if (
+        previous &&
+        sameBounds(previous.bounds, after) &&
+        previous.image.equals(image)
+      )
+        return image;
+      previous = { bounds: after, image };
+    } else previous = undefined;
+  } while (performance.now() < deadline);
+  throw new Error(
+    "Notification position and pixels did not settle for capture",
+  );
+};
+
+/** Creates a directory for one notification test run without replacing evidence.
+ * @param parent Parent directory grouping captures for this test mode.
+ * @returns A new local artifact directory.
+ */
+export const createWindowsNotificationArtifacts = async (
+  parent: string,
+): Promise<string> => {
+  await mkdir(parent, { recursive: true });
+  return await mkdtemp(join(parent, "run-"));
+};
+
+/** Records opening motion and the stable notification before allowing cleanup.
+ * @typeParam T Recorded video metadata.
+ * @param video In-progress opening video capture.
+ * @param notification In-progress notification observation and screenshot.
+ * @returns Video metadata after both operations have finished.
+ */
+export const captureWindowsNotificationOpening = async <T>(
+  video: Promise<T>,
+  notification: Promise<void>,
+): Promise<T> => {
+  // Neither capture may outlive the observer whose executable and DLLs are
+  // removed in the caller's finally block, including after a recording error.
+  const [recorded, observed] = await Promise.allSettled([video, notification]);
+  if (recorded.status === "rejected") throw recorded.reason;
+  if (observed.status === "rejected") throw observed.reason;
+  return recorded.value;
+};
 
 /** Creates an observer for the English Windows test machine.
  * @param agent Existing agent-rover connection, owned by the caller.
@@ -66,22 +137,24 @@ export const createWindowsNotificationDriver = async (
   const target = resolveWindowsRuntimeTarget(
     process.env.MUON_E2E_WINDOWS_TARGET,
   );
-  const observer = win32.join(
+  const observerDirectory = win32.join(
     environment.workDir,
     "notifications",
     target.target,
-    `observer-${process.pid}`,
+    `observer-${randomUUID()}`,
+  );
+  const observer = win32.join(
+    observerDirectory,
     "muon_notification_windows_observer.exe",
   );
   const execute = async (
     path: string,
     args: string[],
     timeoutMs: number,
-  ): Promise<string> => {
+  ): Promise<void> => {
     const process = await agent.processes.launchManaged({
       path,
       arguments: args,
-      captureStdout: true,
       captureStderr: true,
       createNoWindow: true,
     });
@@ -89,12 +162,18 @@ export const createWindowsNotificationDriver = async (
       const result = await process.waitForExit({ timeoutMs });
       if (result.root.exitCode !== 0)
         throw new Error(`${path}: ${await process.stderrText()}`);
-      return (await process.stdoutText()).trim();
+    } catch (error) {
+      const [snapshot] = await Promise.allSettled([process.snapshot()]);
+      console.error(
+        "Windows notification observer at failure:",
+        JSON.stringify({ path, args, snapshot }, null, 2),
+      );
+      throw error;
     } finally {
       await process.releaseAsync();
     }
   };
-  const powershell = async (script: string): Promise<string> =>
+  const powershell = async (script: string): Promise<void> =>
     await execute(
       "powershell.exe",
       [
@@ -108,16 +187,54 @@ export const createWindowsNotificationDriver = async (
       ],
       30000,
     );
+  const getHistoryTitles = async (): Promise<string[]> => {
+    const path = win32.join(observerDirectory, `${randomUUID()}.json`);
+    await powershell(`
+$history = [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]::History.GetHistory(${psLiteral(appId)})
+$titles = @(foreach ($toast in $history) {
+  $document = [xml]($toast.Content.GetXml())
+  $title = $document.SelectSingleNode('/toast/visual/binding/text[1]')
+  if ($null -eq $title) { throw 'Windows notification history entry has no title.' }
+  $title.InnerText
+})
+[IO.File]::WriteAllText(${psLiteral(path)}, (ConvertTo-Json -InputObject $titles -Compress))
+`);
+    return JSON.parse(
+      (await agent.files.readFile(path)).toString("utf8"),
+    ) as string[];
+  };
+  const observe = async (
+    operation: string,
+    title: string,
+    action: string,
+  ): Promise<string> => {
+    // Each invocation publishes its own reply before exiting, including actions
+    // that must only be performed once.
+    const resultPath = win32.join(observerDirectory, `${randomUUID()}.json`);
+    try {
+      await execute(
+        observer,
+        [operation, title, displayName, action, resultPath],
+        35000,
+      );
+      return (await agent.files.readFile(resultPath)).toString("utf8");
+    } catch (error) {
+      throw new Error(
+        `Windows notification ${operation}: ${title}; action=${action || "<default>"}`,
+        { cause: error },
+      );
+    }
+  };
   const setting = async (desired: boolean | undefined): Promise<boolean> => {
     await agent.applications.launch({
       path: "explorer.exe",
       arguments: ["ms-settings:notifications"],
     });
     await agent.waitForWindow({ title: "Settings" }, { timeoutMs: 10000 });
-    const result = await execute(
-      observer,
-      ["setting", "", "", desired === undefined ? "" : desired ? "1" : "0"],
-      35000,
+    const result = await observe(
+      "setting",
+      "",
+      desired === undefined ? "" : desired ? "1" : "0",
     );
     if (result !== "0" && result !== "1")
       throw new Error(`Unknown notification switch: ${result}`);
@@ -126,41 +243,29 @@ export const createWindowsNotificationDriver = async (
   let initial: boolean | undefined;
   let closed = false;
   let openedCenter = false;
-  const observe = async (
-    operation: string,
-    title: string,
-    action: string,
-  ): Promise<string> => {
-    try {
-      return await execute(
-        observer,
-        [operation, title, displayName, action],
-        35000,
-      );
-    } catch (error) {
-      throw new Error(
-        `Windows notification ${operation}: ${title}; action=${action || "<default>"}`,
-        { cause: error },
-      );
-    }
-  };
-  const center = async (): Promise<void> => {
-    if ((await observe("center", "", "")) === "false") {
+  const openCenter = async (refresh: boolean): Promise<void> => {
+    const wasOpen = (await observe("center", "", "")) === "true";
+    if (wasOpen) {
+      if (!refresh) return;
       await agent.keyboard.press("n", { modifiers: ["Meta"] });
-      openedCenter = true;
+      await observe("center-closed", "", "");
     }
+    await agent.keyboard.press("n", { modifiers: ["Meta"] });
+    if (!wasOpen) openedCenter = true;
   };
   const capture = async (
     title: string,
     action: string,
     path: string,
   ): Promise<void> => {
-    await center();
-    const bounds = JSON.parse(
-      await observe("prepare", title, action),
-    ) as ScreenRect;
+    await openCenter(false);
+    const image = await captureWindowsNotification(
+      async () =>
+        JSON.parse(await observe("prepare", title, action)) as ScreenRect,
+      async (bounds) => (await agent.screenshot({ rect: bounds })).image,
+    );
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, (await agent.screenshot({ rect: bounds })).image);
+    await writeFile(path, image);
   };
   const close = async (): Promise<void> => {
     if (closed) return;
@@ -175,15 +280,15 @@ try{$key=$root.OpenSubKey('Software\\Classes\\AppUserModelId',$true);if($null -n
       try {
         if (initial !== undefined) await setting(initial);
       } finally {
-        if (await agent.files.exists(win32.dirname(observer)))
-          await agent.files.remove(win32.dirname(observer), {
+        if (await agent.files.exists(observerDirectory))
+          await agent.files.remove(observerDirectory, {
             recursive: true,
           });
       }
     }
   };
   try {
-    await agent.files.mkdir(win32.dirname(observer), { recursive: true });
+    await agent.files.mkdir(observerDirectory, { recursive: true });
     await agent.files.writeFile(
       observer,
       await readFile(
@@ -196,13 +301,14 @@ try{$key=$root.OpenSubKey('Software\\Classes\\AppUserModelId',$true);if($null -n
       ),
     );
     for (const name of [
+      "libcardio.dll",
       "libstdc++-6.dll",
       target.target === "windows-amd64"
         ? "libgcc_s_seh-1.dll"
         : "libgcc_s_dw2-1.dll",
     ]) {
       await agent.files.writeFile(
-        win32.join(win32.dirname(observer), name),
+        win32.join(observerDirectory, name),
         await readFile(
           resolve(
             fileURLToPath(new URL("../../", import.meta.url)),
@@ -223,8 +329,15 @@ try{$key=$root.OpenSubKey('Software\\Classes\\AppUserModelId',$true);if($null -n
       await capture(title, action ?? "", path);
       await observe("activate", title, action ?? "");
     },
+    getHistoryTitles,
     waitForRemoval: async (title) => {
-      await center();
+      if ((await getHistoryTitles()).includes(title))
+        throw new Error(
+          `Notification still in Windows notification history: ${title}`,
+        );
+      // The open Windows panel can retain a removed row until it is reopened.
+      // Check the visible contents of a fresh panel after verifying OS history.
+      await openCenter(true);
       await observe("removed", title, "");
     },
     setEnabled: async (enabled) => {

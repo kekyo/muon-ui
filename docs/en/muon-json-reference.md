@@ -1,6 +1,6 @@
 # muon.json reference
 
-See [building and distributing Android apps](./android.md) for the `android` section, supported common settings, and signing. The CEF settings and Node.js sidecar below apply to desktop applications.
+For the `android` section, supported common settings, and signing, see [building and distributing Android apps](./android.md). CEF settings apply to desktop apps.
 
 `muon.json` determines muon's behavior, and some features can only be decided by this file.
 In particular, whitelists that permit behavior cannot be changed programmatically.
@@ -95,7 +95,7 @@ The following is an example of `muon.json`:
 | `config` | `readonly object` | `{}` | Application string key-value settings available to renderer code. |
 | `notifications` | `object` | `{ "enabled": false }` | Shared local notification settings for Android and CEF. |
 | `android` | `object` | None | [Android build and display settings](./android.md). |
-| `node` | `object` | none | Optional Node.js sidecar project. |
+| `services` | `object` | `{}` | Services that run independently of the UI. |
 
 - `iconPath` accepts only `.png`. Relative paths are resolved from the directory where `muon.json` is located.
 - `iconPath` is the shared source for Windows PE/NSIS, Linux desktop, and the startup title-bar icon.
@@ -103,6 +103,23 @@ The following is an example of `muon.json`:
   Therefore, if an existing asset has the same entry, the build fails.
 - To use separate icons only for Windows or only for Linux, specify `windows.resource.iconPath` or `linux.desktop.iconPath` respectively as overrides.
 - To change only the title-bar icon of a normal browser window at runtime, use `window.muon.browser.setTitleBarIcon()`.
+
+## services key
+
+Keys are service IDs of up to 64 ASCII letters, digits, `_`, `.`, or `-`, starting with a letter. Paths are resolved relative to this configuration file.
+
+| Key | Type | Default or condition | Meaning |
+| --- | --- | --- | --- |
+| `runtime` | `"native" \| "quickjs" \| "node"` | Required | Service runtime. The `node` runtime is available on desktop. |
+| `artifact` | `string` | Required for native | SDK-generated service artifact `muon-plugin.json` |
+| `project` | `string` | Required for Node.js | Directory containing the service’s `package.json`. Relative paths resolve from `muon.json`. |
+| `entry` | `string` | Required for QuickJS and Node.js | JS/TS file with a `defineService()` default export. Node.js resolves this path relative to `project`. |
+| `autostart` | `boolean` | `false` | Resident preference when no saved user override exists |
+| `config` | `object` | `{}` | String keys and values supplied to the service; NUL is disallowed |
+| `plugins` | `object` | QuickJS only | Named native plugins with `native`, `allow`, and optional `config` |
+| `android` | `object` | Required for Android | `foregroundServiceType` and `notification`; specialUse also requires `specialUseSubtype` |
+
+See the [service guide](services.md) for implementations, Android purposes and notifications, autostart changes, and page communication. Grant page access separately under `plugin`.
 
 ## config key
 
@@ -149,26 +166,6 @@ Enabling notifications does not request OS permission implicitly. Also allow the
 
 Starting an application from a notification also requires OS support and deployment registration. `enabled: true` alone does not guarantee launch support. See the [shared notification API](./muon-built-in-plugin-reference.md#shared-notification-api) and [notification deployment registration](./package-install-location-advanced-topics.md#notification-deployment-registration).
 
-
-## node key
-
-Set `node.project` to the directory of an ordinary Node.js project to enable the out-of-process Node.js sidecar. A relative path is resolved from the directory of the configuration file that defines it; an absolute path is also accepted.
-
-```json
-{
-  "node": {
-    "project": "./backend"
-  }
-}
-```
-
-When `node` is present, `project` must be a non-empty string. It refers to an ordinary Node.js project: manage `type`, `main`, `exports`, `imports`, `dependencies`, and `engines.node` in `package.json` using normal Node.js conventions. No muon-specific extension is required in the Node project's `package.json`. Node.js integration is enabled solely by `node.project`; it does not depend on `plugin.mode` or any `plugin.plugins[]` setting.
-
-When `engines.node` is specified, muon normalizes its intersection with the Node bridge compatibility range and embeds it in the artifact as the internal `launcher.nodeRuntime` value. When it is omitted, the Node bridge compatibility range is used and the newest matching LTS release is selected. If none matches, preparation fails without falling back to a non-LTS release. When `engines.node` is specified, muon selects the greatest matching LTS release, or the greatest matching release of any kind when no LTS release matches. The launcher uses the official Node.js `https://nodejs.org/dist/index.json` and the selected version's `SHASUMS256.txt`, verifies the archive with SHA-256, and prepares it under `runtimes/node/`.
-
-`muon build` and `muon pack` include the Node project, `node.so` or `node.dll`, `node-bridge.mjs`, and the normalized runtime requirement. They do not include a Node.js executable, distribution archive, or download cache. When the runtime requirement is required for execution, the executable is prepared before development startup, by `muon run`, or by the distribution launcher. Only `runtimes/node/LICENSE` and `runtimes/node/bin/node` (`node.exe` on Windows) are installed; npm and Corepack are omitted. The Node plugin uses only the absolute path to this executable, with no environment-variable or `PATH` fallback.
-
-In the default validate mode, import `createNode()` from Vite's `muon:node` virtual module. In simple mode, use `window.muon.node.createNode()`. In either mode, each `createNode()` call starts an independent Node sidecar process. The Node interoperation API requires no `plugin.plugins[].imports` entry or allow setting, and the reserved `node` plugin cannot be configured directly through `plugin.plugins[]`. The Node.js runtime is prepared in both modes. See [Using the Node.js sidecar](./nodejs-sidecar.md) for development, build, distribution, runtime selection, API, and value restrictions.
 
 ## browser key
 
@@ -485,4 +482,4 @@ Logs are not output for sources set to `off`.
 | `defaultVersionPolicy` | `string` | `"tested"` | CEF version policy used when `versionPolicy` is not saved in `muon-launcher.ini`. |
 
 > Note: `appId`, which is not listed here, is automatically calculated and inserted during `muon build` or `muon pack`.
-> When `node.project` is present, the normalized requirement generated from the Node project and Node bridge is also inserted as the internal `nodeRuntime` value. Specifying `launcher.nodeRuntime` as a user setting is a build error.
+> For Node.js services, muon generates `launcher.nodeRuntime` from each service’s `engines.node` and the versions muon supports. Setting this field in user configuration produces a build error.

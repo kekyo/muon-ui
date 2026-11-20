@@ -24,7 +24,7 @@ android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 
 Runtime code lives in `core/`. The CLI, Vite integration, application builders, and packaging code live in `ui/`. In each component, `common/` contains shared code, while `cef/` and `android/` contain backend implementations. Tests sit beside those directories in `common-test/`, `cef-test/`, and `android-test/`.
 
-`core/android-poc/` contains the QuickJS experiment and its own tests. Native build tools live in `builder/`, and the Node.js host lives in `node/`. The public npm package names remain `muon-ui` for `ui/` and `muon-node` for `node/`.
+`builder/` contains the native build tools and `node/` contains the Node.js service runtime. The public `muon-ui` npm package is built from `ui/`.
 
 ## Build and test
 
@@ -49,13 +49,6 @@ ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-teste
 ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
 ```
 
-Run the QuickJS experiment in its separate workspace:
-
-```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
-```
-
 The independent npm consumer test covers the public CLI/Vite integration, signing, storage, restart, and updates preserving data. It recreates its dedicated device fixture, `dev.muon.e2e.publicconsumer`:
 
 ```bash
@@ -71,7 +64,9 @@ Use the actual tgz version. Before passing `--plugins`, run `npm test --workspac
 
 Windows binary e2e tests require a Windows 11 (amd64) machine running the [agent-rover](https://github.com/kekyo/agent-rover/) remote agent. A virtual machine is also supported. Node.js must be on the remote agent's PATH; Node.js 24 is tested. Restart agent-rover after installing Node.js to pick up the updated PATH.
 
-Connections use agent-rover 0.10.0's standard configuration. Follow the [official connection configuration guide](https://github.com/kekyo/agent-rover/blob/0.10.0/README.md#connection-configuration) to register test machines in `~/.agent-rover` in the home directory of the user running the tests. If they are already registered, there is no need to copy hosts or tokens into environment variables.
+Connections use agent-rover 0.11.0's standard configuration. Follow the [official connection configuration guide](https://github.com/kekyo/agent-rover/blob/0.11.0/README.md#connection-configuration) to register test machines in `~/.agent-rover` in the home directory of the user running the tests. If they are already registered, there is no need to copy hosts or tokens into environment variables.
+
+Use version 0.11.0 for the agent running on Windows as well. When upgrading from 0.10.0, stop the agent on Windows, replace the distribution files, and restart it. See the [official update instructions](https://github.com/kekyo/agent-rover/blob/0.11.0/README.md#updating-the-windows-agent).
 
 Example `~/.agent-rover`:
 

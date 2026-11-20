@@ -21,13 +21,18 @@ import {
 import { inspectPluginBinary, type PluginBinaryInfo } from './binary.js';
 import {
   validatePluginLibraryDependencies,
+  validateServiceLibraryDependencies,
   type PluginLibraryInspection,
 } from './dependencies.js';
 export { inspectPluginBinary } from './binary.js';
-export { validatePluginLibraryDependencies } from './dependencies.js';
+export {
+  validatePluginLibraryDependencies,
+  validateServiceLibraryDependencies,
+} from './dependencies.js';
 import {
   getPluginTarget,
   muonPluginAbiVersion,
+  muonServiceAbiVersion,
   muonPluginNdkVersion,
   muonPluginAndroidApi,
   muonPluginCardioHeaderSha256,
@@ -57,6 +62,7 @@ export interface PluginArtifactTarget {
 }
 /** Common artifact format shared by local builds and NPM packages. */
 export interface PluginArtifactManifest {
+  /** Artifact role; omission means a page plugin. */ readonly kind?: 'plugin';
   /** Manifest schema revision. */ readonly schemaVersion: 1;
   /** Public muon C ABI revision. */ readonly abiVersion: number;
   /** Runtime registration name; independent of the NPM package name. */ readonly name: string;
@@ -67,6 +73,15 @@ export interface PluginArtifactManifest {
   /** Binaries selected by application target, never by the build host. */ readonly targets: Partial<
     Record<MuonPluginTarget, PluginArtifactTarget>
   >;
+}
+/** Native service package containing one factory for independent instances. */
+export interface ServiceArtifactManifest extends Omit<
+  PluginArtifactManifest,
+  'kind' | 'functions'
+> {
+  /** Factory artifact name, independent of configured logical service IDs. */ readonly name: string;
+  /** Required discriminator for service-only artifacts. */ readonly kind: 'service';
+  /** Services do not publish a page plugin function catalog. */ readonly functions?: never;
 }
 /** Verified absolute paths for one artifact target. */
 export interface ResolvedPluginArtifactTarget {
@@ -81,6 +96,13 @@ export interface ResolvedPluginArtifact {
   /** Only the requested targets. */ readonly targets: Partial<
     Record<MuonPluginTarget, ResolvedPluginArtifactTarget>
   >;
+}
+/** Validated service factory package, independent of page plugin registration. */
+export interface ResolvedServiceArtifact extends Omit<
+  ResolvedPluginArtifact,
+  'manifest'
+> {
+  /** Producer metadata for the service factory. */ readonly manifest: ServiceArtifactManifest;
 }
 
 const digest = (data: Buffer): string =>
@@ -127,11 +149,41 @@ const packagePath = async (
 export const readPluginArtifact = async (
   path: string,
   targets: readonly MuonPluginTarget[]
-): Promise<ResolvedPluginArtifact> => {
+): Promise<ResolvedPluginArtifact> =>
+  await readArtifact<PluginArtifactManifest>(path, targets, 'plugin');
+
+/**
+ * Validates a native service artifact without requiring authoring tools.
+ * @param path - Manifest file path.
+ * @param targets - Required application targets.
+ * @returns Verified service factory binaries and producer metadata.
+ * @remarks Requires kind service and the muon_get_service_factory export.
+ */
+export const readServiceArtifact = async (
+  path: string,
+  targets: readonly MuonPluginTarget[]
+): Promise<ResolvedServiceArtifact> =>
+  await readArtifact<ServiceArtifactManifest>(path, targets, 'service');
+
+const readArtifact = async <
+  Manifest extends PluginArtifactManifest | ServiceArtifactManifest,
+>(
+  path: string,
+  targets: readonly MuonPluginTarget[],
+  kind: 'plugin' | 'service'
+): Promise<
+  Omit<ResolvedPluginArtifact, 'manifest'> & { manifest: Manifest }
+> => {
   path = resolve(path);
   const directory = dirname(path);
   const raw = record(JSON.parse(await readFile(path, 'utf8')));
-  if (raw.schemaVersion !== 1 || raw.abiVersion !== muonPluginAbiVersion)
+  if ((raw.kind === undefined ? 'plugin' : raw.kind) !== kind)
+    throw new Error(`Expected ${kind} artifact kind: ${path}`);
+  if (
+    raw.schemaVersion !== 1 ||
+    raw.abiVersion !==
+      (kind === 'service' ? muonServiceAbiVersion : muonPluginAbiVersion)
+  )
     throw new Error(`Unsupported plugin schema or ABI: ${path}`);
   if (
     typeof raw.name !== 'string' ||
@@ -139,15 +191,20 @@ export const readPluginArtifact = async (
     raw.name === 'internal'
   )
     throw new Error('Invalid plugin registration name.');
-  const functions = paths(raw.functions);
-  if (
-    !functions.length ||
-    new Set(functions).size !== functions.length ||
-    functions.some(
-      (item) => !/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){2,}$/.test(item)
+  if (kind === 'service') {
+    if ('functions' in raw)
+      throw new Error('Service artifacts must not contain functions.');
+  } else {
+    const functions = paths(raw.functions);
+    if (
+      !functions.length ||
+      new Set(functions).size !== functions.length ||
+      functions.some(
+        (item) => !/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*){2,}$/.test(item)
+      )
     )
-  )
-    throw new Error('Invalid or duplicate plugin function catalog.');
+      throw new Error('Invalid or duplicate plugin function catalog.');
+  }
   for (const group of ['headers', 'types', 'licenses'])
     for (const item of paths(raw[group])) await packagePath(directory, item);
   const entries = record(raw.targets);
@@ -195,8 +252,10 @@ export const readPluginArtifact = async (
       if (digest(data) !== file.sha256)
         throw new Error(`Plugin SHA-256 mismatch: ${file.path}`);
       const info = inspectPluginBinary(data, target);
-      if (plugin && !info.exports.includes('muon_init_plugin'))
-        throw new Error(`${file.path} must export muon_init_plugin.`);
+      const entryPoint =
+        kind === 'service' ? 'muon_get_service_factory' : 'muon_init_plugin';
+      if (plugin && !info.exports.includes(entryPoint))
+        throw new Error(`${file.path} must export ${entryPoint}.`);
       if (descriptor.os !== 'windows' && info.soname !== basename(absolute))
         throw new Error(
           `${file.path} ELF SONAME must match its packaged name.`
@@ -218,7 +277,9 @@ export const readPluginArtifact = async (
       dependencies.push(inspected.path);
       inspections.push(inspected);
     }
-    validatePluginLibraryDependencies(inspections, target);
+    (kind === 'service'
+      ? validateServiceLibraryDependencies
+      : validatePluginLibraryDependencies)(inspections, target);
     for (const value of entry.linkLibraries) {
       const file = record(value);
       if (
@@ -236,7 +297,7 @@ export const readPluginArtifact = async (
   }
   return {
     path,
-    manifest: raw as unknown as PluginArtifactManifest,
+    manifest: raw as unknown as Manifest,
     targets: resolved,
   };
 };
@@ -252,6 +313,7 @@ export interface PackagePluginTargetInput {
 }
 /** Producer inputs for the common artifact format. */
 export interface PackagePluginOptions {
+  /** Artifact role; omission means a page plugin. */ readonly kind?: 'plugin';
   /** Package output directory, independent of source directories. */ readonly outputDirectory: string;
   /** Plugin registration name. */ readonly name: string;
   /** Complete public function catalog. */ readonly functions: readonly string[];
@@ -262,6 +324,15 @@ export interface PackagePluginOptions {
     Record<MuonPluginTarget, PackagePluginTargetInput>
   >;
 }
+/** Final native service inputs; each target library exports one factory. */
+export interface PackageServiceOptions extends Omit<
+  PackagePluginOptions,
+  'kind' | 'functions'
+> {
+  /** Factory artifact name, independent of configured logical service IDs. */ readonly name: string;
+  /** Required discriminator for the service factory package. */ readonly kind: 'service';
+  /** A service factory has no page plugin function catalog. */ readonly functions?: never;
+}
 
 /**
  * Copies final build outputs and writes their verified artifact manifest.
@@ -271,7 +342,26 @@ export interface PackagePluginOptions {
  */
 export const packagePlugin = async (
   options: PackagePluginOptions
+): Promise<string> => await packageArtifact(options, 'plugin');
+
+/**
+ * Packages final service binaries and validates their factory ABI and dependencies.
+ * @param options - Service metadata and final native files.
+ * @returns Absolute muon-plugin.json path with kind service.
+ * @remarks Finish stripping and signing before packaging; hashes cover final bytes.
+ */
+export const packageService = async (
+  options: PackageServiceOptions
+): Promise<string> => await packageArtifact(options, 'service');
+
+const packageArtifact = async (
+  options: PackagePluginOptions | PackageServiceOptions,
+  kind: 'plugin' | 'service'
 ): Promise<string> => {
+  if ((options.kind === undefined ? 'plugin' : options.kind) !== kind)
+    throw new Error(`Expected ${kind} artifact kind.`);
+  if (kind === 'service' && 'functions' in options)
+    throw new Error('Service artifacts must not contain functions.');
   const destinationRoot = resolve(options.outputDirectory);
   await mkdir(dirname(destinationRoot), { recursive: true });
   const output = await mkdtemp(join(dirname(destinationRoot), '.muon-plugin-'));
@@ -345,11 +435,17 @@ export const packagePlugin = async (
         },
       };
     }
-    const manifest: PluginArtifactManifest = {
+    const manifest: PluginArtifactManifest | ServiceArtifactManifest = {
       schemaVersion: 1,
-      abiVersion: muonPluginAbiVersion,
+      abiVersion:
+        kind === 'service' ? muonServiceAbiVersion : muonPluginAbiVersion,
       name: options.name,
-      functions: options.functions,
+      ...(options.kind === 'service'
+        ? { kind: 'service' as const }
+        : {
+            ...(options.kind ? { kind: options.kind } : {}),
+            functions: options.functions,
+          }),
       headers: await resources(options.headers ?? [], 'include'),
       types: await resources(options.types ?? [], 'types'),
       licenses: await resources(options.licenses ?? [], 'licenses'),
@@ -357,7 +453,7 @@ export const packagePlugin = async (
     };
     const path = join(output, 'muon-plugin.json');
     await writeFile(path, JSON.stringify(manifest, null, 2) + '\n');
-    await readPluginArtifact(path, Object.keys(targets) as MuonPluginTarget[]);
+    await readArtifact(path, Object.keys(targets) as MuonPluginTarget[], kind);
     await cp(output, destinationRoot, { recursive: true });
     return join(destinationRoot, 'muon-plugin.json');
   } finally {

@@ -18,3 +18,5 @@ rootProject.name = "muon-android-tests"
 include(":app")
 include(":observer")
 project(":observer").projectDir = file("../observer")
+include(":serviceDriver")
+project(":serviceDriver").projectDir = file("../service-driver")

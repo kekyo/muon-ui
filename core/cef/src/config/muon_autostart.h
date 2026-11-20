@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 /**
  * Autostart state reported by the platform backend.
@@ -29,8 +30,10 @@ struct MuonAutostartOptions final {
   std::filesystem::path executable_path;
   /** Launch source that selects the platform backend. */
   std::string launch_source;
-  /** Stable application ID for AppImage registrations; empty for other installs. */
+  /** Stable OS entry identity; AppImage launchers initially supply their app ID. */
   std::string appimage_id;
+  /** Literal startup arguments, quoted individually without a command shell. */
+  std::vector<std::string> arguments{};
 };
 
 /**

@@ -43,12 +43,13 @@
   },
   "dependencies": {
     "adm-zip": ">=0.5.0",
+    "chokidar": ">=4.0.3",
     "commander": ">=14.0.0",
-    "funcity": "^1.5.0",
+    "funcity": ">=1.5.0",
     "json5": ">=2.2.0",
     "semver": ">=7.8.5",
-    "sharp": "^0.35.2",
-    "tar-vern": ">=1.3.0"
+    "sharp": ">=0.35.2",
+    "tar-vern": ">=2.0.0"
   },
   "peerDependencies": {
     "vite": ">=5.0.0"
@@ -64,9 +65,9 @@
     "@types/adm-zip": ">=0.5.8",
     "@types/node": ">=24.0.0",
     "@types/semver": ">=7.7.0",
-    "agent-rover": "^0.10.0",
+    "agent-rover": ">=0.11.0",
     "async-primitives": ">=1.7.0",
-    "muon-plugin-sdk": "0.0.1",
+    "muon-plugin-sdk": "*",
     "prettier-max": ">=1.16.0",
     "screw-up": ">=1.35.0",
     "typescript": ">=5.9.0",

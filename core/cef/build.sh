@@ -105,8 +105,8 @@ generate_core_version_header() {
     "${output_path}" >/dev/null
 }
 
-ensure_muon_node_bridge() {
-  local bridge_path="${PROJECT_ROOT}/node/dist/node-bridge.mjs"
+ensure_muon_node_service_bridge() {
+  local bridge_path="${PROJECT_ROOT}/node/dist/node-service-bridge.mjs"
   local bridge_is_stale="0"
   if [[ ! -f "${bridge_path}" ]] ||
       [[ -n "$(find \
@@ -118,13 +118,13 @@ ensure_muon_node_bridge() {
         -type f -newer "${bridge_path}" -print -quit)" ]]; then
     bridge_is_stale="1"
   fi
-  if [[ "${MUON_NODE_BRIDGE_PREBUILT:-0}" != "1" &&
+  if [[ "${MUON_NODE_SERVICE_BRIDGE_PREBUILT:-0}" != "1" &&
       "${bridge_is_stale}" == "1" ]]; then
     command -v npm >/dev/null || { echo "npm is required" >&2; exit 1; }
     npm run build --workspace muon-node
   fi
   if [[ ! -f "${bridge_path}" ]]; then
-    echo "muon-node bridge was not generated: ${bridge_path}" >&2
+    echo "Node.js service bridge was not generated: ${bridge_path}" >&2
     exit 1
   fi
 }
@@ -336,8 +336,9 @@ case "${TARGET_NAME}" in
     ;;
 esac
 
-ensure_muon_node_bridge
+ensure_muon_node_service_bridge
 
+node "${SCRIPT_DIR}/../common/prepare-quickjs-source.mjs"
 bash "${SCRIPT_DIR}/build_yyjson.sh"
 YYJSON_ARGS=("-DYYJSON_SOURCE_DIR=${OUTPUT_ROOT}/.deps/src/yyjson-${YYJSON_VERSION}/src")
 bash "${SCRIPT_DIR}/build_llhttp.sh"

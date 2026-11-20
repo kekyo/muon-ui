@@ -113,9 +113,6 @@ static constexpr char kMuonConfigPluginEntryAllowKey[] = "allow";
 static constexpr char kMuonConfigPluginEntryImportsKey[] = "imports";
 static constexpr char kMuonConfigPluginEntryConfigKey[] = "config";
 static constexpr char kMuonInternalPluginName[] = "internal";
-static constexpr char kMuonNodePluginName[] = "node";
-static constexpr char kMuonConfigNodeKey[] = "node";
-static constexpr char kMuonConfigNodeProjectKey[] = "project";
 static constexpr char kMuonConfigLogKey[] = "log";
 static constexpr char kMuonConfigLogLevelKey[] = "level";
 static constexpr char kMuonConfigLogOutputKey[] = "output";
@@ -242,12 +239,12 @@ struct MuonConfigPathBases final {
   bool has_log_output_path = false;
   std::filesystem::path plugin_path;
   bool has_plugin_path = false;
-  std::filesystem::path node_project;
-  bool has_node_project = false;
   std::filesystem::path asset_from;
   bool has_asset_from = false;
   std::filesystem::path notification_icon;
   bool has_notification_icon = false;
+  std::filesystem::path service_registry;
+  bool has_service_registry = false;
 };
 
 struct MuonEmbeddedConfigSlotState final {
@@ -875,11 +872,6 @@ static bool HasPluginPath(yyjson_val* root) {
   return GetObjectValue(plugin, kMuonConfigPluginPathKey) != nullptr;
 }
 
-static bool HasNodeProject(yyjson_val* root) {
-  const auto node = GetObjectValue(root, kMuonConfigNodeKey);
-  return GetObjectValue(node, kMuonConfigNodeProjectKey) != nullptr;
-}
-
 static bool HasAssetFromPath(yyjson_val* root) {
   const auto asset = GetObjectValue(root, kMuonConfigAssetKey);
   return GetObjectValue(asset, kMuonConfigAssetSourcePathKey) != nullptr;
@@ -895,6 +887,10 @@ static bool HasNotificationIconPath(yyjson_val* root) {
   const auto launcher = GetObjectValue(root, kMuonConfigLauncherKey);
   const auto registration = GetObjectValue(launcher, "notificationRegistration");
   return GetObjectValue(registration, "iconPath") != nullptr;
+}
+
+static bool HasServiceRegistryPath(yyjson_val* root) {
+  return GetObjectValue(GetObjectValue(root, "serviceHost"), "registry") != nullptr;
 }
 
 static void UpdateConfigPathBases(
@@ -916,10 +912,6 @@ static void UpdateConfigPathBases(
     path_bases->plugin_path = base_directory;
     path_bases->has_plugin_path = true;
   }
-  if (HasNodeProject(root)) {
-    path_bases->node_project = base_directory;
-    path_bases->has_node_project = true;
-  }
   if (HasAssetFromPath(root)) {
     path_bases->asset_from = base_directory;
     path_bases->has_asset_from = true;
@@ -927,6 +919,10 @@ static void UpdateConfigPathBases(
   if (HasNotificationIconPath(root)) {
     path_bases->notification_icon = base_directory;
     path_bases->has_notification_icon = true;
+  }
+  if (HasServiceRegistryPath(root)) {
+    path_bases->service_registry = base_directory;
+    path_bases->has_service_registry = true;
   }
 }
 
@@ -948,10 +944,6 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
     config->plugin.path =
         ResolveFilesystemPath(path_bases.plugin_path, config->plugin.path);
   }
-  if (HasNodeProject(root) && path_bases.has_node_project) {
-    config->node.project = ResolveFilesystemPath(
-        path_bases.node_project, config->node.project);
-  }
   if (HasAssetFromPath(root) && path_bases.has_asset_from) {
     config->asset.from =
         ResolveFilesystemPath(path_bases.asset_from, config->asset.from);
@@ -959,6 +951,10 @@ static void ResolveConfigPathsFromBases(yyjson_val* root,
   if (HasNotificationIconPath(root) && path_bases.has_notification_icon) {
     config->notifications.windows_icon_path = ResolveFilesystemPath(
         path_bases.notification_icon, config->notifications.windows_icon_path);
+  }
+  if (HasServiceRegistryPath(root) && path_bases.has_service_registry) {
+    config->service_registry = ResolveFilesystemPath(
+        path_bases.service_registry, config->service_registry);
   }
 }
 
@@ -2525,32 +2521,6 @@ static bool ReadApplicationConfig(yyjson_val* root,
                           &config->config, error_message);
 }
 
-static bool ReadNodeConfig(yyjson_val* root,
-                           MuonConfig* config,
-                           std::string* error_message) {
-  const auto node = yyjson_obj_get(root, kMuonConfigNodeKey);
-  if (node == nullptr) {
-    return true;
-  }
-  if (!yyjson_is_obj(node)) {
-    *error_message = "muon.json node must be an object";
-    return false;
-  }
-
-  const auto project = yyjson_obj_get(node, kMuonConfigNodeProjectKey);
-  if (project == nullptr || !yyjson_is_str(project)) {
-    *error_message = "muon.json node.project must be a string";
-    return false;
-  }
-  config->node.project = FilesystemPathFromUtf8(ReadJsonString(project));
-  if (config->node.project.empty()) {
-    *error_message = "muon.json node.project must not be empty";
-    return false;
-  }
-  config->node.has_project = true;
-  return true;
-}
-
 static bool ReadPluginConfig(yyjson_val* root,
                              MuonConfig* config,
                              std::string* error_message) {
@@ -2624,12 +2594,6 @@ static bool ReadPluginConfig(yyjson_val* root,
     MuonPluginEntryConfig plugin_config;
     plugin_config.name = ReadJsonString(name_value);
     if (!ValidateMuonPluginEntryName(plugin_config.name, error_message)) {
-      return false;
-    }
-    if (plugin_config.name == kMuonNodePluginName) {
-      *error_message =
-          "muon.json plugin.plugins entry name 'node' is reserved; "
-          "configure top-level node.project instead";
       return false;
     }
     if (plugin_names.find(plugin_config.name) != plugin_names.end()) {
@@ -3007,6 +2971,65 @@ static bool ReadNotificationsConfig(yyjson_val* root,
   return true;
 }
 
+static bool ReadServiceHostConfig(yyjson_val* root,
+                                  MuonConfig* config,
+                                  std::string* error_message) {
+  const auto value = yyjson_obj_get(root, "serviceHost");
+  if (!value) return true;
+  if (!yyjson_is_obj(value)) {
+    *error_message = "muon.json serviceHost must be an object";
+    return false;
+  }
+  size_t index, count;
+  yyjson_val *key, *field;
+  yyjson_obj_foreach(value, index, count, key, field) {
+    (void)field;
+    const auto name = ReadJsonString(key);
+    if (name != "registry" && name != "development" && name != "endpoint") {
+      *error_message = "Unknown muon.json serviceHost option: " + name;
+      return false;
+    }
+  }
+  const auto development = yyjson_obj_get(value, "development");
+  if (development && !yyjson_is_bool(development)) {
+    *error_message = "muon.json serviceHost.development must be boolean";
+    return false;
+  }
+  config->service_development = yyjson_get_bool(development);
+  const auto valid_text = [](yyjson_val* text) {
+    return yyjson_is_str(text) && yyjson_get_len(text) != 0 &&
+        std::strlen(yyjson_get_str(text)) == yyjson_get_len(text) &&
+        !TrimAscii(yyjson_get_str(text)).empty();
+  };
+  const auto registry = yyjson_obj_get(value, "registry");
+  if ((registry && !valid_text(registry)) || (!registry && !config->service_development)) {
+    *error_message = "muon.json serviceHost requires a nonempty registry path without NUL, or development mode";
+    return false;
+  }
+  if (registry) config->service_registry = FilesystemPathFromUtf8(ReadJsonString(registry));
+  const auto endpoint = yyjson_obj_get(value, "endpoint");
+  if (endpoint) {
+    if (!config->service_development || !valid_text(endpoint)) {
+      *error_message = "muon.json serviceHost.endpoint requires development mode and a nonempty local endpoint";
+      return false;
+    }
+    config->service_endpoint = ReadJsonString(endpoint);
+#if defined(_WIN32)
+    const auto prefix = std::string("\\\\.\\pipe\\muon-service-");
+    const auto valid = config->service_endpoint.starts_with(prefix) &&
+        config->service_endpoint.size() > prefix.size() && config->service_endpoint.size() <= 256 &&
+        config->service_endpoint.find('\\', prefix.size()) == std::string::npos;
+#else
+    const auto valid = FilesystemPathFromUtf8(config->service_endpoint).is_absolute();
+#endif
+    if (!valid) {
+      *error_message = "muon.json serviceHost.endpoint must identify a local absolute service endpoint";
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool ReadMuonConfigRoot(yyjson_val* root,
                                MuonConfig* config,
                                std::string* error_message) {
@@ -3015,9 +3038,9 @@ static bool ReadMuonConfigRoot(yyjson_val* root,
     return false;
   }
   return ReadLauncherConfig(root, config, error_message) &&
+         ReadServiceHostConfig(root, config, error_message) &&
          ReadNotificationsConfig(root, config, error_message) &&
          ReadApplicationConfig(root, config, error_message) &&
-         ReadNodeConfig(root, config, error_message) &&
          ReadAssetConfig(root, config, error_message) &&
          ReadLogConfig(root, config, error_message) &&
          ReadBrowserConfig(root, config, error_message) &&

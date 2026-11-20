@@ -3,15 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import {
-  copyFile,
-  cp,
-  mkdir,
-  readFile,
-  realpath,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -27,8 +19,6 @@ declare const __MUON_NODE_SUPPORTED_ENGINE_RANGE__: string;
 
 type JsonObject = Record<string, unknown>;
 
-const stagedNodeProjectDirectoryName = "node-project";
-const nodeBridgeFileName = "node-bridge.mjs";
 const supportedNodeRange = __MUON_NODE_SUPPORTED_ENGINE_RANGE__;
 
 /**
@@ -40,7 +30,7 @@ export interface MuonNodeRuntimeRequirement {
   readonly required: boolean;
   /** Whether `package.json` explicitly contains `engines.node`. */
   readonly engineRangeSpecified: boolean;
-  /** Original `package.json` `engines.node` text, or `*` when omitted. */
+  /** Original engines range for one project, or the intersection for multiple projects. */
   readonly engineRange: string;
   /**
    * Normalized comparator sets accepted by both the project and muon bridge.
@@ -52,7 +42,7 @@ export interface MuonNodeRuntimeRequirement {
 }
 
 /**
- * Node project selected by the `node.project` muon configuration.
+ * Node.js service project and its runtime engine requirements.
  */
 export interface ResolvedMuonNodeProject {
   /** Absolute source directory copied into a muon runtime. */
@@ -163,54 +153,74 @@ const readNodeEngineRequirement = async (
 };
 
 /**
- * Creates the native runtime constraint for a resolved Node project.
- *
- * @param project Resolved Node project, or `undefined` when Node is disabled.
- * @param required Whether absence of a matching runtime is fatal.
- * @returns The launcher/runtime requirement, or `undefined` for a non-Node app.
+ * Combines the Node.js service projects into one required runtime constraint.
+ * @param projects - Service projects built for the application.
+ * @returns The runtime requirement when at least one Node.js service is configured.
  */
 export const createMuonNodeRuntimeRequirement = (
-  project: ResolvedMuonNodeProject | undefined,
-  required: boolean,
-): MuonNodeRuntimeRequirement | undefined =>
-  project === undefined
-    ? undefined
-    : {
-        required,
-        engineRangeSpecified: project.engineRangeSpecified,
-        engineRange: project.engineRange,
-        comparatorSets: project.comparatorSets,
-      };
+  projects: readonly ResolvedMuonNodeProject[],
+): MuonNodeRuntimeRequirement | undefined => {
+  if (projects.length === 0) return undefined;
+  let sets = projects[0]!.comparatorSets;
+  for (const current of projects.slice(1)) {
+    const merged: string[][] = [];
+    for (const left of sets)
+      for (const right of current.comparatorSets) {
+        if (comparatorSetsIntersect(left, right))
+          merged.push([...new Set([...left, ...right])]);
+      }
+    sets = [...new Map(merged.map((set) => [set.join(" "), set])).values()];
+    if (!sets.length)
+      throw new Error(
+        `Muon Node projects require incompatible engines.node ranges: ${projects.map((item) => `${item.sourcePath}: ${item.engineRange}`).join("; ")}`,
+      );
+  }
+  return {
+    required: true,
+    engineRangeSpecified: projects.some((item) => item.engineRangeSpecified),
+    engineRange:
+      projects.length === 1
+        ? projects[0]!.engineRange
+        : sets.map((set) => set.join(" ") || "*").join(" || "),
+    comparatorSets: sets,
+  };
+};
 
 /**
- * Resolves and validates an optional Node project from muon configuration.
- *
- * @param config Parsed muon configuration object.
- * @param configDirectory Directory used to resolve a relative `node.project`.
- * @returns The resolved project, or `undefined` when Node hosting is not enabled.
+ * Resolves service project directories without compiling their source files.
+ * @param config - Muon configuration, including the optional services map.
+ * @param directory - Directory containing that configuration.
+ * @returns Projects that must be protected from asset exposure or cleanup.
+ */
+export const resolveMuonNodeServiceProjects = async (
+  config: Readonly<JsonObject> | undefined,
+  directory: string,
+): Promise<readonly ResolvedMuonNodeProject[]> => {
+  if (!isJsonObject(config?.services)) return [];
+  const projects: ResolvedMuonNodeProject[] = [];
+  for (const [id, value] of Object.entries(config.services)) {
+    if (!isJsonObject(value) || value.runtime !== "node") continue;
+    try {
+      projects.push(await resolveMuonNodeProject(value.project, directory));
+    } catch (error) {
+      throw new Error(`services.${id}: ${getErrorMessage(error)}`);
+    }
+  }
+  return projects;
+};
+
+/**
+ * Resolves the project directory and engine range of a Node.js service.
+ * @param project - Configured service project path.
+ * @param configDirectory - Directory containing the configuration.
+ * @returns The resolved service project.
  */
 export const resolveMuonNodeProject = async (
-  config: Readonly<JsonObject> | undefined,
+  project: unknown,
   configDirectory: string,
-): Promise<ResolvedMuonNodeProject | undefined> => {
-  const node = config?.node;
-  if (node === undefined) {
-    return undefined;
-  }
-  if (!isJsonObject(node)) {
-    throw new Error("muon.json node must be an object");
-  }
-
-  const project = node.project;
-  if (project === undefined) {
-    throw new Error("muon.json node.project is required when node is present");
-  }
-  if (typeof project !== "string") {
-    throw new Error("muon.json node.project must be a string");
-  }
-  if (project.trim().length === 0) {
-    throw new Error("muon.json node.project must not be empty");
-  }
+): Promise<ResolvedMuonNodeProject> => {
+  if (typeof project !== "string" || project.trim().length === 0)
+    throw new Error("project must be a non-empty string");
 
   const configuredSourcePath = resolve(configDirectory, project);
   if (!(await isDirectory(configuredSourcePath))) {
@@ -233,46 +243,18 @@ export const resolveMuonNodeProject = async (
 };
 
 /**
- * Rewrites a resolved Node project to its packaged runtime location.
- *
- * @param config Source muon configuration.
- * @param project Resolved Node project, when enabled.
- * @returns Configuration suitable for embedding in a built distribution.
- */
-export const createPackagedMuonNodeConfig = (
-  config: Readonly<JsonObject>,
-  project: ResolvedMuonNodeProject | undefined,
-): JsonObject => {
-  if (project === undefined) {
-    return { ...config };
-  }
-
-  const node = config.node;
-  if (!isJsonObject(node)) {
-    throw new Error("muon.json node must be an object");
-  }
-  return {
-    ...config,
-    node: {
-      ...node,
-      project: `./${stagedNodeProjectDirectoryName}`,
-    },
-  };
-};
-
-/**
  * Verifies that staging cannot remove or recursively copy the Node source.
  *
- * @param project Resolved Node project, when enabled.
+ * @param projects Resolved Node.js service projects.
  * @param runtimeDirectory Runtime directory replaced or used for staging.
  * @returns A promise that resolves when the paths are disjoint.
  */
 export const assertMuonNodeProjectStagingIsSafe = (
-  project: ResolvedMuonNodeProject | undefined,
+  projects: readonly ResolvedMuonNodeProject[],
   runtimeDirectory: string,
 ): Promise<void> =>
   assertMuonNodeProjectPathIsDisjoint(
-    project,
+    projects,
     runtimeDirectory,
     "runtime directory",
   );
@@ -280,20 +262,24 @@ export const assertMuonNodeProjectStagingIsSafe = (
 /**
  * Verifies that a Node project cannot be exposed through the app asset source.
  *
- * @param project Resolved Node project, when enabled.
+ * @param projects Resolved Node.js service projects.
  * @param assetSourcePath Directory or ZIP path used as application assets.
  * @returns A promise that resolves when the paths are disjoint.
  */
 export const assertMuonNodeProjectAssetSourceIsSafe = (
-  project: ResolvedMuonNodeProject | undefined,
+  projects: readonly ResolvedMuonNodeProject[],
   assetSourcePath: string,
 ): Promise<void> =>
-  assertMuonNodeProjectPathIsDisjoint(project, assetSourcePath, "asset source");
+  assertMuonNodeProjectPathIsDisjoint(
+    projects,
+    assetSourcePath,
+    "asset source",
+  );
 
 /**
  * Verifies that a Vite build cannot delete or expose a Node project.
  *
- * @param project Resolved Node project, when enabled.
+ * @param projects Resolved Node.js service projects.
  * @param outputDirectory Vite output directory emptied before a build.
  * @param publicDirectory Vite public directory copied into build output, or an
  * empty string when public files are disabled.
@@ -301,17 +287,17 @@ export const assertMuonNodeProjectAssetSourceIsSafe = (
  * Vite paths.
  */
 export const assertMuonNodeProjectViteBuildIsSafe = async (
-  project: ResolvedMuonNodeProject | undefined,
+  projects: readonly ResolvedMuonNodeProject[],
   outputDirectory: string,
   publicDirectory: string,
 ): Promise<void> => {
   await assertMuonNodeProjectPathIsDisjoint(
-    project,
+    projects,
     outputDirectory,
     "Vite output directory",
   );
   await assertMuonNodeProjectVitePublicDirectoryIsSafe(
-    project,
+    projects,
     publicDirectory,
   );
 };
@@ -319,19 +305,19 @@ export const assertMuonNodeProjectViteBuildIsSafe = async (
 /**
  * Verifies that Vite cannot expose a Node project through its public directory.
  *
- * @param project Resolved Node project, when enabled.
+ * @param projects Resolved Node.js service projects.
  * @param publicDirectory Vite public directory copied into served or built
  * assets, or an empty string when public files are disabled.
  * @returns A promise that resolves when the Node project and public directory
  * are disjoint.
  */
 export const assertMuonNodeProjectVitePublicDirectoryIsSafe = async (
-  project: ResolvedMuonNodeProject | undefined,
+  projects: readonly ResolvedMuonNodeProject[],
   publicDirectory: string,
 ): Promise<void> => {
   if (publicDirectory !== "") {
     await assertMuonNodeProjectPathIsDisjoint(
-      project,
+      projects,
       publicDirectory,
       "Vite public directory",
     );
@@ -341,101 +327,19 @@ export const assertMuonNodeProjectVitePublicDirectoryIsSafe = async (
 /**
  * Verifies that pack cleanup cannot remove a configured Node project.
  *
- * @param project Resolved Node project, when enabled.
+ * @param projects Resolved Node.js service projects.
  * @param cleanupDirectory Directory recursively removed by muon pack.
  * @returns A promise that resolves when the paths are disjoint.
  */
 export const assertMuonNodeProjectPackCleanupIsSafe = (
-  project: ResolvedMuonNodeProject | undefined,
+  projects: readonly ResolvedMuonNodeProject[],
   cleanupDirectory: string,
 ): Promise<void> =>
   assertMuonNodeProjectPathIsDisjoint(
-    project,
+    projects,
     cleanupDirectory,
     "pack cleanup directory",
   );
-
-/**
- * Stages a resolved Node project beside a muon runtime executable.
- *
- * @param project Resolved Node project, or `undefined` to remove stale staging.
- * @param runtimeDirectory Runtime directory that receives `node-project/`.
- * @returns Absolute staged project path, or `undefined` when Node is disabled.
- *
- * @remarks Symbolic links are dereferenced so portable ZIP and tar packaging
- * retains linked dependencies as ordinary files and directories.
- */
-export const stageMuonNodeProject = async (
-  project: ResolvedMuonNodeProject | undefined,
-  runtimeDirectory: string,
-): Promise<string | undefined> => {
-  const destinationPath = resolve(
-    runtimeDirectory,
-    stagedNodeProjectDirectoryName,
-  );
-  if (project === undefined) {
-    await rm(destinationPath, { recursive: true, force: true });
-    return undefined;
-  }
-
-  await assertMuonNodeProjectStagingIsSafe(project, runtimeDirectory);
-  await mkdir(runtimeDirectory, { recursive: true });
-  await assertMuonNodeProjectStagingIsSafe(project, runtimeDirectory);
-  await rm(destinationPath, { recursive: true, force: true });
-  await cp(project.sourcePath, destinationPath, {
-    dereference: true,
-    preserveTimestamps: true,
-    recursive: true,
-  });
-  return destinationPath;
-};
-
-/**
- * Copies the native Node host plugin and JavaScript bridge into a build output.
- *
- * @param sourceRuntimeDirectory Packaged runtime source for one target.
- * @param outputRuntimeDirectory App distribution runtime directory.
- * @param platform Target operating system.
- */
-export const stageMuonNodeHostArtifacts = async (
-  sourceRuntimeDirectory: string,
-  outputRuntimeDirectory: string,
-  platform: "linux" | "windows",
-): Promise<void> => {
-  const pluginFileName = platform === "windows" ? "node.dll" : "node.so";
-  const sourcePluginDirectory = join(sourceRuntimeDirectory, "plugins");
-  const outputPluginDirectory = join(outputRuntimeDirectory, "plugins");
-  const sourcePluginPath = join(sourcePluginDirectory, pluginFileName);
-  const sourceBridgePath = join(sourcePluginDirectory, nodeBridgeFileName);
-
-  await assertFile(sourcePluginPath, `muon Node plugin for ${platform}`);
-  await assertFile(sourceBridgePath, "muon Node bridge");
-  await mkdir(outputPluginDirectory, { recursive: true });
-  await copyFile(sourcePluginPath, join(outputPluginDirectory, pluginFileName));
-  await copyFile(
-    sourceBridgePath,
-    join(outputPluginDirectory, nodeBridgeFileName),
-  );
-};
-
-/**
- * Validates that a prepared development runtime contains the Node host files.
- *
- * @param runtimeDirectory Prepared runtime directory.
- * @param platform Runtime operating system.
- */
-export const assertMuonNodeHostArtifacts = async (
-  runtimeDirectory: string,
-  platform: NodeJS.Platform,
-): Promise<void> => {
-  const pluginFileName = platform === "win32" ? "node.dll" : "node.so";
-  const pluginDirectory = join(runtimeDirectory, "plugins");
-  await assertFile(join(pluginDirectory, pluginFileName), "muon Node plugin");
-  await assertFile(
-    join(pluginDirectory, nodeBridgeFileName),
-    "muon Node bridge",
-  );
-};
 
 const isJsonObject = (value: unknown): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -482,24 +386,22 @@ const resolveCanonicalPotentialPath = async (path: string): Promise<string> => {
 };
 
 const assertMuonNodeProjectPathIsDisjoint = async (
-  project: ResolvedMuonNodeProject | undefined,
+  projects: readonly ResolvedMuonNodeProject[],
   comparedPath: string,
   comparedPathLabel: string,
 ): Promise<void> => {
-  if (project === undefined) {
-    return;
-  }
-  const [sourcePath, canonicalComparedPath] = await Promise.all([
-    resolveCanonicalPotentialPath(project.sourcePath),
-    resolveCanonicalPotentialPath(comparedPath),
-  ]);
-  if (
-    isSameOrInsidePath(sourcePath, canonicalComparedPath) ||
-    isSameOrInsidePath(canonicalComparedPath, sourcePath)
-  ) {
-    throw new Error(
-      `muon Node project and ${comparedPathLabel} must not overlap: ${sourcePath}, ${canonicalComparedPath}`,
-    );
+  if (projects.length === 0) return;
+  const canonicalComparedPath =
+    await resolveCanonicalPotentialPath(comparedPath);
+  for (const { sourcePath } of projects) {
+    if (
+      isSameOrInsidePath(sourcePath, canonicalComparedPath) ||
+      isSameOrInsidePath(canonicalComparedPath, sourcePath)
+    ) {
+      throw new Error(
+        `muon Node project and ${comparedPathLabel} must not overlap: ${sourcePath}, ${canonicalComparedPath}`,
+      );
+    }
   }
 };
 
@@ -516,11 +418,5 @@ const isFile = async (path: string): Promise<boolean> => {
     return (await stat(path)).isFile();
   } catch {
     return false;
-  }
-};
-
-const assertFile = async (path: string, label: string): Promise<void> => {
-  if (!(await isFile(path))) {
-    throw new Error(`${label} file does not exist: ${path}`);
   }
 };

@@ -3,6 +3,17 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+declare module "muon:services" {
+  /** Acquire a page-owned reference, starting the configured service when necessary. */
+  export const acquire: MuonServicesApi["acquire"];
+  /** Observe actual runtime state and desired lifetime without acquiring a reference. */
+  export const getState: MuonServicesApi["getState"];
+  /** Save the autostart preference while preserving other pages' references. */
+  export const setAutostart: MuonServicesApi["setAutostart"];
+  /** Observe initial and changed state without keeping the service running. */
+  export const watchState: MuonServicesApi["watchState"];
+}
+
 declare module "muon:notifications" {
   /** Post or update a native notification without implicitly requesting permission. */
   export const post: MuonNotificationsApi["post"];
@@ -107,15 +118,6 @@ declare module "muon:fs" {
   export const symlink: MuonFsApi["symlink"];
   /** Watch a path until the watcher is closed. */
   export const watch: MuonFsApi["watch"];
-}
-
-declare module "muon:node" {
-  /**
-   * Create an isolated out-of-process Node.js runtime.
-   *
-   * @returns A promise for a releaseable Node.js runtime instance.
-   */
-  export const createNode: MuonNodeApi["createNode"];
 }
 
 declare module "muon:browser" {

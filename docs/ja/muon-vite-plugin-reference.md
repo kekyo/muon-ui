@@ -43,9 +43,7 @@ export default defineConfig({
 - `muonPath`, `cefPath`, `stagePath` に相対パスを指定した場合は、Vite project rootからの相対パスとして解決されます。
 - `muonPath` を省略した場合は、インストール済みのmuonパッケージに同梱された `runtime/<public-target>` を使用します。
 - `cefPath` を省略した場合は、muon-builderが `muonPath` のランタイム情報を元に、テスト済みのCEF artifactをダウンロードしてキャッシュします。
-- `node.project` が設定されている場合、`vite dev` はplugin modeにかかわらず、そのプロジェクトの正規化済みNode runtime requirementをmuon-builderへ渡します。
-  muon-builderはCEFと必要な公式Node.js runtimeを準備し、Node.jsをstage directoryの `runtimes/node/bin/node`（Windowsでは `runtimes/node/bin/node.exe`）へ配置します。両方のdownloadが必要な場合は並行して実行されます。
-  Node.js実行ファイルのpathを指定するViteプラグインオプションはありません。Node pluginはこの配置先を絶対pathで起動し、環境変数や `PATH` へfallbackしません。
+- デスクトップアプリにNode.jsサービスを定義すると、`vite dev`はCEFとともに、そのサービスに必要なNode.jsランタイムを準備します。
 - `stagePath` を省略した場合は、Vite project root配下の `.muon/<public-target>` が使用されます。
 - `enableDebugger` を有効にした場合、開発起動用の上書き設定でCDPが有効化され、muon DevToolsを `F12` で開き、muonを `Ctrl+F12` でリサイクル再起動できるようになります。
   配布ビルドでmuon DevToolsを有効化したい場合は、Viteプラグイン引数ではなく `muon.json` の `cdp` や `browser.keybind` を設定します。
@@ -116,7 +114,7 @@ vite dev -- --no-muon
 vite dev --port 3000 -- --no-muon
 ```
 
-`--no-muon` は `vite dev` の開発用ランタイム準備とmuon起動のみを無効化し、`muon({ open: true })` よりも優先されます。従って、Node.js runtimeのdownload、install、sidecar起動も行いません。virtual module、watch設定、muon設定の読み込みなど、muon Viteプラグインのその他の機能は有効なままで、`.gitignore` のmuon出力項目も更新されます。`vite build` の動作には影響しません。
+`--no-muon` は `vite dev` の開発用ランタイム準備とmuon起動のみを無効化し、`muon({ open: true })` よりも優先されます。virtual module、watch設定、muon設定の読み込みなど、muon Viteプラグインのその他の機能は有効なままで、`.gitignore` のmuon出力項目も更新されます。`vite build` の動作には影響しません。
 
 `package.json` のscriptが `"dev": "vite dev"` の場合、npmからはViteへ引数終端も渡すため、次のように実行します。
 
@@ -144,8 +142,6 @@ npm run dev:vite -- --no-muon
 省略した場合は `muon.json` の `plugin` 設定をそのまま使用し、`plugin.mode` の省略時は `"validate"` として扱います。
 `validate`モードでは`window.muon`を公開せず、許可したvirtual moduleをimportして関数を呼び出します。import元の検査はビルド時に行い、ネイティブ側ではcapabilityと許可関数を検査します。同じページ内でcapabilityを取得した別のコードからの呼出しは防ぎません。
 Androidでもvalidateモードを使えます。外部プラグインにはABI別ライブラリとメタデータが必要です。ページ条件と対応関数にはAndroid固有の制約があります。[Androidの設定](./android.md#validateモードでimportする)
-デスクトップで`node.project`を設定した場合は、`validate`モードでもNode.js runtimeを準備し、`muon:node`から`createNode()`を呼ぶとsidecarを起動します。`muon:node`に`pluginAccess.plugins[].imports`やallow設定は不要です。Androidの公開APKではNode.js・QuickJSを提供しません。
-開発サーバーではNodeプロジェクトと`engines.node`のrangeがVite config解決時にpreflightされ、失敗は警告として報告される場合があります。build時にはエラーとして検証されます。
 
 ```ts
 muon({
@@ -192,10 +188,7 @@ muon({
 `build` にオブジェクトを指定すると、 `vite build` 後のmuon配布用ビルドに追加オプションを渡せます。
 `build` に `true` を指定した場合、または省略した場合は、 `{}` 相当として扱われます。
 
-`node.project` を設定したアプリでは、`muon build` と `muon pack` が対象platformの `node.so` または `node.dll`、`node-bridge.mjs`、Nodeプロジェクト、正規化済みNode runtime requirementを成果物へ埋め込みます。
-Node.js実行ファイル、配布archive、download cacheは成果物に含めません。
-配布用 `muon-launcher` は起動時にCEFと、`node.project`によって必要となるNode.js runtimeを準備します。
-portable配布物では展開先へ直接準備され、実行時のNode.jsは常に `runtimes/node/bin/node`（Windowsでは `.exe`）から起動されます。実行中のNode.js runtimeを置き換えるhot updateや、環境変数または `PATH` へのfallbackはありません。
+Node.jsサービスを定義すると、`muon build`と`muon pack`はサービスのコードと実行時の依存パッケージを収録します。配布用ランチャーは起動時に、各サービスのバージョン条件を満たすNode.jsを準備します。[サービスの設定](./services.md)
 
 | キー               | 型                  | 既定値                         | 概要                                                                            |
 | :----------------- | :------------------ | :----------------------------- | :------------------------------------------------------------------------------ |

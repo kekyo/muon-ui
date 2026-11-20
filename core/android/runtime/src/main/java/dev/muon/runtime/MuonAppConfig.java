@@ -25,6 +25,7 @@ final class MuonAppConfig {
     final JSONObject systemBars;
     final boolean pluginEnabled;
     final boolean notificationsEnabled;
+    final boolean servicesConfigured;
     final JSONObject notifications;
     final JSONObject androidNotifications;
     final String[] internalAllow;
@@ -41,6 +42,8 @@ final class MuonAppConfig {
             throw new JSONException("The Android start page must use the trusted asset origin");
         }
         values = config.getJSONObject("values");
+        JSONObject services = config.optJSONObject("services");
+        servicesConfigured = services != null && services.length() != 0;
         systemBars = config.has("systemBars") ? config.getJSONObject("systemBars") : new JSONObject();
         notifications = config.has("notifications") ? config.getJSONObject("notifications") : new JSONObject();
         androidNotifications = config.has("androidNotifications")

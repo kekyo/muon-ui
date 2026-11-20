@@ -103,7 +103,6 @@ describe("Android capability modules", () => {
   it.each([
     "muon.browser.hardReload",
     "muon.fs.dialogs.*",
-    "muon.node.**",
     "muon.executor.spawn",
   ])("rejects unavailable Android functions at build time: %s", (path) => {
     expect(() =>

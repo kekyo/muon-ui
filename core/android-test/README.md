@@ -6,7 +6,7 @@ Android上のWebView、RPC、ネイティブプラグイン、ファイル操作
 
 端末テストでは`ANDROID_SERIAL`で対象を指定します。x86_64・16 KiBページのエミュレーターでは`npm run test:android --workspace muon-android-tester`、Pixel 6では`npm run test:android:pixel6 --workspace muon-android-tester`を実行します。
 
-`observer`は独立した利用アプリを端末から操作するためのテストアプリです。QuickJSの試作と検証は[core/android-poc](../android-poc)にあります。
+`observer`は、端末上で独立した利用アプリを操作するためのテストアプリです。
 
 ## Androidプラグインの同梱
 
@@ -40,7 +40,7 @@ Android上のWebView、RPC、ネイティブプラグイン、ファイル操作
 
 ## ランタイムとライフサイクルの制約
 
-プロセス内にはcardio 1.1.0の`dispatcher_host_android_auto`と共通`MuonPluginRuntime`を一組だけ作り、Androidのmain Looperへ接続します。Activity/WebViewごとにセッションは独立しています。最後の通常セッションが閉じると、同じLooper上でプラグインを非同期に停止し、読み込んだ順序の逆順で解放します。停止中に生成されたActivityは、停止完了後に新しいランタイムへ接続します。
+プロセス内にはcardio 1.4.0の`dispatcher_host_android_auto`と共通`MuonPluginRuntime`を一組だけ作り、Androidのmain Looperへ接続します。Activity/WebViewごとにセッションは独立しています。最後の通常セッションが閉じると、同じLooper上でプラグインを非同期に停止し、読み込んだ順序の逆順で解放します。停止中に生成されたActivityは、停止完了後に新しいランタイムへ接続します。
 
 [Androidがプロセスを強制終了した場合、Activityの`onDestroy()`は保証されません](https://developer.android.com/guide/components/activities/process-lifecycle)。プラグインの`Stop()`も実行される保証がないため、永続データや外部トランザクションの確定は、各操作の完了時に行ってください。
 

@@ -32,12 +32,9 @@ CEF外からの利用と、別のPCからの利用は区別する。本計画の
 
 | 方式 | 利点 | 制約と判断 |
 | --- | --- | --- |
-| 既存のNode sidecarでサーバーを実装 | ExpressやNode向けMCP SDKなどを使える。現在のコードにもHTTPサーバーの実行例がある。 | Node runtimeとプロジェクトの配布が必要。ページとsidecarの寿命、アプリ操作の受け渡しも扱う必要がある。既存の選択肢として残す。 |
 | 案2：`CefServer`を内蔵機能として公開 | CEFに含まれるHTTP・WebSocket機能を使い、Nodeを追加せずにアプリへ受信機能を提供できる。 | 当初採用し、段階2まで実装した。送信制約が用途を満たさないため、段階3で通信部分を差し替える。 |
 | 独自のネイティブサーバーや別プロセス | 必要なHTTP・WebSocket仕様やTLSを選びやすい。 | 依存関係、配布、終了処理、プラットフォームごとの検証が増える。代替実装として、同じbrowser process内でcardioと非ブロッキングTCPを使う方式を採用する。別プロセスやTLSは追加しない。 |
 | CEF内のリクエストを処理する仮想HTTPサーバー | TCPポートを開かずに、ブラウザーからのHTTP要求を処理できる。 | 外部クライアントから直接接続できない。WebSocketはHTTPリソース処理だけでは同じ形で提供できない。内部専用の別案として比較した。 |
-
-Node sidecarの実例は[Expressのfixture](../../../core/cef-test/fixtures/node-express-project/server.mjs)と[そのE2Eテスト](../../../core/cef-test/plugin-e2e/node-plugin-express.ts)にある。fixtureは`127.0.0.1`の動的ポートで待ち受ける。この例のCORS設定を、そのまま新しい内蔵サーバーの既定値にはしない。
 
 ### CEF内だけに公開する二つの方法
 
@@ -67,7 +64,7 @@ Node sidecarの実例は[Expressのfixture](../../../core/cef-test/fixtures/node
 | [ネットワークポリシー](../../../core/cef/src/network/muon_network_policy.cpp)と[権限処理](../../../core/cef/src/browser/muon_client.cpp) | `network.allow`と`network.localAccess`でCEFからの外向き通信を制御する。 | 新しい受信側ポリシーと区別する。既存設定だけでサーバーを保護できるとは扱わない。 |
 | [asset scheme](../../../core/cef/src/app/muon_app_scheme.h) | アプリのリソースに標準・secure・CORS・fetch対応のschemeを登録する。 | アプリのOriginとloopback接続を検証する。CORSの許可は受信側でも設定する。 |
 
-Node sidecarへ渡したコールバックの寿命と、ネイティブSDKの関数参照の寿命は同一ではない。ネイティブSDKには`retain_plugin_function_pointer`があるため、「呼出し完了後にJavaScriptの関数を保持できない」という制約を、今回の内蔵機能へそのまま適用しない。ただし、保持した参照も元の実行コンテキストを越えて使えるわけではない。
+ネイティブSDKには`retain_plugin_function_pointer`があるため、「呼出し完了後にJavaScriptの関数を保持できない」という制約を、今回の内蔵機能へそのまま適用しない。ただし、保持した参照も元の実行コンテキストを越えて使えるわけではない。
 
 ## CEFの機能と制約
 

@@ -19,10 +19,15 @@ export default defineConfig(({ mode }) => ({
     lib: {
       entry:
         mode === 'cjs'
-          ? { index: 'src/index.ts', artifact: 'src/artifact.ts' }
+          ? {
+              index: 'src/index.ts',
+              artifact: 'src/artifact.ts',
+              services: 'src/services.ts',
+            }
           : {
               index: 'src/index.ts',
               artifact: 'src/artifact.ts',
+              services: 'src/services.ts',
               cli: 'src/cli.ts',
             },
       formats: [mode === 'cjs' ? 'cjs' : 'es'],
@@ -31,6 +36,9 @@ export default defineConfig(({ mode }) => ({
     target: 'node20',
     minify: false,
     rolldownOptions: {
+      // Required formatting and type checking dominate these small bundles.
+      // prettier-max reports their timings; retain output correctness checks.
+      checks: { bundlerTimings: false },
       external: [/^node:/, 'funcity', 'commander'],
       output: {
         chunkFileNames:

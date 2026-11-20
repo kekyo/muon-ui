@@ -24,7 +24,7 @@ android --sdk="$ANDROID_HOME" sdk install ndk/29.0.14206865 cmake/4.1.2
 
 実行時の機能は`core/`、CLI・Vite連携・アプリのビルドと配布機能は`ui/`に置いています。それぞれの`common/`は共通処理、`cef/`と`android/`はバックエンド固有の処理です。テストは実装と同じ階層の`common-test/`、`cef-test/`、`android-test/`に置きます。
 
-`core/android-poc/`にはQuickJSの試作と固有テストがあります。周辺機能は、ネイティブビルド支援を`builder/`、Node.jsホストを`node/`に分けています。`ui/`の公開npmパッケージ名は`muon-ui`、`node/`は`muon-node`です。
+`builder/`にはネイティブのビルドツール、`node/`にはNode.jsサービスの実行に使うコードがあります。利用者向けnpmパッケージ`muon-ui`のソースは`ui/`にあります。
 
 ## ビルドとテスト
 
@@ -49,13 +49,6 @@ ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-teste
 ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-tester
 ```
 
-QuickJSの試作は別のworkspaceで検証します。
-
-```bash
-ANDROID_SERIAL=emulator-5556 npm run test:android --workspace muon-android-poc
-ANDROID_SERIAL=your-pixel6-serial npm run test:android:pixel6 --workspace muon-android-poc
-```
-
 npm配布物だけを使う独立アプリの検証対象は、公開CLI/Vite、署名、保存、再起動、更新後のデータ保持です。端末上の専用テストアプリ`dev.muon.e2e.publicconsumer`は検証のために作り直します。
 
 ```bash
@@ -71,7 +64,9 @@ tgz名は実際のバージョンに合わせてください。`--plugins`を付
 
 Windowsバイナリのe2eテストには、[agent-rover](https://github.com/kekyo/agent-rover/)のリモートエージェントを起動したWindows 11（amd64）のマシンが必要です。仮想マシンも使用できます。接続先のPATHにはNode.jsも必要です。Node.js 24で検証しています。インストール後はagent-roverを再起動し、新しいPATHを反映してください。
 
-接続にはagent-rover 0.10.0の標準設定を使います。[公式READMEの接続設定](https://github.com/kekyo/agent-rover/blob/0.10.0/README_ja.md#接続設定ファイル)に従い、テストを起動するユーザーのホームディレクトリにある`~/.agent-rover`へ接続先を登録してください。既に登録済みなら、ホストやトークンを環境変数へ転記する必要はありません。
+接続にはagent-rover 0.11.0の標準設定を使います。[公式READMEの接続設定](https://github.com/kekyo/agent-rover/blob/0.11.0/README_ja.md#接続設定ファイル)に従い、テストを起動するユーザーのホームディレクトリにある`~/.agent-rover`へ接続先を登録してください。既に登録済みなら、ホストやトークンを環境変数へ転記する必要はありません。
+
+Windows側のエージェントにも0.11.0を用意してください。0.10.0からの更新では、Windowsでエージェントを終了し、配布物を置き換えて再起動します。[公式の更新手順](https://github.com/kekyo/agent-rover/blob/0.11.0/README_ja.md#windows-エージェントの更新)を参照してください。
 
 設定ファイルの例です。
 
@@ -91,7 +86,7 @@ npm run test:windows-nsis-e2e --workspace muon-ui
 
 設定ファイルがない場合など、SDKが接続を確立できなかった場合のみ、理由を表示して実機テストをスキップします。接続後のビルド・転送・検証のエラーはテストの失敗です。ローカルビルド中と各スイートの終了時には、実機への接続を解放します。
 
-実機上の作業ディレクトリは、`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。実機のPATHにNode.jsがない場合は、テスト補助プロセスに使う実行ファイルを`MUON_E2E_REMOTE_NODE_PATH`で指定できます。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
+実機上の作業ディレクトリは`MUON_E2E_REMOTE_WORK_DIR`で変更可能です。実機のPATHにNode.jsがない場合は、テスト補助プロセスに使う実行ファイルを`MUON_E2E_REMOTE_NODE_PATH`で指定できます。画面テストはCDPとHTTP用のIPv4通信経路を自動で確認します。HTTPサーバーへの戻り先を別途指定する必要があるネットワークでは、`MUON_E2E_REMOTE_HTTP_HOST`を使用できます。
 
 ## パッケージ生成
 
@@ -107,14 +102,14 @@ podman run --rm --platform linux/arm64 docker.io/library/debian:trixie-slim unam
 
 パッケージ生成前に、ビルド用のコンテナイメージを準備します。この手順でネイティブビルドと
 プラットフォーム検証に必要な依存関係をターゲット別のPodmanイメージに導入するため、パッケージ生成のたびに
-各コンテナ内でaptパッケージをインストールする時間を削減出来ます。
+各コンテナ内でaptパッケージをインストールする時間を削減できます。
 
 ```bash
 # Build prerequisite images
 ./prereq.sh
 ```
 
-その後、次のコマンドで、すべてのプラットフォーム向けバイナリをビルドし、NPMパッケージを生成します。
+その後、次のコマンドですべてのプラットフォーム向けバイナリをビルドし、NPMパッケージを生成します。
 
 ```bash
 npm run pack

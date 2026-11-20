@@ -46,8 +46,7 @@ muonパッケージには、以下の要素を含みます:
 - muon内蔵プラグインのTypeScript型定義
 - プラットフォーム別のmuonバイナリアセット
 
-CEF本体バイナリと、オプションのNode.js連携で使用するNode.jsランタイムは、NPMパッケージに含まれません。
-CEFは必要になった時点で公式CDNから、Node.jsランタイムは`node.project`でNode.jsプロジェクトを構成した場合だけ、プラグインモードにかかわらず公式配布サイトからダウンロードされます。
+CEFは必要になった時点で公式CDNから取得します。デスクトップアプリにNode.jsサービスを定義すると、muonはNode.jsランタイムも公式配布サイトから取得します。
 
 ## muon Viteプラグインを構成
 
@@ -147,8 +146,7 @@ npm run build
 > 注釈: これは `package.json` の `scripts` に定義された `vite build` の別名です。
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
-Node.jsプロジェクトを構成した場合は、そのプロジェクト、muonとのbridge、必要なNode.jsバージョンの条件も配布ディレクトリへ含まれます。
-Node.jsランタイム本体はビルド時には含まれず、ランタイム要件が実行必須となる場合だけ、配布先でmuon launcherが初回起動時に準備します。
+Node.jsサービスを定義した場合は、サービスのコードと依存パッケージが配布ディレクトリに入ります。配布先での初回起動時に、muon launcherが各サービスのバージョン条件を満たすNode.jsを準備します。
 既定では、muonがサポートする全ターゲットをビルドし、`dist-muon/` ディレクトリ配下に出力されます:
 
 ```text
@@ -282,9 +280,7 @@ npx muon pack --target windows-amd64 --type nsis
 - muonでは、muon-coreプロセスがCEFを初期化します。
   CEFのブラウザプロセスがアプリケーションのライフサイクル、ウインドウ、muonプラグインランタイムを管理し、開発者が記述するアプリケーションの主な起点は、CEFのレンダラープロセスにロードされるページです。
   muonプラグインの関数は、CEF IPCを経由する非同期APIとしてページへ公開されます。
-- muonは、`node.project`でNode.jsプロジェクトを構成した場合だけ、Node.js連携が有効になります。
-  `createNode()`を呼ぶたびに別プロセスのNode.js sidecarを一つ起動し、そのinstanceの`importModule()`以降の呼び出しを中継します。複数のinstanceは互いに分離されています。
-  sidecarはUIを生成または所有せず、処理のオフロードやNode.jsエコシステムの機能を利用するためのオプションです。
+- デスクトップでは、[Node.jsサービス](./services.md)を別プロセスで実行できます。ページからはサービスが公開したメソッドを呼び出します。
 
 Electron:
 
@@ -317,10 +313,9 @@ flowchart LR
 このページ中心のモデルにより、ウェブアプリ開発を知っていればmuonアプリ開発を始められます。
 
 これは、すべての処理をページ内のJavaScriptへ実装しなければならない、という意味ではありません。
-例えば、ドメインロジックやデータリポジトリ実装もページのbundleに含まれますが、必要に応じて、リモートWeb API、[Node.js sidecar](./nodejs-sidecar.md)、外部プログラム、[muonプラグイン実装](./muon-plugin-develop.md)、へ責務を分離出来ます。
+例えば、データの取得や保存は、リモートWeb API、[サービス](./services.md)、外部プログラム、[muonプラグイン](./muon-plugin-develop.md)に任せることができます。
 
 - クラウドサービスやホストされた仮想マシン上のWeb APIとして実装すべきかを検討してください。
-- Node.js sidecarを使用すれば、UIと関係のないNode.jsコードを別プロセスの通常のNode.jsプロジェクトとして構成出来ます。
-  また、Node.jsでサポートされる、より高機能なNPMライブラリを使用できます。
+- デスクトップのNode.jsサービスでは、Node.jsの標準モジュールやnpmパッケージを使えます。
 - [`muon.executor` プラグイン](./muon-built-in-plugin-reference.md) を使用すれば、外部プログラムを呼び出して処理させることが出来ます。
 - 更にOSネイティブな機能をタイトに結合したい場合は、muonプラグインを実装することも出来ます。

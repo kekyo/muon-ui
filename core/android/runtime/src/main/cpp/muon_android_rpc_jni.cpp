@@ -5,6 +5,7 @@
  */
 
 #include <jni.h>
+#include "muon_android_jni_utf.h"
 
 #include "muon_android_process_runtime.h"
 #include "plugins/muon_plugin_policy.h"
@@ -115,6 +116,12 @@ static const std::vector<std::string> kFilesystemFunctionPaths = {
 };
 
 static const std::vector<std::string> kPlatformFunctionPaths = {
+    "muon.services.acquire",
+    "muon.services.release",
+    "muon.services.getState",
+    "muon.services.setAutostart",
+    "muon.services.watchState",
+    "muon.services.rpc",
     "muon.environments.getConfigValues",
 #if defined(MUON_ANDROID_TEST_HOST)
     "prototype.fail",
@@ -199,16 +206,7 @@ static bool ScheduleRuntimeStopCompletion() {
 }
 
 static std::string GetJavaString(JNIEnv* environment, jstring value) {
-  if (value == nullptr) {
-    return {};
-  }
-  const auto* characters = environment->GetStringUTFChars(value, nullptr);
-  if (characters == nullptr) {
-    return {};
-  }
-  auto result = std::string(characters);
-  environment->ReleaseStringUTFChars(value, characters);
-  return result;
+  return MuonAndroidReadJavaString(environment, value);
 }
 
 static void ThrowIllegalState(JNIEnv* environment,
@@ -594,7 +592,7 @@ static void SendTextResult(MuonAndroidRpcHost* state,
     message.push_back('}');
   }
 
-  const auto java_message = environment->NewStringUTF(message.c_str());
+  const auto java_message = MuonAndroidNewJavaString(environment, message.c_str());
   if (java_message == nullptr) {
     return;
   }
@@ -623,7 +621,7 @@ static bool SendJavaTextMessage(MuonAndroidRpcHost* state,
     }
     return false;
   }
-  const auto java_message = environment->NewStringUTF(message.c_str());
+  const auto java_message = MuonAndroidNewJavaString(environment, message.c_str());
   if (java_message == nullptr) {
     if (environment->ExceptionCheck()) {
       environment->ExceptionClear();
@@ -1037,8 +1035,8 @@ static void InvokePlatformFunction(MuonAndroidRpcHost* state,
                                       std::move(completion));
 
   const auto function_path =
-      environment->NewStringUTF(request.capability.function_path.c_str());
-  const auto arguments_json = environment->NewStringUTF(
+      MuonAndroidNewJavaString(environment, request.capability.function_path.c_str());
+  const auto arguments_json = MuonAndroidNewJavaString(environment,
       request.arguments[0].string_value.c_str());
   const auto binary_arguments = CreateJavaBinaryArguments(state, request);
   if (function_path == nullptr || arguments_json == nullptr ||
@@ -1461,6 +1459,13 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
                            error_message)) {
     return false;
   }
+  auto service_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (!CreateBuiltinPolicy(state,
+      {"muon.services.acquire", "muon.services.release", "muon.services.getState",
+       "muon.services.setAutostart", "muon.services.watchState", "muon.services.rpc"},
+      &service_policy, error_message)) {
+    return false;
+  }
   auto browser_policy = std::shared_ptr<MuonPluginPolicy>{};
   if (!CreateBuiltinPolicy(
           state,
@@ -1573,6 +1578,7 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
   };
   if (!state->validate_mode &&
       (!add_policy("environment-capability", environment_policy) ||
+      !add_policy("services-capability", service_policy) ||
       !add_policy("browser-capability", browser_policy) ||
       !add_policy("system-bars-capability", system_bars_policy) ||
       !add_policy("settings-capability", settings_policy) ||
@@ -1647,7 +1653,7 @@ static void NotifyAndroidRpcHostStartupFailure(
   const auto message = diagnostic.empty()
                            ? "Could not start the Android native runtime"
                            : diagnostic;
-  const auto java_message = environment->NewStringUTF(message.c_str());
+  const auto java_message = MuonAndroidNewJavaString(environment, message.c_str());
   if (java_message == nullptr) {
     if (environment->ExceptionCheck()) {
       environment->ExceptionClear();
@@ -1678,7 +1684,7 @@ static void CompleteWaitingAndroidRpcHostStartup(
     return;
   }
   const auto metadata =
-      environment->NewStringUTF(state->renderer_metadata_json.c_str());
+      MuonAndroidNewJavaString(environment, state->renderer_metadata_json.c_str());
   if (metadata == nullptr) {
     if (environment->ExceptionCheck()) {
       environment->ExceptionClear();
@@ -2024,9 +2030,9 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeGetRendererMetadata(
     jlong handle) {
   const auto* state = GetAndroidRpcHost(handle);
   if (state == nullptr || state->renderer_metadata_json.empty()) {
-    return environment->NewStringUTF("{}");
+    return MuonAndroidNewJavaString(environment, "{}");
   }
-  return environment->NewStringUTF(state->renderer_metadata_json.c_str());
+  return MuonAndroidNewJavaString(environment, state->renderer_metadata_json.c_str());
 }
 
 /** Dispatches one decoded JavaScript call to the native RPC host. */
@@ -2381,11 +2387,11 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeGetRuntimeDiagnostics(
     jlong handle) {
   const auto* state = GetAndroidRpcHost(handle);
   if (state == nullptr || process_runtime == nullptr) {
-    return environment->NewStringUTF("{}");
+    return MuonAndroidNewJavaString(environment, "{}");
   }
   const auto json =
       CreateProcessDiagnosticsJson(process_runtime->GetDiagnostics());
-  return environment->NewStringUTF(json.c_str());
+  return MuonAndroidNewJavaString(environment, json.c_str());
 }
 
 /** Returns process diagnostics without requiring a live WebView host. */
@@ -2394,12 +2400,12 @@ Java_dev_muon_runtime_MuonRpcBridge_nativeGetProcessRuntimeDiagnosticsForTest(
     JNIEnv* environment,
     jclass) {
   if (process_runtime == nullptr) {
-    return environment->NewStringUTF(
+    return MuonAndroidNewJavaString(environment,
         "{\"runtimeState\":\"idle\",\"liveDispatcherHosts\":0}");
   }
   const auto json =
       CreateProcessDiagnosticsJson(process_runtime->GetDiagnostics());
-  return environment->NewStringUTF(json.c_str());
+  return MuonAndroidNewJavaString(environment, json.c_str());
 }
 
 /** Selects one debug-only packaged-plugin startup fault for the next run. */

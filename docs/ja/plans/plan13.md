@@ -699,13 +699,11 @@ Windows全体の入口はファイル操作の実機試験で止まった。Defe
 | API 33・35のエミュレーター | x86_64・4 KiB | 1080×2400、中央カットアウト、ジェスチャー | 全体試験が各77件成功。 |
 | API 36のエミュレーター | x86_64・16 KiB | 1080×2400、中央カットアウト、ジェスチャー | 全体試験77件成功。 |
 | API 37のエミュレーター（37.2 image） | x86_64・16 KiB | 1080×2400、中央カットアウト、ジェスチャー | `test:android`で全77件とrelease APK・APKセットの検査、実インストール起動が成功。 |
-| Android 17 / API 37のPixel 6 | arm64-v8a・4 KiB | 1080×2400、中央カットアウト、3ボタン | `test:android:pixel6`で全77件とrelease APK・APKセットの検査、実インストール起動が成功。PoCの同じ入口も20件と配布検証が成功。 |
+| Android 17 / API 37のPixel 6 | arm64-v8a・4 KiB | 1080×2400、中央カットアウト、3ボタン | `test:android:pixel6`で全77件とrelease APK・APKセットの検査、実インストール起動が成功。 |
 
 API 24〜26の旧WebViewは必要な機能を満たさないため、この結果をWebアプリ全体の動作保証にはしない。API 33以降のエミュレーターではWebView 149.0.7827.5、Pixel 6では153.0.8010.36を使った。API 36の実行前には旧providerが報告されたため、テスト実行中に切り替え後の版を確認した。16 KiB環境とPixel 6のページサイズは公式手順の`adb shell getconf PAGE_SIZE`で確認した。x86_64の16 KiB環境では`/proc/self/smaps`の`KernelPageSize`を判定に使わない。[WebViewの機能検出](https://developer.android.com/reference/androidx/webkit/WebViewFeature)、[16 KiB環境の確認方法](https://developer.android.com/guide/practices/page-sizes)
 
 Pixel 6ではジェスチャーナビゲーションの追加12件と、全画面・IME・バーの一時表示を扱う3種類の動画検証も成功した。試験後は3ボタンへ戻した。最終AARを含むnpmパッケージから生成した公開APKでは、Playwright MCPによる通知2件、バー操作1件、設定画面1件が成功した。通知2件はsimple・validateの両方を対象とし、実通知の操作、プロセス再起動、APK更新後の保存済み未受領イベントまで確認している。
-
-PoCの通常の`npm test --workspace muon-android-poc`も成功し、JavaScriptの3件、QuickJSとネイティブ依存、関数登録、release APK・APKセットを検証した。PoCにも他の小さなバンドルと同じ時間比率診断の設定を適用し、整形・型検査を維持したまま`PLUGIN_TIMINGS`が出ないことを確認した。Androidの最終検証はJDK 21.0.12.1を使用し、ビルド警告は検出しなかった。
 
 ### 完了条件との照合
 
@@ -748,7 +746,6 @@ Windows単独の全体入口は672件成功、対象外58件の省略、失敗0�
 | --- | --- |
 | SDK | 18件成功。 |
 | Androidランタイム・テストアプリ | AARと配布物のビルドが成功。Vitest 110件とnative依存、関数登録、release APK・APKセットの検査が成功。 |
-| Android PoC | 3件とQuickJS、native依存、関数登録、release配布物の検査が成功。 |
 | ビルダー・Node | ビルダーの全処理とNodeの40件が成功。 |
 | UI | 469件成功、対象外4件を省略。NSISの実機6件は省略せず、すべて成功。 |
 | CEF native | 57件成功、3.88秒。 |

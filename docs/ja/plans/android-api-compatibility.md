@@ -12,7 +12,6 @@
 - [muon.executor](./core/cef/src/plugins/builtin/muon_builtin_executor.cpp)
 - [muon.fs](./core/cef/src/plugins/builtin/muon_builtin_fs.cpp)
 - [muon.fs.dialogs](./core/cef/src/plugins/builtin/muon_builtin_fs_dialogs_plugin.cpp)
-- [Node.js sidecar](./docs/ja/nodejs-sidecar.md)
 - `muon.json`のうち、上記APIやAndroidの実行モデルへ影響する設定
 
 ネットワークとアセットoriginについては、[filter-limitation.md](./filter-limitation.md)の「Android WebView検証後の確定方針」を前提とする。Android版はCEF版のネットワークdeny-by-defaultを再現せず、構成されたアセットoriginのメインフレームだけにMuonプラグインRPCを公開する。
@@ -46,7 +45,7 @@
 - `muon.environments`: `getVariables()`, `getConfigValues()`, `getProcessId()`, `getRuntimeInfo()`
 - `muon.fs`: 実pathを扱う22関数。対応表で対象としたread/write、metadata、directory操作、link操作、`watch()`を含む
 
-`muon.launcher`、`muon.executor`、`muon.fs.dialogs`、Node.js sidecar、対応表で非対応またはAndroid向け別設計としたbrowser/environment関数は公開リストへ含めていない。`muon.fs.dialogs`は、先に`content://`を`muon.fs`で扱う契約を確定するまで公開しない。
+`muon.launcher`、`muon.executor`、`muon.fs.dialogs`、対応表で非対応またはAndroid向け別設計としたbrowser/environment関数は公開リストへ含めていない。`muon.fs.dialogs`は、先に`content://`を`muon.fs`で扱う契約を確定するまで公開しない。
 
 [Android設定検証器](./core/android/renderer/android-config.ts)は、Androidで意味を持たない値を拒否し、受理しても適用しないnetwork設定と`plugin.pages`を警告する。これは製品用Android build pipelineへ組み込むための検証プリミティブであり、現在の試作には合成済み`muon.json`を読み込むbuild pipeline自体はまだない。
 このため、`getConfigValues()`のrouteと型は実装済みだが、現在返す値は試作用に組み込んだ設定値である。製品buildで合成済み`muon.json`の`config`を渡す接続はbuild pipelineと同時に行う。
@@ -138,15 +137,6 @@ Android pickerはproviderがUIを所有する。そのため`title`、`defaultPa
 
 このdialog APIはURIを返すが、現在のpath版`muon.fs`は`content://`を処理しない。Android実装でdialogを公開する前に、少なくとも選択URIのread、write、permission releaseを`muon.fs`で扱う契約を定義する。URIをpathへ変換するfallbackは設けない。
 
-## Node.js sidecar
-
-| APIまたは機能 | 判定 | Android版の契約または理由 |
-|---|---|---|
-| `window.muon.node.createNode()`, `muon:node` | 非対応 | Android初期版では、desktop用Node executableを別processとして準備・起動するsidecar modelを提供しない |
-| `node.project` | 非対応 | Android targetではbuild errorにする。設定を受理してNode連携が存在するように見せない |
-
-Node.js sidecarは将来nodejs-mobileを利用して実装する構想がある。ただし、Androidのprocess、service、package、lifecycleに合わせた設計と検証が必要であり、今回の初期API実装には含めない。現在のAndroid targetでdesktop sidecarが利用できるように見せるfallbackは設けない。
-
 ## ネイティブMuonプラグイン
 
 | APIまたは機能 | 判定 | Android版の契約または理由 |
@@ -178,7 +168,6 @@ Android NDKではABIごとに異なるnative libraryが必要である。[Androi
 | `plugin.mode`, `plugin.pages`, capability allowlist | 制約付き互換 | simple/validateの公開方式とfunction allowlistを維持する。ただしAndroidでは構成済みasset originのmain frameだけがRPCを送信でき、`plugin.pages`で外部originへ公開範囲を拡張できない |
 | `network.allow`, `network.authorizedOrigin`, `network.localAccess` | 非対応 | CEFとの共通設定として受理するが、明示値があるAndroid targetでは適用されないことを警告する。Android WebViewの通常通信へMuon allowlistを適用しない |
 | `cdp` | 非対応 | `cdp.enable: true`のAndroid targetはbuild errorにする。CEF remote debugging portへ対応付けず、WebView debuggingはdebuggable buildに限定する別の開発設定とする |
-| `node.project` | 非対応 | Android targetのbuild errorにする |
 | `plugin.path`, external plugin `signature`/`salt` | 非対応 | 明示指定したAndroid targetはbuild errorにする。runtime external plugin loadを行わず、NDK pluginはステップ5のbuild-time package対象とする |
 
 `network`は、CEF用の安全設定を同じ`muon.json`へ残せるようにする例外である。Android buildの成功はそのpolicyがAndroidで有効になったことを意味しないため、明示設定時の警告と利用者向け文書を必須とする。
@@ -207,7 +196,7 @@ Android NDKではABIごとに異なるnative libraryが必要である。[Androi
 2. 完了: app-specific pathを対象とする`muon.fs` 22関数。
 3. 完了: Android設定の受理、拒否、警告規則を表す検証プリミティブと、CEF/Androidを分岐できる`MuonRuntimeInfo`型。
 4. 延期: `content://`を直接扱う`muon.fs`契約と、その後の`muon.fs.dialogs`。
-5. 延期: nodejs-mobileを用いるsidecarと、必要性が確認されたAndroid向け別設計。
+5. 必要性を確認したAndroid固有の機能を設計する。
 6. planのステップ5: build-time同梱NDKプラグインと`arm64-v8a`対応。
 
 各実装では、関数単位のcapability、asset originとmain frameのRPC境界、cancel、Activity再生成を既存の共通RPCテスト条件へ追加する。
@@ -220,9 +209,9 @@ Android NDKではABIごとに異なるnative libraryが必要である。[Androi
 - 各関数について、互換、制約付き互換、Android向け別設計、非対応、ステップ5のいずれかを決めている。
 - 同名APIを公開しない場合のsimple modeとvalidate modeの挙動を決めている。
 - Androidで維持するfilesystem path APIと、Storage Access FrameworkのDocument URIを分離している。
-- launcher updater、Node.js sidecar、executor、runtime外部plugin loadをAndroid初期版へ含めないことを明示している。
+- launcher updater、executor、runtime外部plugin loadをAndroid初期版へ含めないことを明示している。
 - Android固有設計の対象と、planのステップ5に委ねるnative plugin境界を明示している。
 - `muon.json`でAndroid targetが受理する値、制約付きで受理する値、拒否する値の方針を示している。
 - Android公式資料と現在のMuon実装を判断根拠として参照している。
 
-この文書では上記条件をすべて満たしている。したがって、ステップ4の成果物であるAPI対応方針の定義は完了している。加えて、「現在のAndroid実装状況」に列挙した初期API、非対応APIの非公開化、設定検証、runtime型の実装とテストも完了した。`content://`、`muon.fs.dialogs`、nodejs-mobile sidecar、`arm64-v8a`、NDKプラグインは明示した後続作業であり、今回の完了判定には含めない。
+この文書では上記条件をすべて満たしている。したがって、ステップ4の成果物であるAPI対応方針の定義は完了している。加えて、「現在のAndroid実装状況」に列挙した初期API、非対応APIの非公開化、設定検証、runtime型の実装とテストも完了した。`content://`、`muon.fs.dialogs`、`arm64-v8a`、NDKプラグインは明示した後続作業であり、今回の完了判定には含めない。

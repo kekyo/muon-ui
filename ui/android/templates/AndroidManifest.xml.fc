@@ -18,6 +18,9 @@
     <application android:allowBackup="false" android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher" android:supportsRtl="true"
         android:theme="@style/MuonTheme"
+{{if serviceCleartext}}
+        android:networkSecurityConfig="@xml/muon_service_network"
+{{end}}
         android:usesCleartextTraffic="false">
 {{if notificationsEnabled}}
         <meta-data android:name="dev.muon.notifications.smallIcon" android:resource="@drawable/muon_notification_small" />
@@ -28,5 +31,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+{{if servicesEnabled}}
+        <receiver android:name="dev.muon.runtime.MuonServiceBootReceiver"
+            android:exported="false" android:process=":muon_services">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <service android:name="dev.muon.runtime.MuonServiceControlService"
+            android:exported="false" android:process=":muon_services" />
+{{for service services}}
+        <service android:name="{{service.component}}" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="{{service.foregroundServiceType}}">
+{{if service.specialUseSubtype}}
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="{{service.specialUseSubtype}}" />
+{{end}}
+        </service>
+{{end}}
+{{end}}
     </application>
 </manifest>

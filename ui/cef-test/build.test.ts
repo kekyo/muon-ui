@@ -315,6 +315,15 @@ const createFakeMuonPackageDistForTargets = async (
       createMuonEmbeddedConfigSlot(),
       "core",
     );
+    await writeFile(
+      join(
+        runtimeDirectory,
+        target.startsWith("windows-")
+          ? "muon-service-host.exe"
+          : "muon-service-host",
+      ),
+      `${target} service host\n`,
+    );
     if (target.startsWith("linux-")) {
       await chmod(runtimeExecutablePath, 0o644);
       const supervisorPath = join(runtimeDirectory, "muon-executor-supervisor");
@@ -326,16 +335,8 @@ const createFakeMuonPackageDistForTargets = async (
       join(runtimeDirectory, descriptor.cardioLibraryName),
       "cardio\n",
     );
-    const nodePluginFileName = target.startsWith("windows-")
-      ? "node.dll"
-      : "node.so";
-    await mkdir(join(runtimeDirectory, "plugins"), { recursive: true });
     await writeFile(
-      join(runtimeDirectory, "plugins", nodePluginFileName),
-      `${target} node plugin\n`,
-    );
-    await writeFile(
-      join(runtimeDirectory, "plugins", "node-bridge.mjs"),
+      join(runtimeDirectory, "node-service-bridge.mjs"),
       "export const bridgeFixture = true;\n",
     );
     await writeFile(
@@ -857,13 +858,7 @@ describe("muon build", () => {
       exists(join(root, "dist-muon/linux-amd64", "libcef.so")),
     ).resolves.toBe(false);
     await expect(
-      exists(join(root, "dist-muon/linux-amd64", "plugins", "node.so")),
-    ).resolves.toBe(false);
-    await expect(
-      exists(join(root, "dist-muon/linux-amd64", "plugins", "node-bridge.mjs")),
-    ).resolves.toBe(false);
-    await expect(
-      exists(join(root, "dist-muon/linux-amd64", "node-project")),
+      exists(join(root, "dist-muon/linux-amd64", "node-service-bridge.mjs")),
     ).resolves.toBe(false);
 
     const archivePath = join(root, "dist-muon/linux-amd64", "assets.zip");
@@ -926,211 +921,58 @@ describe("muon build", () => {
     );
   });
 
-  it("stages a configured Node project outside assets using the config directory as its base", async () => {
-    const root = await createTemporaryDirectory("muon-build-node-project-");
+  it("packages a service-only Node project with a bridge and a required launcher runtime", async () => {
+    const root = await createTemporaryDirectory("muon-build-node-service-");
     const packageDirectory = await createFakeMuonPackageDist(root);
-    const backendDirectory = join(root, "settings", "backend");
-    const linkedDependencyDirectory = join(
-      root,
-      "settings",
-      "linked-dependency",
-    );
-    const dependencyDirectory = join(
-      backendDirectory,
-      "node_modules",
-      "fixture-dependency",
-    );
-    await mkdir(join(backendDirectory, "node_modules"), { recursive: true });
-    await mkdir(linkedDependencyDirectory, { recursive: true });
-    await symlink(
-      linkedDependencyDirectory,
-      dependencyDirectory,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    await mkdir(join(root, "assets"), { recursive: true });
+    const project = join(root, "settings/worker");
+    await mkdir(project, { recursive: true });
+    await mkdir(join(root, "assets"));
+    await writeFile(join(root, "assets/index.html"), "<!doctype html>");
     await writeFile(
-      join(root, "assets", "index.html"),
-      "<!doctype html><title>node project app</title>",
-    );
-    const backendPackageJson = `${JSON.stringify(
-      {
-        name: "muon-node-project-fixture",
+      join(project, "package.json"),
+      JSON.stringify({
+        name: "service-project",
         type: "module",
-        main: "./main.js",
-        engines: {
-          node: ">=20 <23 || ^24.3.0",
+        engines: { node: "^24" },
+      }),
+    );
+    await writeFile(
+      join(project, "entry.ts"),
+      'export default (): string => "service-only";',
+    );
+    await writeFile(
+      join(root, "settings/muon.json"),
+      JSON.stringify({
+        services: {
+          worker: { runtime: "node", project: "./worker", entry: "./entry.ts" },
         },
-        imports: {
-          "#message": "./message.js",
-        },
-      },
-      null,
-      2,
-    )}\n`;
-    await writeFile(join(backendDirectory, "package.json"), backendPackageJson);
-    await writeFile(
-      join(backendDirectory, "main.js"),
-      [
-        'import message from "#message";',
-        'import dependency from "fixture-dependency";',
-        "process.stdout.write(`${message}:${dependency}\\n`);",
-        "",
-      ].join("\n"),
+      }),
     );
-    await writeFile(
-      join(backendDirectory, "message.js"),
-      'export default "project";\n',
-    );
-    await writeFile(
-      join(linkedDependencyDirectory, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "fixture-dependency",
-          type: "module",
-          exports: "./index.js",
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeFile(
-      join(linkedDependencyDirectory, "index.js"),
-      'export default "dependency";\n',
-    );
-    await writeFile(
-      join(root, "settings", "muon.json"),
-      `${JSON.stringify(
-        {
-          node: {
-            project: "./backend",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
     const result = await buildMuonApp({
       root,
       packageDirectory,
       targets: ["linux-amd64"],
       configPath: "settings/muon.json",
       assetSourcePath: "assets",
-      assetSalt: Buffer.from("1234", "hex"),
     });
-
-    const outputPath = join(root, "dist-muon", "linux-amd64");
-    const stagedProjectPath = join(outputPath, "node-project");
-    await rm(linkedDependencyDirectory, { recursive: true, force: true });
-    const execution = await execFileAsync(process.execPath, [
-      stagedProjectPath,
-    ]);
-    expect(execution.stdout).toBe("project:dependency\n");
-    await expect(
-      readFile(join(stagedProjectPath, "package.json"), "utf8"),
-    ).resolves.toBe(backendPackageJson);
-    await expect(
-      readFile(join(outputPath, "plugins", "node.so"), "utf8"),
-    ).resolves.toBe("linux-amd64 node plugin\n");
-    await expect(
-      readFile(join(outputPath, "plugins", "node-bridge.mjs"), "utf8"),
-    ).resolves.toBe("export const bridgeFixture = true;\n");
-    expect(result.targets[0]?.embeddedConfig.node).toEqual({
-      project: "./node-project",
-    });
-    expect(result.targets[0]?.embeddedConfig).not.toHaveProperty(
-      "launcher.nodeRuntime",
+    const output = join(root, "dist-muon/linux-amd64");
+    const registry = JSON.parse(
+      await readFile(join(output, "muon-services.json"), "utf8"),
     );
+    expect(registry.services.worker).toMatchObject({
+      runtime: "node",
+      project: "./services/node/worker",
+      executable: "./runtimes/node/bin/node",
+      bridge: "./node-service-bridge.mjs",
+    });
     expect(
-      await readFakeLauncherEmbeddedConfig(
-        result.targets[0]?.launcherPath ?? "",
-      ),
+      await readFakeLauncherEmbeddedConfig(result.targets[0]!.launcherPath),
     ).toMatchObject({
-      launcher: {
-        nodeRuntime: {
-          required: true,
-          engineRangeSpecified: true,
-          engineRange: ">=20 <23 || ^24.3.0",
-          comparatorSets: [
-            [">=20.19.0", "<21.0.0-0", ">=20.0.0", "<23.0.0-0"],
-            [">=22.12.0", ">=20.0.0", "<23.0.0-0"],
-            [">=22.12.0", ">=24.3.0", "<25.0.0-0"],
-          ],
-        },
-      },
+      launcher: { nodeRuntime: { required: true, engineRange: "^24" } },
     });
-    const assetEntries = await readZipEntries(join(outputPath, "assets.zip"));
     expect(
-      [...assetEntries.keys()].some((entry) =>
-        entry.startsWith("node-project/"),
-      ),
-    ).toBe(false);
-    await expect(exists(join(outputPath, "node"))).resolves.toBe(false);
-    await expect(exists(join(outputPath, "node.exe"))).resolves.toBe(false);
-    await expect(exists(join(outputPath, "node-runtime.tar.xz"))).resolves.toBe(
-      false,
-    );
-  });
-
-  it("requires a staged Node runtime in validate plugin mode", async () => {
-    const root = await createTemporaryDirectory(
-      "muon-build-node-validate-mode-",
-    );
-    const packageDirectory = await createFakeMuonPackageDist(root);
-    const backendDirectory = join(root, "backend");
-    await mkdir(backendDirectory, { recursive: true });
-    await writeFile(
-      join(backendDirectory, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "muon-node-validate-fixture",
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await mkdir(join(root, "assets"), { recursive: true });
-    await writeFile(join(root, "assets", "index.html"), "<!doctype html>");
-    await writeFile(
-      join(root, "muon.json"),
-      `${JSON.stringify(
-        {
-          node: {
-            project: "./backend",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    const result = await buildMuonApp({
-      root,
-      packageDirectory,
-      targets: ["linux-amd64"],
-      runtimePluginConfig: {
-        mode: "validate",
-        capabilities: [],
-      },
-    });
-
-    expect(result.targets[0]?.embeddedConfig).not.toHaveProperty(
-      "launcher.nodeRuntime",
-    );
-    expect(
-      await readFakeLauncherEmbeddedConfig(
-        result.targets[0]?.launcherPath ?? "",
-      ),
-    ).toMatchObject({
-      launcher: {
-        nodeRuntime: {
-          required: true,
-          engineRangeSpecified: false,
-          engineRange: "*",
-          comparatorSets: [[">=20.19.0", "<21.0.0-0"], [">=22.12.0"]],
-        },
-      },
-    });
+      await readFile(join(output, "node-service-bridge.mjs"), "utf8"),
+    ).toContain("bridgeFixture");
   });
 
   it("rejects a Node project inside a symlinked output runtime before deleting its source", async () => {
@@ -1141,14 +983,14 @@ describe("muon build", () => {
     const actualOutputRoot = join(root, "actual-output");
     const runtimeDirectory = join(actualOutputRoot, "dist-muon", "linux-amd64");
     const backendDirectory = join(runtimeDirectory, "backend");
-    const markerPath = join(backendDirectory, "source-marker.txt");
+    const markerPath = join(backendDirectory, "entry.ts");
     const outputRootLink = join(root, "output-link");
     await mkdir(backendDirectory, { recursive: true });
     await writeFile(
       join(backendDirectory, "package.json"),
       `${JSON.stringify({ name: "output-source", type: "module" })}\n`,
     );
-    await writeFile(markerPath, "preserve source\n");
+    await writeFile(markerPath, "export default {};\n");
     await symlink(
       actualOutputRoot,
       outputRootLink,
@@ -1163,8 +1005,12 @@ describe("muon build", () => {
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          node: {
-            project: backendDirectory,
+          services: {
+            worker: {
+              runtime: "node",
+              project: backendDirectory,
+              entry: "./entry.ts",
+            },
           },
         },
         null,
@@ -1184,7 +1030,7 @@ describe("muon build", () => {
       "muon Node project and runtime directory must not overlap",
     );
     await expect(readFile(markerPath, "utf8")).resolves.toBe(
-      "preserve source\n",
+      "export default {};\n",
     );
   });
 
@@ -1202,14 +1048,12 @@ describe("muon build", () => {
       "linux-amd64",
     );
     await mkdir(generatedOutputDirectory, { recursive: true });
+    await writeFile(join(backendDirectory, "entry.ts"), "export default {};\n");
     await writeFile(
       join(backendDirectory, "package.json"),
       `${JSON.stringify({ name: "ancestor-source", type: "module" })}\n`,
     );
-    await writeFile(
-      join(backendDirectory, "source-marker.txt"),
-      "preserve source\n",
-    );
+    await writeFile(join(backendDirectory, "entry.ts"), "export default {};\n");
     await symlink(
       generatedOutputDirectory,
       outputRootLink,
@@ -1224,8 +1068,12 @@ describe("muon build", () => {
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          node: {
-            project: "./backend",
+          services: {
+            worker: {
+              runtime: "node",
+              project: "./backend",
+              entry: "./entry.ts",
+            },
           },
         },
         null,
@@ -1265,14 +1113,14 @@ describe("muon build", () => {
         kind === "project-inside-assets"
           ? join(root, "assets")
           : join(backendDirectory, "assets");
-      const markerPath = join(backendDirectory, "source-marker.txt");
+      const markerPath = join(backendDirectory, "entry.ts");
       await mkdir(assetDirectory, { recursive: true });
       await mkdir(backendDirectory, { recursive: true });
       await writeFile(
         join(backendDirectory, "package.json"),
         `${JSON.stringify({ name: "asset-overlap", type: "module" })}\n`,
       );
-      await writeFile(markerPath, "preserve source\n");
+      await writeFile(markerPath, "export default {};\n");
       await writeFile(
         join(assetDirectory, "index.html"),
         "<!doctype html><title>asset overlap</title>",
@@ -1281,8 +1129,12 @@ describe("muon build", () => {
         join(root, "muon.json"),
         `${JSON.stringify(
           {
-            node: {
-              project: backendDirectory,
+            services: {
+              worker: {
+                runtime: "node",
+                project: backendDirectory,
+                entry: "./entry.ts",
+              },
             },
           },
           null,
@@ -1299,50 +1151,10 @@ describe("muon build", () => {
         }),
       ).rejects.toThrow("muon Node project and asset source must not overlap");
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
     },
   );
-
-  it.each([
-    ["a non-object node config", true, "muon.json node must be an object"],
-    [
-      "a missing project path",
-      {},
-      "muon.json node.project is required when node is present",
-    ],
-    [
-      "a non-string project path",
-      { project: 42 },
-      "muon.json node.project must be a string",
-    ],
-    [
-      "an empty project path",
-      { project: "   " },
-      "muon.json node.project must not be empty",
-    ],
-  ])("rejects %s", async (_label, node, expectedMessage) => {
-    const root = await createTemporaryDirectory("muon-build-invalid-node-");
-    const packageDirectory = await createFakeMuonPackageDist(root);
-    await mkdir(join(root, "assets"), { recursive: true });
-    await writeFile(
-      join(root, "assets", "index.html"),
-      "<!doctype html><title>invalid node config</title>",
-    );
-    await writeFile(
-      join(root, "muon.json"),
-      `${JSON.stringify({ node }, null, 2)}\n`,
-    );
-
-    await expect(
-      buildMuonApp({
-        root,
-        packageDirectory,
-        targets: ["linux-amd64"],
-        assetSourcePath: "assets",
-      }),
-    ).rejects.toThrow(expectedMessage);
-  });
 
   it("rejects a Node project without package.json", async () => {
     const root = await createTemporaryDirectory(
@@ -1361,7 +1173,7 @@ describe("muon build", () => {
     );
     await writeFile(
       join(root, "muon.json"),
-      `${JSON.stringify({ node: { project: "./backend" } }, null, 2)}\n`,
+      `${JSON.stringify({ services: { worker: { runtime: "node", project: "./backend", entry: "./entry.ts" } } }, null, 2)}\n`,
     );
 
     await expect(
@@ -1431,6 +1243,11 @@ describe("muon build", () => {
         `${target} executor supervisor\n`,
       );
       expect((await stat(supervisorPath)).mode & 0o777).toBe(0o755);
+      const serviceHost = join(root, "dist-muon", target, "muon-service-host");
+      await expect(readFile(serviceHost, "utf8")).resolves.toBe(
+        `${target} service host\n`,
+      );
+      expect((await stat(serviceHost)).mode & 0o777).toBe(0o755);
     }
   });
 
@@ -2753,7 +2570,7 @@ describe("muon build", () => {
       );
       const packageDirectory = await createFakeMuonPackageDist(root);
       const backendDirectory = join(root, "web-dist", "backend");
-      const markerPath = join(backendDirectory, "source-marker.txt");
+      const markerPath = join(backendDirectory, "entry.ts");
       await writeViteMuonBuildProject(
         root,
         JSON.stringify({
@@ -2768,20 +2585,28 @@ describe("muon build", () => {
         join(backendDirectory, "package.json"),
         `${JSON.stringify({ name: "build-outdir-source", type: "module" })}\n`,
       );
-      await writeFile(markerPath, "preserve source\n");
+      await writeFile(markerPath, "export default {};\n");
       await writeFile(
         join(root, "settings", "plugin-muon.json"),
         `${JSON.stringify(
           useCliConfig
             ? { network: { allow: ["asset://main/**"] } }
-            : { node: { project: backendDirectory } },
+            : {
+                services: {
+                  worker: {
+                    runtime: "node",
+                    project: backendDirectory,
+                    entry: "./entry.ts",
+                  },
+                },
+              },
           null,
           2,
         )}\n`,
       );
       await writeFile(
         join(root, "settings", "cli-muon.json"),
-        `${JSON.stringify({ node: { project: backendDirectory } }, null, 2)}\n`,
+        `${JSON.stringify({ services: { worker: { runtime: "node", project: backendDirectory, entry: "./entry.ts" } } }, null, 2)}\n`,
       );
 
       await expect(
@@ -2791,7 +2616,7 @@ describe("muon build", () => {
         ]),
       ).rejects.toThrow("muon Node project");
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
     },
   );

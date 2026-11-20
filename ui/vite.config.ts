@@ -11,6 +11,7 @@ import { defineConfig } from "vitest/config";
 import type { UserConfig } from "vite";
 import { buildMuonNotificationRenderer } from "../core/common/build-notification-renderer.mjs";
 import { buildMuonServerRenderer } from "../core/cef/build-server-renderer.ts";
+import { buildMuonServiceRenderer } from "../core/common/build-service-renderer.mts";
 
 import muonNodePackageJson from "../node/package.json" with { type: "json" };
 
@@ -21,6 +22,9 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
 
   return {
     define: {
+      __MUON_SERVICE_RENDERER_SOURCE__: JSON.stringify(
+        await buildMuonServiceRenderer(),
+      ),
       __MUON_SERVER_RENDERER_SOURCE__: JSON.stringify(
         await buildMuonServerRenderer(),
       ),
@@ -80,9 +84,11 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
           /^node:/,
           "adm-zip",
           "commander",
+          "chokidar",
           "funcity",
           "sharp",
           "tar-vern",
+          "tar-vern/node",
           "vite",
         ],
         output: {

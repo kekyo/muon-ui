@@ -26,12 +26,15 @@ export default defineConfig({
     lib: {
       entry: 'src/cli.ts',
       formats: ['es'],
-      fileName: () => 'node-bridge.mjs',
+      fileName: () => 'node-service-bridge.mjs',
     },
     minify: false,
     sourcemap: false,
     target: 'node20',
     rolldownOptions: {
+      // Required formatting and type checking dominate this small bundle.
+      // prettier-max reports their timings; retain output correctness checks.
+      checks: { bundlerTimings: false },
       external: [/^node:/],
       output: {
         codeSplitting: false,

@@ -66,8 +66,7 @@ for (const file of [
   'muon-executor-supervisor',
   'libmuon-ui.so',
   'libcardio.so',
-  'plugins/node.so',
-  'plugins/node-bridge.mjs',
+  'node-service-bridge.mjs',
   'CREDITS.md',
 ]) {
   await mkdir(dirname(join(staged, file)), { recursive: true });

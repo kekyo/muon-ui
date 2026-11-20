@@ -16,7 +16,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveMuonNodeProject } from "../cef/node-project.js";
+import {
+  createMuonNodeRuntimeRequirement,
+  resolveMuonNodeProject,
+} from "../cef/node-project.ts";
+import SemverRange from "semver/classes/range.js";
 import { runMuonPrepare } from "../cef/prepare.js";
 
 const cleanupDirectories: string[] = [];
@@ -50,7 +54,6 @@ const createNodeProject = async (
 ): Promise<{
   root: string;
   projectPath: string;
-  config: Readonly<Record<string, unknown>>;
 }> => {
   const root = await createTemporaryDirectory("muon-node-runtime-");
   const projectPath = join(root, "backend");
@@ -59,11 +62,6 @@ const createNodeProject = async (
   return {
     root,
     projectPath,
-    config: {
-      node: {
-        project: "./backend",
-      },
-    },
   };
 };
 
@@ -71,9 +69,11 @@ const resolveNodeRuntimeProject = async (
   packageJson: string,
 ): Promise<ResolvedNodeRuntimeProject> => {
   const fixture = await createNodeProject(packageJson);
-  const project = await resolveMuonNodeProject(fixture.config, fixture.root);
-  expect(project).toBeDefined();
-  return project as ResolvedNodeRuntimeProject;
+  const project = await resolveMuonNodeProject(
+    fixture.projectPath,
+    fixture.root,
+  );
+  return project;
 };
 
 afterEach(async () => {
@@ -83,6 +83,48 @@ afterEach(async () => {
 });
 
 describe("muon Node runtime requirement", () => {
+  it("selects one runtime satisfying every service project", async () => {
+    const projects = await Promise.all(
+      ["^22.12 || ^24", ">=24.3 <25", "^24.4"].map(
+        async (node) =>
+          await resolveNodeRuntimeProject(
+            JSON.stringify({ engines: { node } }),
+          ),
+      ),
+    );
+    const requirement = createMuonNodeRuntimeRequirement(projects)!;
+    const accepts = (version: string) =>
+      requirement.comparatorSets.some((set) =>
+        new SemverRange(set.join(" ")).test(version),
+      );
+    expect(requirement.required).toBe(true);
+    expect(accepts("22.18.0")).toBe(false);
+    expect(accepts("24.3.0")).toBe(false);
+    expect(accepts("24.4.0")).toBe(true);
+    expect(accepts("25.0.0")).toBe(false);
+  });
+
+  it("names conflicting projects and their engines before runtime preparation", async () => {
+    const projects = await Promise.all(
+      ["^22.12", "^24"].map(
+        async (node) =>
+          await resolveNodeRuntimeProject(
+            JSON.stringify({ engines: { node } }),
+          ),
+      ),
+    );
+    let message = "";
+    try {
+      createMuonNodeRuntimeRequirement(projects);
+    } catch (error) {
+      message = String(error);
+    }
+    for (const project of projects) {
+      expect(message).toContain(project.sourcePath);
+      expect(message).toContain(project.engineRange);
+    }
+  });
+
   it("uses the bridge-supported range when package.json omits engines.node", async () => {
     const project = await resolveNodeRuntimeProject(
       `${JSON.stringify({ name: "no-engine-project" }, null, 2)}\n`,

@@ -21,6 +21,9 @@ MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER="/workspace/${MUON_NOTIFICATION_REND
 MUON_SERVER_RENDERER_HEADER_RELATIVE="core/cef/.build/server-renderer/muon_server_renderer_generated.h"
 MUON_SERVER_RENDERER_HEADER_HOST="${SCRIPT_DIR}/${MUON_SERVER_RENDERER_HEADER_RELATIVE}"
 MUON_SERVER_RENDERER_HEADER_CONTAINER="/workspace/${MUON_SERVER_RENDERER_HEADER_RELATIVE}"
+MUON_SERVICE_RENDERER_HEADER_RELATIVE="core/cef/.build/service-renderer/muon_service_renderer_generated.h"
+MUON_SERVICE_RENDERER_HEADER_HOST="${SCRIPT_DIR}/${MUON_SERVICE_RENDERER_HEADER_RELATIVE}"
+MUON_SERVICE_RENDERER_HEADER_CONTAINER="/workspace/${MUON_SERVICE_RENDERER_HEADER_RELATIVE}"
 
 usage() {
   cat <<'EOF'
@@ -226,7 +229,8 @@ build_linux_target() {
     -e "MUON_CORE_VERSION_HEADER=${MUON_CORE_VERSION_HEADER_CONTAINER}" \
     -e "MUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_CONTAINER}" \
     -e "MUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_CONTAINER}" \
-    -e "MUON_NODE_BRIDGE_PREBUILT=1" \
+    -e "MUON_SERVICE_RENDERER_HEADER=${MUON_SERVICE_RENDERER_HEADER_CONTAINER}" \
+    -e "MUON_NODE_SERVICE_BRIDGE_PREBUILT=1" \
     -e "MUON_TRA_FFIC_ROOT=/workspace-deps/tra-ffic" \
     -e "MUON_CARDIO_ROOT=/workspace-deps/cardio" \
     -e "MUON_CACHE_DIR=/workspace/.deps/muon-cache" \
@@ -279,10 +283,12 @@ build_windows_targets() {
   npm run build:target --workspace muon-builder -- dist Release windows-amd64
   npm run build:target --workspace muon-core -- dist Release windows-i686 \
     "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" \
-    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}"
+    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}" \
+    "-DMUON_SERVICE_RENDERER_HEADER=${MUON_SERVICE_RENDERER_HEADER_HOST}"
   npm run build:target --workspace muon-core -- dist Release windows-amd64 \
     "-DMUON_NOTIFICATION_RENDERER_HEADER=${MUON_NOTIFICATION_RENDERER_HEADER_HOST}" \
-    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}"
+    "-DMUON_SERVER_RENDERER_HEADER=${MUON_SERVER_RENDERER_HEADER_HOST}" \
+    "-DMUON_SERVICE_RENDERER_HEADER=${MUON_SERVICE_RENDERER_HEADER_HOST}"
 }
 
 stage_targets() {
@@ -386,10 +392,6 @@ validate_linux_artifacts() {
       "ui/dist/runtime/${target_name}/libcardio.so" \
       "${expected_class}" \
       "${expected_machine}"
-    validate_readelf_header \
-      "ui/dist/runtime/${target_name}/plugins/node.so" \
-      "${expected_class}" \
-      "${expected_machine}"
   done
 }
 
@@ -411,7 +413,7 @@ build_dist() {
   export MUON_BUILDER_VERSION
   export MUON_BUILDER_GIT_COMMIT_HASH
   export MUON_CORE_VERSION_HEADER
-  export MUON_NODE_BRIDGE_PREBUILT
+  export MUON_NODE_SERVICE_BRIDGE_PREBUILT
   MUON_BUILDER_VERSION="$(package_version "builder/package.json")"
   MUON_BUILDER_GIT_COMMIT_HASH="$(git_commit_hash)"
   generate_core_version_header
@@ -422,9 +424,9 @@ build_dist() {
   printf 'Building plugin SDK JavaScript entries\n'
   npm run build:js --workspace muon-plugin-sdk
 
-  printf 'Building shared Node bridge\n'
+  printf 'Building Node.js service bridge\n'
   npm run build --workspace muon-node
-  MUON_NODE_BRIDGE_PREBUILT=1
+  MUON_NODE_SERVICE_BRIDGE_PREBUILT=1
 
   printf 'Building shared notification renderer\n'
   npm run build:notification-renderer --workspace muon-core
@@ -435,6 +437,11 @@ build_dist() {
   npm run build:server-renderer --workspace muon-core
   [[ -f "${MUON_SERVER_RENDERER_HEADER_HOST}" ]] ||
     fail "Server renderer header was not generated: ${MUON_SERVER_RENDERER_HEADER_HOST}"
+
+  printf 'Building shared service renderer\n'
+  npm run build:service-renderer --workspace muon-core
+  [[ -f "${MUON_SERVICE_RENDERER_HEADER_HOST}" ]] ||
+    fail "Service renderer header was not generated: ${MUON_SERVICE_RENDERER_HEADER_HOST}"
 
   printf 'Preparing shared native source dependencies\n'
   bash core/cef/build_yyjson.sh
@@ -523,6 +530,11 @@ verify_package_file_list() {
   require_pack_file "dist/runtime/linux-amd64/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-armhf/muon-executor-supervisor"
   require_pack_file "dist/runtime/linux-arm64/muon-executor-supervisor"
+  require_pack_file "dist/runtime/linux-amd64/muon-service-host"
+  require_pack_file "dist/runtime/linux-armhf/muon-service-host"
+  require_pack_file "dist/runtime/linux-arm64/muon-service-host"
+  require_pack_file "dist/runtime/windows-i686/muon-service-host.exe"
+  require_pack_file "dist/runtime/windows-amd64/muon-service-host.exe"
   local linux_target
   for linux_target in linux-amd64 linux-armhf linux-arm64; do
     require_pack_file "dist/runtime/${linux_target}/linux-dependencies.json"
@@ -531,16 +543,11 @@ verify_package_file_list() {
   done
   require_pack_file "dist/runtime/windows-i686/libcardio.dll"
   require_pack_file "dist/runtime/windows-amd64/libcardio.dll"
-  require_pack_file "dist/runtime/linux-amd64/plugins/node.so"
-  require_pack_file "dist/runtime/linux-amd64/plugins/node-bridge.mjs"
-  require_pack_file "dist/runtime/linux-armhf/plugins/node.so"
-  require_pack_file "dist/runtime/linux-armhf/plugins/node-bridge.mjs"
-  require_pack_file "dist/runtime/linux-arm64/plugins/node.so"
-  require_pack_file "dist/runtime/linux-arm64/plugins/node-bridge.mjs"
-  require_pack_file "dist/runtime/windows-i686/plugins/node.dll"
-  require_pack_file "dist/runtime/windows-i686/plugins/node-bridge.mjs"
-  require_pack_file "dist/runtime/windows-amd64/plugins/node.dll"
-  require_pack_file "dist/runtime/windows-amd64/plugins/node-bridge.mjs"
+  require_pack_file "dist/runtime/linux-amd64/node-service-bridge.mjs"
+  require_pack_file "dist/runtime/linux-armhf/node-service-bridge.mjs"
+  require_pack_file "dist/runtime/linux-arm64/node-service-bridge.mjs"
+  require_pack_file "dist/runtime/windows-i686/node-service-bridge.mjs"
+  require_pack_file "dist/runtime/windows-amd64/node-service-bridge.mjs"
   require_pack_file_match '^dist/runtime/windows-i686/libgcc_s_.*-1\.dll$'
   require_pack_file "dist/runtime/windows-i686/libstdc++-6.dll"
   require_pack_file_match '^dist/runtime/windows-amd64/libgcc_s_.*-1\.dll$'

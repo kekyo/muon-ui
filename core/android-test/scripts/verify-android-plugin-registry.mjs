@@ -18,7 +18,6 @@ const projectRoot = resolve(
   process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
 );
 const repositoryRoot = resolve(projectRoot, '../..');
-const includeQuickJs = process.argv.includes('--quickjs');
 const androidRoot = join(projectRoot, 'android');
 const ndkVersion = '29.0.14206865';
 const abis = ['x86_64', 'arm64-v8a'];
@@ -26,7 +25,7 @@ const runtimeSonames = [
   'libc++_shared.so',
   'libcardio.so',
   'libmuon_android_rpc.so',
-  ...(includeQuickJs ? ['libmuon_javascript_runtime.so'] : []),
+  'libmuon_android_services.so',
 ];
 
 const execute = (command, args, options = {}) =>

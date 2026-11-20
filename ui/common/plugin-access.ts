@@ -17,6 +17,7 @@ import type {
   MuonCapabilityOptions,
   MuonRuntimePluginEntryConfig,
 } from "./capability.js";
+import { expandMuonServicePermissions } from "./capability.ts";
 
 /**
  * Plugin JavaScript exposure mode.
@@ -720,7 +721,10 @@ const toValidateRuntimePluginEntries = (
         : { signature: plugin.signature }),
       ...(plugin.salt === undefined ? {} : { salt: plugin.salt }),
       ...(plugin.config === undefined ? {} : { config: plugin.config }),
-      allow,
+      allow:
+        plugin.name === "internal"
+          ? expandMuonServicePermissions(allow)
+          : allow,
     };
   });
 
@@ -732,7 +736,12 @@ const toSimpleRuntimePluginEntries = (
     ...(plugin.signature === undefined ? {} : { signature: plugin.signature }),
     ...(plugin.salt === undefined ? {} : { salt: plugin.salt }),
     ...(plugin.config === undefined ? {} : { config: plugin.config }),
-    allow: [...getSimplePluginAllow(plugin, pluginIndex)],
+    allow:
+      plugin.name === "internal"
+        ? expandMuonServicePermissions(
+            getSimplePluginAllow(plugin, pluginIndex),
+          )
+        : [...getSimplePluginAllow(plugin, pluginIndex)],
   }));
 
 const shouldOverlayRuntimePlugins = (

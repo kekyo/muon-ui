@@ -61,6 +61,29 @@ const project = async (config: unknown): Promise<string> => {
 };
 
 describe("public Android builds", () => {
+  it("allows release through an acquire capability without exposing unrelated operations", async () => {
+    const root = await project({
+      plugin: {
+        mode: "simple",
+        plugins: [{ name: "internal", allow: ["muon.services.acquire"] }],
+      },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].pluginAccess.internalAllow).toEqual([
+      "muon.services.acquire",
+      "muon.services.release",
+      "muon.services.rpc",
+    ]);
+  });
+  it("rejects Node.js services before invoking the APK builder", async () => {
+    const root = await project({
+      services: { worker: { runtime: "node", entry: "worker.ts" } },
+    });
+    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
+      /services\.worker: node services are not supported for android-arm64-v8a/,
+    );
+    expect(buildAndroid).not.toHaveBeenCalled();
+  });
   it("packages static notification categories and a separately validated small icon", async () => {
     const root = await project({
       notifications: { enabled: true, defaultCategory: "orders" },
@@ -108,6 +131,19 @@ describe("public Android builds", () => {
     }
     expect(buildAndroid).not.toHaveBeenCalled();
   });
+  it.each([true, false])(
+    "respects explicit boot permission on an app without services: %s",
+    async (requested) => {
+      const permission = "android.permission.RECEIVE_BOOT_COMPLETED";
+      const root = await project({
+        android: { permissions: requested ? [permission] : [] },
+      });
+      await buildMuonApp({ root, targets: ["android"] });
+      expect(
+        buildAndroid.mock.calls[0]![0].permissions.includes(permission),
+      ).toBe(requested);
+    },
+  );
   it.each([true, false, undefined])(
     "enables notification permissions and functions only when configured: %s",
     async (enabled) => {
@@ -366,7 +402,6 @@ describe("public Android builds", () => {
   it.each([
     [{ android: { fcm: true } }, /FCM.*unavailable/i],
     [{ android: { quickjs: true } }, /QuickJS.*unavailable/i],
-    [{ node: { project: "server" } }, /node.project.*unavailable/],
     [{ android: { applicationId: "invalid-id" } }, /applicationId/],
     [{ android: { versionCode: 0 } }, /versionCode/],
     [{ android: { abis: ["armeabi-v7a"] } }, /abis/],

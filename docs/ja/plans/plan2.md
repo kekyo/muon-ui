@@ -7,7 +7,7 @@
 「試作内で動くこと」と「muon-ui利用者向けの正式機能であること」を区別する。主な根拠は次のとおりである。
 
 - 公開targetとbuild/pack実装: [ui/common/targets.ts](../../../ui/common/targets.ts)、[ui/common/build.ts](../../../ui/common/build.ts)、[ui/common/pack.ts](../../../ui/common/pack.ts)
-- Android試作の実装と実行方法: [muon-android-prototype](../../../core/android-test)、[core/android-poc/README.md](../../../core/android-poc/README.md)
+- Androidの検証用アプリと実行方法は[テストホスト](../../../core/android-test/README.md)を参照する。
 - Android APIの実装と方針: [core/android/renderer/android-api.ts](../../../core/android/renderer/android-api.ts)、[android-api-compatibility.md](../../../android-api-compatibility.md)
 - WebViewネットワークの検証記録: [filter-limitation.md](../../../filter-limitation.md)
 - NDKプラグインの実装と端末検証記録: [plan1.md](./plan1.md)
@@ -15,7 +15,7 @@
 
 ## 2. 結論
 
-現在のAndroid対応は、固定構成の試作アプリとしては、WebView、Muon RPC、組み込みAPI、NDKプラグイン、限定的なQuickJSランタイム、両ABIのAPK/AAB生成まで成立している。一方、公開`muon-ui`パッケージにはAndroid targetがなく、一般の利用者プロジェクトからAndroid成果物を作る正式なbuild/pack経路もない。
+現在のAndroid対応は、固定構成の試作アプリとしては、WebView、Muon RPC、組み込みAPI、NDKプラグイン、両ABIのAPK/AAB生成まで成立している。一方、公開`muon-ui`パッケージにはAndroid targetがなく、一般の利用者プロジェクトからAndroid成果物を作る正式なbuild/pack経路もない。
 
 したがって、現在の位置付けは「技術試作として広い範囲を実装済み、利用者向けAndroidサポートとしては未公開」である。
 
@@ -29,9 +29,7 @@
 | 本番署名                | releaseも標準debug keyを使用                | 未対応                              |
 | Muon組み込みAPI         | browser、environments、fsの一部             | 試作内対応                          |
 | NDKプラグイン           | build-time registryと5個のtest plugin       | 試作内対応                          |
-| JavaScript runtime      | QuickJSによる限定Node.js風API               | 試作内対応、Node.js互換ではない     |
-| `node.project`          | Android設定検証で拒否                       | 未対応                              |
-| VM/実機                 | 基礎ランタイムは過去にVMとPixel 6で検証済み | 現行QuickJS追加後の再検証記録が不足 |
+| VM/実機 | 基礎ランタイムをVMとPixel 6で検証済み | 端末ごとの回帰試験が必要 |
 | 利用者向け文書          | 試作READMEと検証資料のみ                    | 未対応                              |
 
 ## 3. 公開muon-uiとの境界
@@ -44,7 +42,7 @@
 
 ### 3.2 試作は一般の利用者プロジェクトを入力にしない
 
-現在のAndroidアプリは[muon-android-prototype](../../../core/android-test)内の固定Gradle projectである。
+現在のAndroidアプリは[muon-android-tester](../../../core/android-test)内の固定Gradle projectである。
 
 - application IDとnamespaceは`dev.muon.prototype`で固定されている。
 - Java package、AIDL、JNI、テスト、起動Activityも試作namespaceへ結び付いている。
@@ -76,9 +74,8 @@
 | cardio                | submodule 1.1.0                        |
 | tra-ffic              | submodule 1.0.0                        |
 | libffi                | 3.8.0                                  |
-| QuickJS               | 2026-06-04                             |
 
-QuickJS、libffi、bundletoolなどのdownloadはversionとSHA-256を固定し、使用前に検査する。native dependency manifestには入力commit、toolchain、configure引数、patch、成果物情報を記録する。
+libffi、bundletoolなどのdownloadはversionとSHA-256を固定し、使用前に検査する。native dependency manifestには入力commit、toolchain、configure引数、patch、成果物情報を記録する。
 
 ### 4.2 WebView、asset、RPC
 
@@ -117,7 +114,7 @@ WebView自身の通常ネットワークはMuonが包括的にfilterしない。
 - 試作Manifestは`INTERNET`と`ACCESS_LOCAL_NETWORK`を常に宣言する。
 - Android 17、target SDK 37以降のLAN通信では、Activity側で`ACCESS_LOCAL_NETWORK`の実行時permissionを要求する必要がある。
 - cleartextは既定拒否し、試験とloopback server用の`localhost`だけを例外にする。
-- CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`はWebView通信にもQuickJS通信にも適用しない。
+- CEF版の`network.allow`、`network.authorizedOrigin`、`network.localAccess`はWebView通信に適用しない。
 - Muon独自のsecurity境界は、構成済みasset hostのfail-closed処理と、RPCを信頼済みasset originのmain frameへ限定する処理である。
 
 これはCEF版と同じネットワーク保証ではない。POST、redirect、WebSocket、Service WorkerなどをWebView本来の経路で利用できる代わりに、Muonによる宛先allowlistや要求元origin単位の制御を失う。
@@ -135,56 +132,21 @@ Android pluginは[android-plugins.json](../../../core/android-test/android-plugi
 
 native runtimeはCEF非依存の`MuonPluginRuntime` core、cardio 1.1.0のAndroid dispatcher host、tra-ffic 1.0.0とlibffi 3.8.0を使う。x86_64の16 KiBページでは、libffi sourceのbuild用copyへmuon所有patchを適用し、外部submodule自体は変更しない。
 
-### 4.6 組み込みQuickJS runtime
-
-試作は`muon.node.createNode()`という呼び出し形で、非公開の`:muon_javascript` Service processに独立したQuickJS runtimeを作る。
-
-このruntimeはNode.jsではない。API名は既存の生成形に合わせただけであり、Node.js version、V8、libuv、npm ecosystemとの互換性を意味しない。
-
-実装済みの組み込みmoduleは次のとおりである。
-
-| 分類               | module                                                                                      |
-| ------------------ | ------------------------------------------------------------------------------------------- |
-| filesystem/path    | `node:fs`、`node:fs/promises`、`node:path`                                                  |
-| runtime primitives | `node:events`、`node:buffer`、`node:timers`、`node:timers/promises`                         |
-| stream/URL         | `node:stream`、`node:stream/promises`、`node:url`                                           |
-| environment        | `node:process`、`node:os`                                                                   |
-| utility            | `node:util`、`node:assert`、`node:assert/strict`、`node:querystring`、`node:string_decoder` |
-| crypto             | `node:crypto`のSHA-256、HMAC、乱数、UUID、timing-safe比較の限定実装                         |
-| network            | `node:dns`、`node:dns/promises`、`node:net`、`node:http`、`node:https`                      |
-
-各moduleは`node:`なしのaliasも持つ。`Buffer`、timer、EventTarget、AbortController、URL、fetch、process、限定版cryptoなどのglobalもある。
-
-主な境界は次のとおりである。
-
-- 同梱済みの固定ES moduleと組み込みmoduleだけをimportできる。
-- `require`、CommonJS、`node_modules`探索、package `exports`、JSON module、npm、native addon、Node-API、REPLはない。
-- `child_process`、`worker_threads`、`vm`、`v8`、`module`、`inspector`、`tls`、`http2`、`zlib`など、一覧外のmoduleは利用できない。
-- `node:fs`は`files/javascript-runtime`配下の仮想rootへ閉じ込める。`content://`とshared storageは扱わない。
-- TCP client、DNS、HTTP/HTTPS clientを提供する。TCP/HTTP serverはloopbackだけでlistenできる。
-- HTTPSはcertificate検証を必須とし、`rejectUnauthorized: false`を認めない。
-- renderer bridgeはprimitive、有限number、64 bit範囲のbigint、binary、JSON value、callbackを転送する。stateful objectをrendererへ直接返さない。
-- process全体で同時16 runtime、runtimeごとに64 MiB heap、1 MiB native stack、2秒の連続JS実行などの上限を設ける。
-- `release()`はmodule handle、timer、DNS、socket、listener、HTTP requestとnative runtimeを回収し、未完了処理をrejectする。
-
-現在のapplication moduleは試験用[backend.mjs](../../../core/android-poc/android/app/src/main/assets/muon-javascript/backend.mjs)で固定されている。一般の利用者projectを収集、bundle、検証して同梱するpipelineはない。また、Android設定検証器は引き続き`node.project`を拒否する。
-
 ## 5. Build、package、署名
 
 試作workspaceの全体buildは次で実行する。
 
 ```bash
-npm test --workspace muon-android-prototype
+npm test --workspace muon-android-tester
 ```
 
 このcommandは次を行う。
 
 1. Vitest、format、TypeScript、Vite build
 2. 両ABIのnative dependency生成
-3. QuickJS sourceの取得またはcache検証
-4. Android plugin registry生成
-5. debug/release APK、debug instrumentation APK、release AAB、release APKS生成
-6. QuickJS、native dependency、registry、ELF、APK/AAB/APKS内容の検査
+3. Android plugin registry生成
+4. debug/release APK、debug instrumentation APK、release AAB、release APKS生成
+5. native dependency、registry、ELF、APK/AAB/APKS内容の検査
 
 主な成果物は次のとおりである。
 
@@ -207,7 +169,7 @@ release成果物もローカル試験用の標準Android debug keyで署名す�
 - Viteのformat、TypeScript validation、production build
 - `x86_64`と`arm64-v8a`のnative build
 - debug/release APK、debug instrumentation APK、release AAB/APKSの生成
-- QuickJS source、native dependency、plugin registry、release package verifier
+- native dependency、plugin registry、release package verifier
 
 repository全体では、既知の非Android課題であるWindows Settings uninstall E2Eがmenu item待機でtimeoutし、`muon-ui`は306/307件となった。Android workspaceに失敗はなかったが、root `npm test`の最終終了codeは1であり、全体GREENではない。
 
@@ -219,8 +181,7 @@ repository全体では、既知の非Android課題であるWindows Settings unin
 
 | test class                         | 件数 | 主な範囲                                                         |
 | ---------------------------------- | ---: | ---------------------------------------------------------------- |
-| `MuonActivityTest`                 |   18 | asset、RPC、API、plugin、fs、Activity再生成、複数QuickJS runtime |
-| `MuonJavaScriptRuntimeServiceTest` |   18 | module、fs、crypto、network、負荷、上限、異常JS、Service再起動   |
+| `MuonActivityTest`                 |   18 | asset、RPC、API、plugin、fs、Activity再生成 |
 | `MuonNativeRuntimeTest`            |    5 | cardio、plugin lifecycle、libffi closure、startup failure        |
 | `MuonNetworkFilterTest`            |    3 | 通常WebView通信、asset 404、callback制約                         |
 
@@ -231,7 +192,7 @@ repository全体では、既知の非Android課題であるWindows Settings unin
 
 各gateは44件のinstrumentation、署名済みrelease APK、AAB由来端末別split APKを実行し、時間待ちではなくpage-ready eventを完了判定に使う。
 
-[plan1.md](./plan1.md)には、QuickJS拡張前のWebView、RPC、NDK plugin、cardio、tra-ffic/libffiについて、16 KiB x86_64 VMと4 KiB Pixel 6でPASSした記録がある。今回の調査時には接続端末がなかったため、QuickJSを含む現行44件は端末上で再実行していない。したがって、現行HEADについて端末gateがGREENであるとはこの文書では断定しない。
+[plan1.md](./plan1.md)には、WebView、RPC、NDK plugin、cardio、tra-ffic/libffiについて、16 KiB x86_64 VMと4 KiB Pixel 6でPASSした記録がある。今回の調査時には接続端末がなかったため、現行44件は端末上で再実行していない。したがって、現行HEADについて端末gateがGREENであるとはこの文書では断定しない。
 
 arm64-v8a成果物の16 KiB整列検査はあるが、16 KiBページのarm64実機またはVMでのruntime実行記録はない。
 
@@ -245,25 +206,12 @@ arm64-v8a成果物の16 KiB整列検査はあるが、16 KiBページのarm64実
 4. production署名、秘密情報管理、AAB store配布、成果物metadataがない。
 5. npm packageへAndroid templateと全依存resourceを含め、クリーン環境でbuildする検証がない。
 6. Android SDK/NDK/JDK/CMake/adb不足を公開CLIで事前診断しない。
-7. 現行QuickJS追加後のVMとPixel 6の完全な端末回帰結果が記録されていない。
 8. `content://`、file picker、permission UI、notification、foreground Service、app link、in-app updateなどのAndroid固有機能は未対応である。
-
-### 7.2 JavaScript runtime契約の不整合
-
-現在は`muon.node.createNode()`がQuickJSを返す一方、次の事実がある。
-
-- runtimeはNode.jsではなく、限定互換moduleだけを提供する。
-- `node.project`はAndroid設定検証で拒否する。
-- [android-api-compatibility.md](../../../android-api-compatibility.md)はNode.js sidecarと`createNode()`を非対応と記載したままである。
-- public APIとしてNode.js互換範囲、versioning、feature detection、project packaging、migrationを定義していない。
-
-正式公開前に、QuickJSをAndroid固有JavaScript runtimeとして別名で公開するか、限定Node.js互換facadeとして明示的に契約するか、実際のNode.js runtimeを採用するかを決める必要がある。現状のAPI名だけからNode.js互換と受け取れる状態は製品契約にできない。
 
 ### 7.3 文書の不整合
 
-[core/android-poc/README.md](../../../core/android-poc/README.md)は現在の試作に最も近い。一方、次の資料には履歴と現状が混在する。
+関連資料には当時の実装と設計案が混在する。
 
-- [android-api-compatibility.md](../../../android-api-compatibility.md)は`x86_64`のみ、NDK plugin後続、Node.js API非対応というQuickJS追加前の記述を含む。
 - [filter-limitation.md](../../../filter-limitation.md)はdeny-all案、native HTTP代理案、通常ネットワーク採用後の確定方針を同じ文書に残す。
 - rootの[README.md](../../../README.md)と[README_ja.md](../../../README_ja.md)はAndroidを利用者向けtargetとして案内しない。これは公開状態としては正しいが、正式対応時には更新が必要である。
 
@@ -275,8 +223,7 @@ Android supportを層ごとに判定すると次のとおりである。
 2. 固定試作アプリ: 広い範囲で実装済みである。
 3. build時の両ABI成果物検査: 成立している。
 4. 過去の基礎runtime VM/実機検証: 完了している。
-5. 現行QuickJS込み端末回帰: sourceとgateはあるが、今回の調査では未実行である。
-6. 一般のmuon-ui projectからのAndroid build/pack: 未対応である。
-7. production配布と利用者向け正式support: 未対応である。
+5. 一般のmuon-ui projectからのAndroid build/pack: 未対応である。
+6. production配布と利用者向け正式support: 未対応である。
 
 次に必要なのは試作機能をさらに無秩序に増やすことではなく、公開契約を確定し、試作を正式backendへ分離し、公開build/pack、署名、クリーンpackage検証、端末gate、利用者向け文書を一つの製品経路として接続することである。

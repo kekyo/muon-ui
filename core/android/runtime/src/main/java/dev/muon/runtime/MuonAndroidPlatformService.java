@@ -22,6 +22,7 @@ import androidx.webkit.WebViewCompat;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.util.Map;
 import java.util.TreeMap;
@@ -54,6 +55,9 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     private final MuonAndroidSettingsService settingsService;
     private final MuonAndroidNotificationPermissionService notificationPermissionService;
     private final MuonAndroidNotificationService notificationService;
+    private MuonServiceClient serviceClient;
+    private final boolean servicesConfigured;
+    private boolean resumed;
     private float managedZoomFactor = 1.0f;
 
     MuonAndroidPlatformService(
@@ -73,6 +77,9 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         notificationService = new MuonAndroidNotificationService(activity, config);
         settingsService = new MuonAndroidSettingsService(activity, notificationService::hasChannel);
         notificationPermissionService = new MuonAndroidNotificationPermissionService(activity, config.notificationsEnabled);
+        serviceClient = new MuonServiceClient(activity);
+        servicesConfigured = config.servicesConfigured;
+        if (servicesConfigured) serviceClient.activate();
     }
 
     void invoke(
@@ -88,6 +95,10 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         if (functionPath.startsWith("muon.fs.")) {
             filesystemService.invoke(
                     callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.services.")) {
+            invokeService(functionPath, arguments, attachments, completion);
             return;
         }
         if (functionPath.startsWith("muon.android.systemBars.")) {
@@ -179,11 +190,51 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         systemBarsService.cancelAll();
         notificationPermissionService.cancelAll();
         notificationService.cancelAll();
+        serviceClient.close();
+        if (activity != null) {
+            serviceClient = new MuonServiceClient(activity);
+            serviceClient.setResumed(resumed);
+        }
+    }
+
+    private void invokeService(String path, JSONArray arguments, byte[][] attachments, Completion completion) {
+        try {
+            if (arguments.length() != 1 || !(arguments.get(0) instanceof String) || attachments.length != 0)
+                throw new IllegalArgumentException(path + " requires one JSON string");
+            JSONTokener parser = new JSONTokener(arguments.getString(0));
+            Object value = parser.nextValue();
+            if (!(value instanceof JSONObject) || parser.nextClean() != 0)
+                throw new IllegalArgumentException("Service arguments must be a JSON object");
+            JSONObject command = (JSONObject)value;
+            String operation = path.substring("muon.services.".length());
+            if (!operation.equals("acquire") && !operation.equals("release") && !operation.equals("getState")
+                    && !operation.equals("setAutostart") && !operation.equals("watchState") && !operation.equals("rpc"))
+                throw new IllegalArgumentException("Unknown service operation");
+            java.util.Iterator<String> keys = command.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                if (!key.equals("serviceId") && !(operation.equals("release")
+                        && (key.equals("refId") || key.equals("generation")))
+                        && !(operation.equals("setAutostart") && key.equals("enabled"))
+                        && !(operation.equals("rpc") && (key.equals("refId") || key.equals("generation")
+                                || key.equals("action") || key.equals("payload")))
+                        && !(operation.equals("watchState") && (key.equals("operation") || key.equals("token"))))
+                    throw new IllegalArgumentException("Unknown service argument: " + key);
+            }
+            serviceClient.invoke(operation, command, new MuonServiceClient.Completion() {
+                @Override public void complete(JSONObject result) { completion.completeString(result.toString()); }
+                @Override public void completeJson(String result) { completion.completeString(result); }
+                @Override public void fail(String error) { completion.fail(error); }
+            });
+        } catch (JSONException | RuntimeException error) { completion.fail(error.toString()); }
     }
 
     void setResumed(boolean value) {
         settingsService.setResumed(value);
         notificationPermissionService.setResumed(value);
+        resumed = value;
+        serviceClient.setResumed(value);
+        if (value && servicesConfigured) serviceClient.activate();
     }
 
     void onNotificationIntent(Intent intent) { notificationService.onNotificationIntent(intent); }
@@ -214,6 +265,7 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         settingsService.close();
         notificationPermissionService.close();
         notificationService.close();
+        serviceClient.close();
         activity = null;
         webView = null;
     }

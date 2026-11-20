@@ -143,6 +143,19 @@ Insetsは画面の端からの距離で、`top`、`right`、`bottom`、`left`を
 
 `target`には`"app-details"`、`"notifications"`、`{ type: "notification-channel", channelId }`を指定できます。チャンネル画面はAPI 26以降の登録済みIDが必要です。通知専用画面がない場合、`{ fallback: "app-details" }`を明示したときだけアプリ情報へ切り替えます。API 24・25の通知専用画面は非対応です。Activityが利用できない場合や遷移先がない場合はPromiseを拒否します。[Androidの設定画面アクション](https://developer.android.com/reference/android/provider/Settings)
 
+## muon.services名前空間
+
+`window.muon.services`は、`muon.json`に登録したサービスを操作します。`validate`モードでは`muon:services`からimportします。利用には`muon.services.*`などの許可が必要です。
+
+| 関数 | 戻り値 | 内容 |
+| --- | --- | --- |
+| `acquire(id)` | `Promise<MuonServiceHandle>` | 起動を待って、そのページが所有する参照を取得します。 |
+| `getState(id)` | `Promise<MuonServiceState>` | 参照を増やさずに設定と実行状態を取得します。 |
+| `watchState(id, listener)` | `Promise<MuonServiceWatcher>` | 参照を増やさずに状態を監視します。`close()`で監視を終了します。 |
+| `setAutostart(id, enabled)` | `Promise<void>` | 利用者の設定を保存し、ホストの常駐参照を変更します。他ページの参照は維持します。 |
+
+ハンドルは`call(method, args, options?)`、`subscribe(event, listener)`、`release()`を持ちます。取得ごとに独立した参照になり、ページ破棄時にも回収されます。引数の型、コールバックの寿命、イベント、OFF後の動作は[サービスのガイド](services.md)を参照してください。
+
 ## muon.browser名前空間
 
 `window.muon.browser` は、現在のmuonブラウザウインドウとページ表示を操作します。
@@ -176,7 +189,7 @@ Insetsは画面の端からの距離で、`top`、`right`、`bottom`、`left`を
 | `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | タイトルバーの表示/非表示を切り替えます。                         |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | 現在のウインドウのタイトルバーアイコンを設定または解除します。 |
 | `close()`             | なし                | `Promise<void>` | 現在のウインドウを閉じます。                                     |
-| `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | muonプロセスを終了します。`exitCode` を省略した場合は `0` です。 |
+| `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | サービスを含むアプリ全体を終了します。`exitCode` を省略した場合は `0` です。 |
 | `recycle()`           | なし                | `Promise<void>` | muonプロセスを終了し、起動元が対応している場合は自動再起動します。 |
 
 - `reload()`, `hardReload()`, `close()`, `shutdown()`, `recycle()` はページコンテキストの破棄やプロセス終了を伴うため、返されたPromiseを観測する前にJavaScript側の実行環境が消えることがあります。
@@ -261,7 +274,7 @@ await window.muon.browser.recycle();
 ## muon.launcher名前空間
 
 `window.muon.launcher` は、次回 `muon-launcher` 起動時に使われるruntime catalog更新設定を扱います。
-設定はruntimeディレクトリの `muon-launcher.ini` に保存され、現在実行中のCEFやNode.js sidecarには影響しません。
+設定はruntimeディレクトリの `muon-launcher.ini` に保存され、現在実行中のCEFやNode.jsサービスには影響しません。
 
 | 関数                    | 引数                                                                           | 戻り値                           | 説明                                                                 |
 | :---------------------- | :----------------------------------------------------------------------------- | :------------------------------- | :------------------------------------------------------------------- |
@@ -279,11 +292,11 @@ await window.muon.launcher.triggerUpdate();
 
 - `cefVersionPolicy` と `cefExactVersion` はCEF専用です。Node.jsのversionは、ビルド時にlauncherへ埋め込まれたNode runtime requirementから選択され、このAPIにはNode.js用のversion policy設定はありません。
 - `catalogRefreshIntervalSeconds` と `triggerUpdate()` は、次回のruntime準備で適用対象となるcatalogに共通で作用します。Node.js catalogは、アプリが実行にNode.jsを必要とする場合だけ適用対象になります。
-- catalog更新やruntimeの置き換えは実行中に行われません。現在のCEFとすべてのNode.js sidecarはそのまま動作し、変更は次回のlauncher起動時に反映されます。
+- catalog更新やruntimeの置き換えは実行中に行われません。現在のCEFとすべてのNode.jsサービスはそのまま動作し、変更は次回のlauncher起動時に反映されます。
 
 ## muon.environments名前空間
 
-`window.muon.environments` は、muonプロセスの環境情報と自動起動設定を扱います。
+`window.muon.environments` は、muonプロセスの環境情報と、ユーザーセッション開始時にUIを表示する設定を扱います。サービスの自動起動は`muon.services.setAutostart()`で別に管理します。いずれかのサービスが自動起動ONなら、UIの自動表示をOFFにしてもOSの起動登録を維持します。
 
 | 関数                    | 引数               | 戻り値                            | 説明                                                                                                            |
 | :---------------------- | :----------------- | :-------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
@@ -292,8 +305,8 @@ await window.muon.launcher.triggerUpdate();
 | `getCommandLine()`      | なし               | `Promise<string[]>`               | muon起動時に記録されたコマンドラインを返します。利用可能な場合は `argv[0]` も含みます。                         |
 | `getProcessId()`        | なし               | `Promise<number>`                 | ネイティブmuonプロセスIDを返します。                                                                            |
 | `getRuntimeInfo()`      | なし               | `Promise<MuonRuntimeInfo>`        | 現在のバックエンドに応じたruntime情報を返します。                                                               |
-| `getAutostart()`        | なし               | `Promise<boolean \| undefined>`   | ユーザーセッション開始時に現在のアプリを自動起動する設定かどうかを返します。判別不能な場合は `undefined` です。 |
-| `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>`                   | 自動起動設定を有効または無効にします。                                                                          |
+| `getAutostart()`        | なし               | `Promise<boolean \| undefined>`   | ユーザーセッション開始時にUIを自動表示する設定を返します。判別不能な場合は `undefined` です。 |
+| `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>`                   | UIの自動表示を有効または無効にします。サービスの自動起動設定は変更しません。 |
 
 - `getRuntimeInfo()` は `backend` で分岐する型を返します。
   `backend === "cef"` の場合は、従来のmuon-coreビルド情報、参照CEF情報、実行中CEF情報を返します。`muonCore` には `version`, `gitCommitHash`, `buildDate`, `gitCommitDate` が含まれ、日付はISO 8601形式です。

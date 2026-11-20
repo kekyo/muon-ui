@@ -6,9 +6,9 @@
 import { createConnection, Socket } from 'node:net';
 import type { Readable, Writable } from 'node:stream';
 
-import { createMuonNodeBridge } from './index.js';
+import { createMuonNodeServiceBridge } from './service-bridge.ts';
 
-interface SidecarConnection {
+interface ServiceConnection {
   input: Readable;
   output: Writable;
   close(): Promise<void>;
@@ -66,7 +66,7 @@ const parseInheritedFileDescriptor = (source: string): number => {
 
 const openInheritedFileDescriptor = (
   fileDescriptor: number
-): SidecarConnection => {
+): ServiceConnection => {
   const socket = new Socket({
     fd: fileDescriptor,
     readable: true,
@@ -109,7 +109,7 @@ const waitForSocketConnection = async (socket: Socket): Promise<void> => {
 
 const openWindowsNamedPipe = async (
   pipeName: string
-): Promise<SidecarConnection> => {
+): Promise<ServiceConnection> => {
   const socket = createConnection({
     path: pipeName,
     allowHalfOpen: true,
@@ -139,7 +139,7 @@ const openWindowsNamedPipe = async (
   };
 };
 
-const openSidecarConnection = async (): Promise<SidecarConnection> => {
+const openServiceConnection = async (): Promise<ServiceConnection> => {
   if (process.platform === 'win32') {
     return await openWindowsNamedPipe(requireEnvironment('MUON_NODE_PIPE'));
   }
@@ -149,15 +149,14 @@ const openSidecarConnection = async (): Promise<SidecarConnection> => {
   return openInheritedFileDescriptor(fileDescriptor);
 };
 
-const runSidecar = async (): Promise<void> => {
+const runService = async (): Promise<void> => {
   const expectedToken = requireEnvironment('MUON_NODE_TOKEN');
   delete process.env.MUON_NODE_TOKEN;
-  const connection = await openSidecarConnection();
-  const bridge = createMuonNodeBridge({
+  const connection = await openServiceConnection();
+  const bridge = createMuonNodeServiceBridge({
     input: connection.input,
     output: connection.output,
     expectedToken,
-    changeWorkingDirectory: true,
   });
 
   try {
@@ -172,13 +171,13 @@ const runSidecar = async (): Promise<void> => {
 };
 
 try {
-  await runSidecar();
+  await runService();
   process.exit(0);
 } catch (error) {
   const message =
     error instanceof Error ? (error.stack ?? error.message) : String(error);
   try {
-    await writeStandardError(`muon Node sidecar failed: ${message}\n`);
+    await writeStandardError(`muon Node service failed: ${message}\n`);
   } finally {
     process.exit(1);
   }

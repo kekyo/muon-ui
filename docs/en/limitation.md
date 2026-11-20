@@ -10,7 +10,7 @@ The following placement restrictions still apply.
 | --- | --- |
 | The runtime running CEF, its profile, and temporary directories | Use short paths in ordinary notation, with room for internal filenames. Accessing data at a long path does not guarantee that CEF can run from that location. |
 | `browser.profilePath` | Startup rejects a resolved path of 260 units or more, or one starting with `\\?\`. It does not silently relocate the profile. |
-| The launcher's runtime, executor `cwd`, and `node.project` | Paths used as Windows working directories must be shorter than 260 units. Load deeply nested Node.js modules by relative paths from a short project root. |
+| The launcher's runtime, executor `cwd`, and Node.js service project directory | Windows working directories must be shorter than 260 UTF-16 code units. A service can load deeply nested modules by relative paths from a short project root. |
 | NSIS and shortcuts | Installation limits include the names of packaged files. See [installation locations](./package-install-location-advanced-topics.md). |
 | Autostart | The complete Run registry command, including quotes, must fit within 260 units. |
 
@@ -38,7 +38,7 @@ Therefore, always take care not to expose unnecessary plugin functions.
 
 ## Android WebView backend
 
-See [building and distributing Android apps](./android.md) for public APK commands and verified environments. FCM and QuickJS are unavailable in public application builds. QuickJS mentioned below applies only to the prototype host.
+For APK commands and tested environments, see [building and distributing Android apps](./android.md). Android apps can include [QuickJS services](services.md). FCM is unsupported.
 
 The Android WebView backend does not comprehensively intercept normal WebView network traffic through muon. CEF settings such as `network.allow`, `network.authorizedOrigin`, and `network.localAccess` may remain in a shared `muon.json`, but Android does not enforce them as allow or deny rules for WebView traffic and emits a warning when they are explicitly configured.
 
@@ -50,9 +50,7 @@ Validate mode checks direct imports through Vite's `sources` and `packages` rule
 
 Public APK builds use the fixed asset origin `https://main.asset.muon.invalid`. Muon handles this host locally, including missing assets, without forwarding requests to the network. Multiple asset hosts and custom host names are unsupported in public builds. The [network-filter validation record](../../filter-limitation.md) describes earlier configuration proposals and findings.
 
-The current Android `muon.fs` handles real filesystem paths allowed by Android. Direct `content://` URI access and `muon.fs.dialogs` are unsupported. `muon.launcher`, `muon.executor`, and the desktop Node.js sidecar are unavailable. External native plugins packaged inside the APK work in simple and validate modes; adding plugins from outside the APK after installation is unsupported. See [native plugin configuration](./android.md#prebuilt-native-plugins).
-
-In the Android prototype host, `muon.node.createNode()` creates an embedded QuickJS runtime in a separate-process Service and provides a limited set of Node-like modules. It is not compatible with Node.js, npm packages, CommonJS, or the complete standard library. See the [Android API compatibility policy](../../android-api-compatibility.md) for supported functions and the [Android prototype host](../../core/android-poc/README.md) for QuickJS modules, network boundaries, and resource limits.
+The current Android `muon.fs` handles real filesystem paths allowed by Android. Direct `content://` URI access and `muon.fs.dialogs` are unsupported. `muon.launcher` and `muon.executor` are unavailable. External native plugins packaged inside the APK work in simple and validate modes; adding plugins from outside the APK after installation is unsupported. See [native plugin configuration](./android.md#prebuilt-native-plugins).
 
 ## Limitations on enabling the CEF sandbox on Linux
 

@@ -143,6 +143,19 @@ Channels are available on API 26 and later. Registration requires `id`, `name`, 
 Targets are `"app-details"`, `"notifications"`, and `{ type: "notification-channel", channelId }`. Channel settings require API 26 or later and a registered ID. If a dedicated notification screen is unavailable, app details are used only when explicitly permitted with `{ fallback: "app-details" }`. The dedicated notification screen is unsupported on API 24 and 25. A missing Activity or destination rejects the Promise. See [Android settings actions](https://developer.android.com/reference/android/provider/Settings).
 
 
+## muon.services namespace
+
+`window.muon.services` operates services declared in `muon.json`. In `validate` mode, import from `muon:services`. Access requires grants such as `muon.services.*`.
+
+| Function | Return type | Meaning |
+| --- | --- | --- |
+| `acquire(id)` | `Promise<MuonServiceHandle>` | Waits for startup and acquires a page-owned reference. |
+| `getState(id)` | `Promise<MuonServiceState>` | Reads preferences and runtime state without acquiring a reference. |
+| `watchState(id, listener)` | `Promise<MuonServiceWatcher>` | Observes state without acquiring a reference; `close()` ends observation. |
+| `setAutostart(id, enabled)` | `Promise<void>` | Saves the user preference and updates host residency, preserving other pages' references. |
+
+A handle exposes `call(method, args, options?)`, `subscribe(event, listener)`, and `release()`. Each acquisition owns a distinct reference, also reclaimed when its page disappears. See the [service guide](services.md) for types, callback lifetime, events, and behavior after OFF.
+
 ## muon.browser namespace
 
 `window.muon.browser` controls the current muon browser window and page display.
@@ -176,7 +189,7 @@ Targets are `"app-details"`, `"notifications"`, and `{ type: "notification-chann
 | `setTitleBarVisibility(visible)` | `visible: boolean` | `Promise<void>` | Toggles title-bar visibility. |
 | `setTitleBarIcon(path)` | `path: string \| null` | `Promise<void>` | Sets or clears the title-bar icon for the current window. |
 | `close()` | none | `Promise<void>` | Closes the current window. |
-| `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | Terminates the muon process. If `exitCode` is omitted, it is `0`. |
+| `shutdown(exitCode?)` | `exitCode?: number` | `Promise<void>` | Exits the entire application, including services. If `exitCode` is omitted, it is `0`. |
 | `recycle()` | none | `Promise<void>` | Terminates the muon process and automatically restarts it when the launcher supports it. |
 
 - `reload()`, `hardReload()`, `close()`, `shutdown()`, and `recycle()` may destroy the page context or terminate the process, so the JavaScript execution environment can disappear before the returned Promise is observed.
@@ -261,7 +274,7 @@ await window.muon.browser.recycle();
 ## muon.launcher namespace
 
 `window.muon.launcher` handles runtime catalog update settings used the next time `muon-launcher` starts.
-Settings are saved in `muon-launcher.ini` in the runtime directory and do not affect the currently running CEF or Node.js sidecars.
+Settings are saved in `muon-launcher.ini` in the runtime directory and do not affect the currently running CEF or Node.js services.
 
 | Function | Arguments | Return value | Description |
 | :------- | :-------- | :----------- | :---------- |
@@ -279,11 +292,11 @@ await window.muon.launcher.triggerUpdate();
 
 - `cefVersionPolicy` and `cefExactVersion` apply only to CEF. The Node.js version is selected from the Node runtime requirement embedded into the launcher at build time; this API exposes no Node.js version-policy setting.
 - `catalogRefreshIntervalSeconds` and `triggerUpdate()` apply to every catalog that is applicable during the next runtime preparation. The Node.js catalog is applicable only when the application requires Node.js at runtime.
-- Catalog updates and runtime replacement are not performed while the application is running. The current CEF and all Node.js sidecars continue unchanged, and updates take effect during the next launcher startup.
+- Catalog updates and runtime replacement are not performed while the application is running. The current CEF and all Node.js services continue unchanged, and updates take effect during the next launcher startup.
 
 ## muon.environments namespace
 
-`window.muon.environments` handles environment information for the muon process and autostart settings.
+`window.muon.environments` handles process environment information and whether to show the UI when the user session starts. Manage service autostart separately with `muon.services.setAutostart()`. The OS login entry remains while any service has autostart enabled, even when UI auto-display is OFF.
 
 | Function | Arguments | Return value | Description |
 | :------- | :-------- | :----------- | :---------- |
@@ -292,8 +305,8 @@ await window.muon.launcher.triggerUpdate();
 | `getCommandLine()` | none | `Promise<string[]>` | Returns the command line recorded when muon started. Includes `argv[0]` when available. |
 | `getProcessId()` | none | `Promise<number>` | Returns the native muon process ID. |
 | `getRuntimeInfo()` | none | `Promise<MuonRuntimeInfo>` | Returns runtime information for the current backend. |
-| `getAutostart()` | none | `Promise<boolean \| undefined>` | Returns whether the current app is configured to start automatically when the user session starts. Returns `undefined` if it cannot be determined. |
-| `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>` | Enables or disables autostart. |
+| `getAutostart()` | none | `Promise<boolean \| undefined>` | Returns whether to show the UI automatically when the user session starts. Returns `undefined` if it cannot be determined. |
+| `setAutostart(enabled)` | `enabled: boolean` | `Promise<void>` | Enables or disables UI auto-display without changing service autostart preferences. |
 
 - `getRuntimeInfo()` returns a type discriminated by `backend`.
   When `backend === "cef"`, it returns the existing muon-core build, referenced CEF, and running CEF information. `muonCore` contains `version`, `gitCommitHash`, `buildDate`, and `gitCommitDate`; the dates are ISO 8601 strings.

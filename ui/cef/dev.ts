@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import {
   access,
@@ -33,14 +33,12 @@ import {
   resolveMuonRuntimePath,
 } from "./vite-internals.js";
 import {
-  assertMuonNodeHostArtifacts,
   assertMuonNodeProjectAssetSourceIsSafe,
   assertMuonNodeProjectStagingIsSafe,
   assertMuonNodeProjectViteBuildIsSafe,
   createMuonNodeRuntimeRequirement,
-  resolveMuonNodeProject,
-  stageMuonNodeProject,
-} from "./node-project.js";
+  resolveMuonNodeServiceProjects,
+} from "./node-project.ts";
 import {
   flattenVitePluginOptions,
   getMuonVitePluginOptions,
@@ -49,6 +47,12 @@ import {
 } from "../common/vite-options.js";
 import { createVitePackagedAssetOptions } from "../common/vite-assets.js";
 import type { MuonVitePluginOptions } from "../common/vite.js";
+import { resolveMuonServices } from "../common/service-config.ts";
+import {
+  startMuonDevelopmentServices,
+  type MuonDevelopmentServiceConfig,
+  type MuonDevelopmentServices,
+} from "./development-services.ts";
 
 const muonRecycleExitCode = 88;
 
@@ -81,16 +85,15 @@ interface ProjectConfigResolution {
 }
 
 interface MuonDevOverrideConfig {
+  serviceHost: MuonDevelopmentServiceConfig["serviceHost"];
   asset?: {
     sourcePath: string;
-  };
-  node?: {
-    project: string;
   };
   cdp?: {
     enable: true;
   };
   browser?: {
+    profilePath: string;
     startPage?: string;
     keybind?: {
       devtools: "f12";
@@ -103,6 +106,13 @@ interface MuonDevOverrideConfig {
     };
   };
   plugin?: MuonRuntimePluginConfig;
+}
+
+interface MuonDevSession {
+  services: MuonDevelopmentServices | undefined;
+  child: ChildProcess | undefined;
+  cancellation: AbortController;
+  exitCode: number | undefined;
 }
 
 /**
@@ -411,22 +421,22 @@ const prepareViteRunAssets = async (
     project.root,
     effectiveConfigPath,
   );
-  const nodeProject = await resolveMuonNodeProject(
+
+  if (project.viteOutputDirectory === undefined) {
+    throw new Error("Vite output directory could not be resolved.");
+  }
+  const nodeProjects = await resolveMuonNodeServiceProjects(
     projectConfig.config,
     projectConfig.configPath === undefined
       ? project.root
       : dirname(projectConfig.configPath),
   );
-
-  if (project.viteOutputDirectory === undefined) {
-    throw new Error("Vite output directory could not be resolved.");
-  }
   await assertMuonNodeProjectViteBuildIsSafe(
-    nodeProject,
+    nodeProjects,
     project.viteOutputDirectory,
     project.vitePublicDirectory ?? "",
   );
-  await assertMuonNodeProjectAssetSourceIsSafe(nodeProject, assetSourcePath);
+  await assertMuonNodeProjectAssetSourceIsSafe(nodeProjects, assetSourcePath);
   await rm(assetSourcePath, { recursive: true, force: true });
   const runtimePluginConfig = await getRuntimePluginConfigFromViteBuild(
     project.viteBuildRoot,
@@ -619,7 +629,7 @@ const createMuonDevOverrideConfig = (
   allowInsecureLocalhost: boolean | undefined,
   browserStartPage: string | undefined,
   runtimePluginConfig: MuonRuntimePluginConfig | undefined,
-  nodeProjectPath: string | undefined,
+  serviceConfig: MuonDevelopmentServiceConfig,
 ): MuonDevOverrideConfig => {
   const browser =
     browserStartPage === undefined && !enableDebugger
@@ -639,18 +649,12 @@ const createMuonDevOverrideConfig = (
         };
 
   return {
+    serviceHost: serviceConfig.serviceHost,
     ...(assetSourcePath === undefined
       ? {}
       : {
           asset: {
             sourcePath: assetSourcePath,
-          },
-        }),
-    ...(nodeProjectPath === undefined
-      ? {}
-      : {
-          node: {
-            project: nodeProjectPath,
           },
         }),
     ...(enableDebugger
@@ -660,7 +664,7 @@ const createMuonDevOverrideConfig = (
           },
         }
       : {}),
-    ...(browser === undefined ? {} : { browser }),
+    browser: { ...browser, ...serviceConfig.browser },
     ...(allowInsecureLocalhost === undefined
       ? {}
       : {
@@ -691,7 +695,9 @@ const runMuonExecutable = async (
   muonExecutablePath: string,
   configPaths: readonly string[],
   environment: NodeJS.ProcessEnv,
+  session: MuonDevSession,
 ): Promise<number> => {
+  if (session.cancellation.signal.aborted) return session.exitCode ?? 1;
   const args = configPaths.flatMap((configPath) => ["-c", configPath]);
   const child = spawn(muonExecutablePath, args, {
     cwd: dirname(muonExecutablePath),
@@ -699,18 +705,24 @@ const runMuonExecutable = async (
     stdio: ["ignore", "inherit", "inherit"],
   });
 
-  return await new Promise<number>((resolvePromise, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => {
-      resolvePromise(code ?? 1);
+  session.child = child;
+  try {
+    return await new Promise<number>((resolvePromise, reject) => {
+      child.once("error", reject);
+      child.once("close", (code) => {
+        resolvePromise(code ?? session.exitCode ?? 1);
+      });
     });
-  });
+  } finally {
+    session.child = undefined;
+  }
 };
 
 const runMuonDevOnce = async (
   options: MuonDevOptions,
   cwd: string,
   reportViteServerProxyWarning: () => void,
+  session: MuonDevSession,
 ): Promise<MuonDevResult> => {
   const preparedViteAssets =
     options.assetSourcePath === undefined
@@ -760,11 +772,13 @@ const runMuonDevOnce = async (
     root,
     options.configPath ?? preparedViteAssets?.configPath,
   );
-  const nodeProject = await resolveMuonNodeProject(
-    projectConfig.config,
+  const services = await resolveMuonServices(
+    projectConfig.config?.services,
     projectConfig.configPath === undefined
       ? root
       : dirname(projectConfig.configPath),
+    [target],
+    { root, environment },
   );
   const asset =
     preparedViteAssets === undefined
@@ -780,9 +794,12 @@ const runMuonDevOnce = async (
       : undefined;
   const overrideConfigPath = join(root, ".muon", "run", "muon.run.json");
 
-  await assertMuonNodeProjectStagingIsSafe(nodeProject, stagePath);
+  const nodeProjects = services.flatMap((service) =>
+    service.runtime === "node" ? [service.project] : [],
+  );
+  await assertMuonNodeProjectStagingIsSafe(nodeProjects, stagePath);
   await assertMuonNodeProjectAssetSourceIsSafe(
-    nodeProject,
+    nodeProjects,
     asset.assetSourcePath,
   );
   await ensureMuonGitignoreEntry(root);
@@ -793,7 +810,7 @@ const runMuonDevOnce = async (
     stageDir: stagePath,
     target,
     cacheDir: environment.MUON_CACHE_DIR,
-    nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(nodeProject, true),
+    nodeRuntimeRequirement: createMuonNodeRuntimeRequirement(nodeProjects),
     force: false,
     quiet: options.quietPrepare === true,
     prepareExecutablePath: undefined,
@@ -803,13 +820,17 @@ const runMuonDevOnce = async (
   if (preparedRuntime.stagePath === undefined) {
     throw new Error("muon-builder did not return a staged runtime path.");
   }
-  const nodeProjectPath = await stageMuonNodeProject(
-    nodeProject,
-    preparedRuntime.stagePath,
-  );
-  if (nodeProjectPath !== undefined) {
-    await assertMuonNodeHostArtifacts(preparedRuntime.stagePath, platform);
+  if (nodeProjects.length > 0) {
+    await access(join(preparedRuntime.stagePath, "node-service-bridge.mjs"));
   }
+  session.services ??= await startMuonDevelopmentServices(
+    root,
+    target,
+    preparedRuntime.stagePath,
+    services,
+    environment,
+    session.cancellation.signal,
+  );
 
   await writeMuonDevOverrideConfig(
     overrideConfigPath,
@@ -819,7 +840,7 @@ const runMuonDevOnce = async (
       allowInsecureLocalhost,
       browserStartPage,
       preparedViteAssets?.runtimePluginConfig,
-      nodeProjectPath,
+      session.services.config,
     ),
   );
   const muonExecutablePath = getMuonExecutablePath(
@@ -836,6 +857,7 @@ const runMuonDevOnce = async (
     muonExecutablePath,
     configPaths,
     environment,
+    session,
   );
 
   return {
@@ -875,9 +897,42 @@ export const runMuonDev = async (
     );
     viteServerProxyWarningReported = true;
   };
-  let result: MuonDevResult;
-  do {
-    result = await runMuonDevOnce(options, cwd, reportViteServerProxyWarning);
-  } while (result.exitCode === muonRecycleExitCode);
-  return result;
+  const session: MuonDevSession = {
+    services: undefined,
+    child: undefined,
+    cancellation: new AbortController(),
+    exitCode: undefined,
+  };
+  const interrupt = (signal: NodeJS.Signals): void => {
+    session.exitCode = signal === "SIGINT" ? 130 : 143;
+    session.cancellation.abort();
+    session.child?.kill();
+  };
+  process.on("SIGINT", interrupt);
+  process.on("SIGTERM", interrupt);
+  try {
+    let result: MuonDevResult;
+    do {
+      result = await runMuonDevOnce(
+        options,
+        cwd,
+        reportViteServerProxyWarning,
+        session,
+      );
+    } while (
+      !session.cancellation.signal.aborted &&
+      result.exitCode === muonRecycleExitCode
+    );
+    if (result.exitCode === 0 && !session.cancellation.signal.aborted)
+      await session.services?.waitForExit();
+    return { ...result, exitCode: session.exitCode ?? result.exitCode };
+  } finally {
+    session.child?.kill();
+    try {
+      await session.services?.stop();
+    } finally {
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", interrupt);
+    }
+  }
 };

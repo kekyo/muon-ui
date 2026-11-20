@@ -223,6 +223,13 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
         await server.close();
       }
     } catch (error) {
+      if (process !== undefined) {
+        const [snapshot] = await Promise.allSettled([process.snapshot()]);
+        console.error(
+          "Windows application process at failure:",
+          JSON.stringify(snapshot, null, 2),
+        );
+      }
       throw new Error(
         `${String(error)}\n${process === undefined ? "" : await process.stderrText()}`,
       );
@@ -707,58 +714,6 @@ describeMuonPluginBridge("Windows long path application inputs", () => {
       ).rejects.toThrow(/cwd.*short.*Windows/);
     }
   });
-
-  for (const length of [140, 300, 1100]) {
-    it(`handles a ${length}-unit Unicode Node project with an explicit short-cwd workaround when needed`, async () => {
-      const directory = longDirectory(length);
-      await write(
-        win32.join(directory, "package.json"),
-        JSON.stringify({ type: "module" }),
-      );
-      await write(
-        win32.join(directory, "実装😀.mjs"),
-        "export const value = () => 'Node 日本語😀'; export const cwd = () => process.cwd();",
-      );
-      const config = { ...configuration(), node: { project: directory } };
-      let specifier = "./実装😀.mjs";
-      if (length >= 260) {
-        await expect(
-          run(
-            win32.join(root, "node-project-long.json"),
-            config,
-            "async () => { const node = await muon.node.createNode(); await node.release(); }",
-            {},
-          ),
-        ).rejects.toThrow(
-          /node\.project requires a short Windows working directory/,
-        );
-        config.node.project = win32.join(root, "data");
-        await write(
-          win32.join(config.node.project, "package.json"),
-          JSON.stringify({ type: "module" }),
-        );
-        specifier =
-          "./" +
-          win32
-            .relative(config.node.project, win32.join(directory, "実装😀.mjs"))
-            .replaceAll("\\", "/");
-      }
-      expect(
-        await run(
-          win32.join(root, "node-project.json"),
-          config,
-          `async () => {
-          const node = await muon.node.createNode();
-          try {
-            const module = await node.importModule(${JSON.stringify(specifier)});
-            return {value: await module.value(), cwd: await module.cwd()};
-          } finally { await node.release(); }
-        }`,
-          {},
-        ),
-      ).toEqual({ value: "Node 日本語😀", cwd: config.node.project });
-    });
-  }
 
   for (const kind of ["selectFile", "selectSaveFile"] as const) {
     for (const length of [140, 300, 1100, 4200]) {

@@ -49,6 +49,7 @@ if (bridge === undefined) {
     'muon.browser': 'browser-capability',
     'muon.environments': 'environment-capability',
     'muon.fs': 'fs-capability',
+    'muon.services': 'services-capability',
     'muon.android.systemBars': 'system-bars-capability',
     'muon.android.settings': 'settings-capability',
     'muon.android.notifications': 'android-notifications-capability',

@@ -873,8 +873,7 @@ static int resolve_catalog_entry(
   }
   const char *version_text = yyjson_get_str(version_value);
   MuonNodeSemVersion version;
-  if (parse_semver(version_text, 1, &version) != 0 ||
-      version.prerelease_length != 0) {
+  if (parse_semver(version_text, 1, &version) != 0) {
     return -1;
   }
   const int seen_result = string_list_add_unique(seen_versions, version_text);
@@ -897,7 +896,7 @@ static int resolve_catalog_entry(
                              &contains_target) != 0) {
     return -1;
   }
-  if (!contains_target ||
+  if (version.prerelease_length != 0 || !contains_target ||
       !version_satisfies_requirement(&version, requirement)) {
     return 0;
   }

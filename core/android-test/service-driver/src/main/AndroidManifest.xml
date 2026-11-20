@@ -1,0 +1,70 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <application android:networkSecurityConfig="@xml/muon_service_network" android:label="Muon native service driver" android:allowBackup="false"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name="dev.muon.runtime.MuonServiceDriverActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity android:name="dev.muon.runtime.MuonServiceRpcActivity" android:exported="true" />
+        <activity android:name="dev.muon.runtime.MuonServiceConstraintsActivity" android:exported="true" />
+        <receiver android:name="dev.muon.runtime.MuonServiceConstraintReceiver" android:exported="true" />
+        <activity android:name="dev.muon.runtime.MuonAppActivity" android:exported="true" />
+        <service android:name="dev.muon.runtime.MuonServiceControlService"
+            android:exported="false" android:process=":muon_services" />
+        <service android:name="dev.muon.runtime.MuonFixtureAlphaService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Native service lifecycle regression fixture alpha" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureBetaService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Native service lifecycle regression fixture beta" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureRejectedService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="camera" />
+        <service android:name="dev.muon.runtime.MuonFixtureHeldService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Native initialization barrier regression fixture" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureTimedService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="dataSync" />
+        <service android:name="dev.muon.runtime.MuonFixtureQuickJsService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="QuickJS service communication and lifecycle regression fixture" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickJsFaultService" android:exported="false"
+            android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="QuickJS heap failure isolation regression fixture" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickStateService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+
+        <service android:name="dev.muon.runtime.MuonFixtureNativeStateService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickHttpService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureNativeHttpService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureQuickListenerService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+        <service android:name="dev.muon.runtime.MuonFixtureNativeListenerService" android:exported="false" android:process=":muon_services" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Testing service persistence" />
+        </service>
+    </application>
+</manifest>

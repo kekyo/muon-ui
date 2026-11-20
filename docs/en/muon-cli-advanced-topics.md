@@ -30,9 +30,7 @@ npx muon run
 - Specify `--allow-insecure-localhost` to ignore localhost HTTPS certificate errors during development.
   Passing this raw flag directly to a distribution muon-launcher is still rejected before startup.
   Configure `network.localAccess.allowInsecureLocalhost` in `muon.json` when the behavior is required in a distribution build.
-- Before launch, `muon run` invokes muon-builder to prepare CEF and, when `node.project` is configured, the required official Node.js runtime. Node.js runtime preparation applies in both `simple` and `validate` modes.
-  When both downloads are needed, they run concurrently, and Node.js is placed at `runtimes/node/bin/node` under the stage directory (`runtimes/node/bin/node.exe` on Windows).
-  There is no CLI option for a Node.js executable. The Node plugin uses only this absolute path and does not fall back to an environment variable or `PATH`.
+- `muon run` prepares CEF before launch. If the app defines Node.js services, it also prepares Node.js and runs the executable at `runtimes/node/bin/node` in the staging directory (`node.exe` on Windows).
 
 Unlike when using the Vite plugin, you can naturally split page management by asset host name.
 For example, CEF treats `asset://main/index.html` and `asset://sub/index.html` as different origins.
@@ -64,10 +62,7 @@ If it is a ZIP file, it is copied as `assets.zip` in the distribution destinatio
 Also, if regular files such as `README.md` and `LICENSE` are specified in `files` in `package.json`, files that satisfy the conditions are copied directly under the distribution destination directory.
 If the muon Vite plugin's `build.distributionFiles` is specified, that list is used instead of `files` in `package.json`.
 
-For an application with `node.project`, `muon build` and `muon pack` copy the target platform's `node.so` or `node.dll`, `node-bridge.mjs`, and the Node project into the output, and embed the normalized Node runtime requirement into the launcher.
-They do not include a Node.js executable, distribution archive, or download cache in build or pack output.
-The distribution `muon-launcher` prepares CEF and the required Node.js runtime at startup. A normal installation places them in a runtime directory separate from the application root; a portable distribution places them directly in the extracted directory, so the prepared portable runtime also contains the required Node.js runtime.
-A running Node.js runtime is not replaced; updates take effect during the next launcher startup. The sidecar starts only the prepared `runtimes/node/bin/node` (`.exe` on Windows) and does not fall back to an environment variable or `PATH`.
+For desktop apps that define Node.js services, `muon build` and `muon pack` include the service code and its runtime dependencies. The distribution launcher prepares a compatible Node.js version at startup. Runtime updates take effect on the next launch.
 
 Specify a target such as `--target linux-amd64`, or use `--all` to generate all bundled targets.
 When there is no muon Vite plugin, the default target for `muon build` is the running host target.
@@ -91,8 +86,6 @@ npx muon build --icon icons/app.png --linux-name "My App"
   The same values can also be specified in `linux.desktop` in `muon.json`.
 
 > Note: When generated assets are collected directly by the muon CLI without the Vite plugin, the CLI itself does not resolve virtual modules for plugin references through `import`.
-> Bundle code that uses the validate-mode `muon:node` module with Vite first. To access Node.js integration from assets that do not pass through Vite, use `window.muon.node.createNode()` in `simple` mode.
-
 ## Creating and running AppImages
 
 An AppImage is a single Linux executable that runs without an installer. Create a separate file for each CPU architecture:
@@ -114,7 +107,7 @@ chmod +x ./my-app-1.0.0-linux-amd64.AppImage
 ./my-app-1.0.0-linux-amd64.AppImage
 ```
 
-CEF is not bundled. The existing launcher downloads it on first startup, along with the required Node.js runtime for apps using `node.project`. CEF selection policies are shared with deb, including policies other than `tested`. Prepared runtimes and valid download caches are reused, but selecting an uncached version or lacking a required catalog needs network access. This format does not guarantee an offline first launch.
+CEF is not bundled. The existing launcher downloads it on first startup, along with the required Node.js runtime for apps with Node.js services. CEF selection policies are shared with deb, including policies other than `tested`. Prepared runtimes and valid download caches are reused, but selecting an uncached version or lacking a required catalog needs network access. This format does not guarantee an offline first launch.
 
 Downloaded archives share a cache under `$XDG_CACHE_HOME/muon/`, or `~/.cache/muon/` when unset. Set `MUON_CACHE_DIR` to use another location.
 

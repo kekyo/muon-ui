@@ -1,0 +1,6 @@
+package dev.muon.generated;
+
+/** Generated Android component for one independently managed logical service. */
+public final class {{className}} extends dev.muon.runtime.MuonNativeService {
+    @Override protected String serviceId() { return "{{serviceId}}"; }
+}

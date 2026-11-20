@@ -76,15 +76,22 @@ const wait = async (predicate: () => boolean): Promise<void> => {
   throw new Error("Timed out waiting for condition");
 };
 
-const createCapturingLogger = (): { logger: Logger; warnings: string[] } => {
+const createCapturingLogger = (): {
+  logger: Logger;
+  warnings: string[];
+  firstWarning: Promise<void>;
+} => {
   const warnings: string[] = [];
   const logger = createViteLogger("silent");
   const originalWarn = logger.warn.bind(logger);
-  logger.warn = (message, options): void => {
-    warnings.push(message);
-    originalWarn(message, options);
-  };
-  return { logger, warnings };
+  const firstWarning = new Promise<void>((resolve) => {
+    logger.warn = (message, options): void => {
+      warnings.push(message);
+      originalWarn(message, options);
+      resolve();
+    };
+  });
+  return { logger, warnings, firstWarning };
 };
 
 const createTemporaryDirectory = async (prefix: string): Promise<string> => {
@@ -563,6 +570,10 @@ const createFakePackageDirectory = async (root: string): Promise<string> => {
   );
   await writeFile(join(runtimeDirectory, "libmuon-ui.so"), "ui\n");
   await writeFile(join(runtimeDirectory, "libcardio.so"), "cardio\n");
+  await writeFile(
+    join(runtimeDirectory, "muon-service-host"),
+    "service host\n",
+  );
   const supervisorPath = join(runtimeDirectory, "muon-executor-supervisor");
   await writeFile(supervisorPath, "executor supervisor\n");
   await chmod(supervisorPath, 0o755);
@@ -583,15 +594,7 @@ const writeFakeMuonSource = async (
   await mkdir(join(muonDirectory, "plugins"), { recursive: true });
   await writeFile(join(muonDirectory, "plugins", "plugin.txt"), "plugin\n");
   await writeFile(
-    join(
-      muonDirectory,
-      "plugins",
-      process.platform === "win32" ? "node.dll" : "node.so",
-    ),
-    "node plugin\n",
-  );
-  await writeFile(
-    join(muonDirectory, "plugins", "node-bridge.mjs"),
+    join(muonDirectory, "node-service-bridge.mjs"),
     "export const bridgeFixture = true;\n",
   );
 };
@@ -787,13 +790,13 @@ const writeNodeProjectSource = async (
   projectDirectory: string,
   name: string,
 ): Promise<string> => {
-  const markerPath = join(projectDirectory, "source-marker.txt");
+  const markerPath = join(projectDirectory, "entry.ts");
   await mkdir(projectDirectory, { recursive: true });
   await writeFile(
     join(projectDirectory, "package.json"),
     `${JSON.stringify({ name, type: "module" })}\n`,
   );
-  await writeFile(markerPath, "preserve source\n");
+  await writeFile(markerPath, "export default {};\n");
   return markerPath;
 };
 
@@ -1174,63 +1177,6 @@ describe("muon Vite plugin", () => {
               },
             ],
           },
-        }),
-      ],
-    });
-
-    await expect(
-      access(join(root, "dist", "index.html")),
-    ).resolves.toBeUndefined();
-  });
-
-  it("resolves the validate-mode Node virtual module when a Node project is configured", async () => {
-    const root = await createTemporaryDirectory("muon-vite-node-capability-");
-    const backendDirectory = join(root, "backend");
-    await mkdir(join(root, "src"), { recursive: true });
-    await mkdir(backendDirectory, { recursive: true });
-    await writeFile(
-      join(root, "index.html"),
-      '<script type="module" src="/src/main.ts"></script>',
-    );
-    await writeFile(
-      join(root, "src", "main.ts"),
-      [
-        'import { createNode } from "muon:node";',
-        "const run = async () => {",
-        "  const node = await createNode();",
-        "  await node.release();",
-        "};",
-        "void run();",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      join(backendDirectory, "package.json"),
-      `${JSON.stringify({ name: "muon-node-capability-fixture" }, null, 2)}\n`,
-    );
-    await writeFile(
-      join(root, "muon.json"),
-      `${JSON.stringify(
-        {
-          node: {
-            project: "./backend",
-          },
-          plugin: {
-            mode: "validate",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-
-    await viteBuild({
-      root,
-      logLevel: "silent",
-      plugins: [
-        muon({
-          open: false,
-          build: false,
         }),
       ],
     });
@@ -2560,7 +2506,7 @@ describe("muon Vite plugin", () => {
     ).rejects.toThrow("muon capability import is not allowed");
   });
 
-  it("rejects a Node project inside outDir before a direct Vite build deletes it", async () => {
+  it("rejects a Node service project inside outDir before a direct Vite build deletes it", async () => {
     const root = await createTemporaryDirectory("muon-vite-node-outdir-");
     const packageDirectory = await createFakePackageDirectory(root);
     const backendDirectory = join(root, "web-dist", "backend");
@@ -2575,7 +2521,7 @@ describe("muon Vite plugin", () => {
     );
     await writeFile(
       join(root, "muon.json"),
-      `${JSON.stringify({ node: { project: backendDirectory } }, null, 2)}\n`,
+      `${JSON.stringify({ services: { worker: { runtime: "node", project: backendDirectory, entry: "./entry.ts" } } }, null, 2)}\n`,
     );
 
     await expect(
@@ -2596,7 +2542,7 @@ describe("muon Vite plugin", () => {
       }),
     ).rejects.toThrow("muon Node project");
     await expect(readFile(markerPath, "utf8")).resolves.toBe(
-      "preserve source\n",
+      "export default {};\n",
     );
   });
 
@@ -2629,11 +2575,12 @@ describe("muon Vite plugin", () => {
         join(root, "muon.json"),
         `${JSON.stringify(
           {
-            node: {
-              project:
-                projectRelativePath === "."
-                  ? "./public"
-                  : `./public/${projectRelativePath}`,
+            services: {
+              worker: {
+                runtime: "node",
+                project: backendDirectory,
+                entry: "./entry.ts",
+              },
             },
           },
           null,
@@ -2660,7 +2607,7 @@ describe("muon Vite plugin", () => {
         }),
       ).rejects.toThrow("muon Node project");
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
       await expect(access(copiedPackageJsonPath)).rejects.toThrow();
     },
@@ -2673,20 +2620,24 @@ describe("muon Vite plugin", () => {
     const cefDirectory = await writeFakeCefDirectory();
     const stagePath = join(root, "custom-stage");
     const backendDirectory = join(stagePath, "backend");
-    const markerPath = join(backendDirectory, "source-marker.txt");
+    const markerPath = join(backendDirectory, "entry.ts");
     await writeBasicViteProject(root);
     await mkdir(backendDirectory, { recursive: true });
     await writeFile(
       join(backendDirectory, "package.json"),
       `${JSON.stringify({ name: "vite-stage-source", type: "module" })}\n`,
     );
-    await writeFile(markerPath, "preserve source\n");
+    await writeFile(markerPath, "export default {};\n");
     await writeFile(
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          node: {
-            project: "./custom-stage/backend",
+          services: {
+            worker: {
+              runtime: "node",
+              project: "./custom-stage/backend",
+              entry: "./entry.ts",
+            },
           },
         },
         null,
@@ -2720,7 +2671,7 @@ describe("muon Vite plugin", () => {
         ),
       );
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
       await expect(
         access(join(outputDirectory, "override.json")),
@@ -2812,10 +2763,14 @@ describe("muon Vite plugin", () => {
       access(join(stagePath, "plugins", "plugin.txt")),
     ).resolves.toBeUndefined();
     expect(overrideConfig).toEqual({
+      serviceHost: { development: true },
       cdp: {
         enable: true,
       },
       browser: {
+        profilePath: expect.stringContaining(
+          join(root, ".muon", "development", "linux-amd64", "session-"),
+        ),
         startPage: baseUrl,
         keybind: {
           devtools: "f12",
@@ -3188,10 +3143,11 @@ export default {
       const cefDirectory = await writeFakeCefDirectory();
       await writeBasicViteProject(root);
       await writeProjectMuonConfig(root);
-      await writeFakeFailingMuonSource(muonDirectory, "kill -TRAP $$");
+      // Avoid waiting for an OS crash reporter to finish writing a core dump.
+      await writeFakeFailingMuonSource(muonDirectory, "kill -TERM $$");
       process.env.MUON_CACHE_DIR =
         await createTemporaryDirectory("muon-vite-cache-");
-      const { logger, warnings } = createCapturingLogger();
+      const { logger, warnings, firstWarning } = createCapturingLogger();
       const originalExitCode = process.exitCode;
       process.exitCode = undefined;
 
@@ -3209,11 +3165,11 @@ export default {
           undefined,
           logger,
         );
-        await wait(() => warnings.length > 0);
+        await firstWarning;
 
-        expect(warnings.join("\n")).toContain("signal SIGTRAP");
+        expect(warnings.join("\n")).toContain("signal SIGTERM");
         expect(warnings.join("\n")).toContain(
-          "retained diagnostic: kill -TRAP $$",
+          "retained diagnostic: kill -TERM $$",
         );
         expect(server.httpServer?.listening).toBe(true);
         expect(process.exitCode).toBeUndefined();
@@ -3514,7 +3470,7 @@ export default {
     expect(warnings.join("\n")).toContain("generated Vite config only");
   });
 
-  it("warns and ignores an invalid project config during Vite dev startup", async () => {
+  it("reports an invalid project config without launching a partial Vite application", async () => {
     const root = await createTemporaryDirectory("muon-vite-invalid-config-");
     const muonDirectory = await createTemporaryDirectory("muon-vite-muon-");
     const outputDirectory = await createTemporaryDirectory("muon-vite-output-");
@@ -3534,19 +3490,21 @@ export default {
         stagePath: undefined,
         enableDebugger: undefined,
         open: undefined,
+        exitWithServer: false,
       },
       undefined,
       logger,
     );
-    await wait(() => existsSync(join(outputDirectory, "override.json")));
-
-    const args = (await readFile(join(outputDirectory, "args.txt"), "utf8"))
-      .trim()
-      .split("\n");
-    const overrideConfigPath = args[1];
-    expect(args).toEqual(["-c", overrideConfigPath]);
+    await wait(
+      () =>
+        warnings.some((warning) => warning.includes("muon startup failed")) ||
+        existsSync(join(outputDirectory, "override.json")),
+    );
     expect(warnings.join("\n")).toContain(join(root, "muon.json"));
-    expect(warnings.join("\n")).toContain("will be ignored");
+    expect(warnings.join("\n")).toContain("muon startup failed");
+    await expect(
+      access(join(outputDirectory, "override.json")),
+    ).rejects.toThrow();
   });
 
   it("uses the Vite base URL as the muon start page when server.open is a string", async () => {
@@ -3723,7 +3681,7 @@ describe("muon run CLI", () => {
       await writeRunViteApplication(root);
       await writeFile(
         join(root, "custom.json"),
-        `${JSON.stringify({ node: { project: backendDirectory } }, null, 2)}\n`,
+        `${JSON.stringify({ services: { worker: { runtime: "node", project: backendDirectory, entry: "./entry.ts" } } }, null, 2)}\n`,
       );
       await writeFakeMuonSource(muonDirectory, outputDirectory);
       await writeMuonViteConfig(
@@ -3751,7 +3709,7 @@ describe("muon run CLI", () => {
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain("muon Node project");
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
     },
   );
@@ -3782,11 +3740,12 @@ describe("muon run CLI", () => {
         join(root, "muon.json"),
         `${JSON.stringify(
           {
-            node: {
-              project:
-                projectRelativePath === "."
-                  ? "./public"
-                  : `./public/${projectRelativePath}`,
+            services: {
+              worker: {
+                runtime: "node",
+                project: backendDirectory,
+                entry: "./entry.ts",
+              },
             },
           },
           null,
@@ -3815,7 +3774,7 @@ describe("muon run CLI", () => {
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain("muon Node project");
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
       await expect(
         access(join(root, "web-dist", ...relativePackageJsonPath.split("/"))),
@@ -4195,6 +4154,7 @@ describe("muon run CLI", () => {
     expect(devResult.assetSourcePath).toBe(assetsPath);
     expect(devResult.stagePath).toBe(join(root, ".muon", "linux-amd64"));
     expect(overrideConfig).toEqual({
+      serviceHost: { development: true },
       asset: {
         sourcePath: assetsPath,
       },
@@ -4202,122 +4162,15 @@ describe("muon run CLI", () => {
         enable: true,
       },
       browser: {
+        profilePath: expect.stringContaining(
+          join(root, ".muon", "development", "linux-amd64", "session-"),
+        ),
         keybind: {
           devtools: "f12",
           recycle: "ctrl+f12",
         },
       },
     });
-  });
-
-  it("stages a config-relative Node project and writes its absolute path to the run override", async () => {
-    const root = await createTemporaryDirectory("muon-dev-node-project-");
-    const muonDirectory = await createTemporaryDirectory("muon-dev-muon-");
-    const outputDirectory = await createTemporaryDirectory("muon-dev-output-");
-    const cefDirectory = await writeFakeCefDirectory();
-    const assetsPath = await writeDevAssets(root);
-    const backendDirectory = join(root, "settings", "backend");
-    const dependencyDirectory = join(
-      backendDirectory,
-      "node_modules",
-      "fixture-dependency",
-    );
-    await mkdir(dependencyDirectory, { recursive: true });
-    await writeFile(
-      join(backendDirectory, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "muon-run-node-project",
-          type: "module",
-          main: "./main.js",
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeFile(
-      join(backendDirectory, "main.js"),
-      [
-        'import dependency from "fixture-dependency";',
-        "process.stdout.write(`${dependency}\\n`);",
-        "",
-      ].join("\n"),
-    );
-    await writeFile(
-      join(dependencyDirectory, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "fixture-dependency",
-          type: "module",
-          exports: "./index.js",
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeFile(
-      join(dependencyDirectory, "index.js"),
-      'export default "run dependency";\n',
-    );
-    const configPath = join(root, "settings", "muon.json");
-    await writeFile(
-      configPath,
-      `${JSON.stringify(
-        {
-          node: {
-            project: "./backend",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await writeFakeMuonSource(muonDirectory, outputDirectory);
-    process.env.MUON_CACHE_DIR =
-      await createTemporaryDirectory("muon-dev-cache-");
-
-    const result = await runMuonCli(root, [
-      "run",
-      "--muon-path",
-      muonDirectory,
-      "--cef-path",
-      cefDirectory,
-      "--assets",
-      assetsPath,
-      "--config",
-      "settings/muon.json",
-      "--json",
-    ]);
-
-    expect(result.stderr).toBe("");
-    expect(result.exitCode).toBe(0);
-    const devResult = JSON.parse(result.stdout) as {
-      overrideConfigPath: string;
-      projectConfigPath: string;
-      stagePath: string;
-    };
-    const stagedProjectPath = join(devResult.stagePath, "node-project");
-    const overrideConfig = JSON.parse(
-      await readFile(join(outputDirectory, "override.json"), "utf8"),
-    ) as {
-      node: {
-        project: string;
-      };
-    };
-    expect(devResult.projectConfigPath).toBe(configPath);
-    expect(overrideConfig.node).toEqual({
-      project: stagedProjectPath,
-    });
-    expect(await readCapturedArguments(outputDirectory)).toEqual([
-      "-c",
-      configPath,
-      "-c",
-      devResult.overrideConfigPath,
-    ]);
-    const stagedExecution = await execFileAsync(process.execPath, [
-      stagedProjectPath,
-    ]);
-    expect(stagedExecution.stdout).toBe("run dependency\n");
   });
 
   it("rejects a Node project inside the direct-run stage before prepare deletes it", async () => {
@@ -4328,19 +4181,23 @@ describe("muon run CLI", () => {
     const assetsPath = await writeDevAssets(root);
     const stagePath = join(root, "custom-stage");
     const backendDirectory = join(stagePath, "backend");
-    const markerPath = join(backendDirectory, "source-marker.txt");
+    const markerPath = join(backendDirectory, "entry.ts");
     await mkdir(backendDirectory, { recursive: true });
     await writeFile(
       join(backendDirectory, "package.json"),
       `${JSON.stringify({ name: "run-stage-source", type: "module" })}\n`,
     );
-    await writeFile(markerPath, "preserve source\n");
+    await writeFile(markerPath, "export default {};\n");
     await writeFile(
       join(root, "muon.json"),
       `${JSON.stringify(
         {
-          node: {
-            project: "./custom-stage/backend",
+          services: {
+            worker: {
+              runtime: "node",
+              project: "./custom-stage/backend",
+              entry: "./entry.ts",
+            },
           },
         },
         null,
@@ -4369,7 +4226,7 @@ describe("muon run CLI", () => {
       "muon Node project and runtime directory must not overlap",
     );
     await expect(readFile(markerPath, "utf8")).resolves.toBe(
-      "preserve source\n",
+      "export default {};\n",
     );
   });
 
@@ -4394,14 +4251,14 @@ describe("muon run CLI", () => {
         kind === "project-inside-assets"
           ? join(root, "assets")
           : join(backendDirectory, "assets");
-      const markerPath = join(backendDirectory, "source-marker.txt");
+      const markerPath = join(backendDirectory, "entry.ts");
       await mkdir(assetDirectory, { recursive: true });
       await mkdir(backendDirectory, { recursive: true });
       await writeFile(
         join(backendDirectory, "package.json"),
         `${JSON.stringify({ name: "run-asset-overlap", type: "module" })}\n`,
       );
-      await writeFile(markerPath, "preserve source\n");
+      await writeFile(markerPath, "export default {};\n");
       await writeFile(
         join(assetDirectory, "index.html"),
         "<!doctype html><title>run asset overlap</title>",
@@ -4410,8 +4267,12 @@ describe("muon run CLI", () => {
         join(root, "muon.json"),
         `${JSON.stringify(
           {
-            node: {
-              project: backendDirectory,
+            services: {
+              worker: {
+                runtime: "node",
+                project: backendDirectory,
+                entry: "./entry.ts",
+              },
             },
           },
           null,
@@ -4438,7 +4299,7 @@ describe("muon run CLI", () => {
         "muon Node project and asset source must not overlap",
       );
       await expect(readFile(markerPath, "utf8")).resolves.toBe(
-        "preserve source\n",
+        "export default {};\n",
       );
     },
   );

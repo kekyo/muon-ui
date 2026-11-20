@@ -288,8 +288,10 @@ const stageRemoteMuonPackCli = async (
   );
   for (const packageName of [
     "adm-zip",
+    "chokidar",
     "commander",
     "funcity",
+    "readdirp",
     "tar-vern",
   ] as const) {
     await copyLocalDirectoryToRemote(
@@ -424,6 +426,10 @@ const createFakeMuonPackageDist = async (
     );
     await writeFile(join(runtimeDirectory, "libmuon-ui.dll"), "ui\n");
     await writeFile(join(runtimeDirectory, "libcardio.dll"), "cardio\n");
+    await writeFile(
+      join(runtimeDirectory, "muon-service-host.exe"),
+      "service host\n",
+    );
     await writeFile(join(runtimeDirectory, "CREDITS.md"), "notices\n");
     await writeExecutable(
       join(nativeDirectory, "muon-launcher.exe"),

@@ -9,19 +9,28 @@ import { defineConfig } from "vitest/config";
 import type { UserConfig } from "vite";
 import { buildMuonNotificationRenderer } from "../common/build-notification-renderer.mjs";
 import { buildMuonServerRenderer } from "../cef/build-server-renderer.ts";
+import { buildMuonServiceRenderer } from "../common/build-service-renderer.mts";
+import muonNodePackageJson from "../../node/package.json" with { type: "json" };
 
 const isValgrindRun = process.env.MUON_TEST_USE_VALGRIND === "1";
 // Local launcher startup may legitimately use its 120-second runtime staging
 // timeout. Keep the enclosing test alive long enough to finish cleanup.
 const testTimeout = isValgrindRun ? 600000 : 180000;
+const testFile = "*.{test,spec}.?(c|m)[jt]s?(x)";
 
 export default defineConfig(async (): Promise<UserConfig> => ({
   define: {
+    __MUON_SERVICE_RENDERER_SOURCE__: JSON.stringify(
+      await buildMuonServiceRenderer(),
+    ),
     __MUON_SERVER_RENDERER_SOURCE__: JSON.stringify(
       await buildMuonServerRenderer(),
     ),
     __MUON_NOTIFICATION_RENDERER_SOURCE__: JSON.stringify(
       await buildMuonNotificationRenderer(),
+    ),
+    __MUON_NODE_SUPPORTED_ENGINE_RANGE__: JSON.stringify(
+      muonNodePackageJson.engines.node,
     ),
   },
   plugins: [prettierMax(), screwUp()],
@@ -47,5 +56,22 @@ export default defineConfig(async (): Promise<UserConfig> => ({
     restoreMocks: true,
     hookTimeout: testTimeout,
     testTimeout,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "cef",
+          include: [testFile],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "linux-service-host",
+          include: [`linux-service-host/**/${testFile}`],
+          globalSetup: "./linux-service-host-setup.ts",
+        },
+      },
+    ],
   },
 }));

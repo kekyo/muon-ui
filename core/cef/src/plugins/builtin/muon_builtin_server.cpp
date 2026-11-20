@@ -6,6 +6,7 @@
 #include "plugins/builtin/muon_builtin_server.h"
 #include "plugins/builtin/muon_builtin_completion.h"
 #include "server/muon_server_service.h"
+#include "include/cef_parser.h"
 #include "muon_server_renderer_generated.h"
 #include <cstdio>
 #include <cstring>
@@ -69,9 +70,23 @@ static const muon_plugin_namespace server_namespace = {"muon.server", kMuonServe
 static const muon_plugin_namespace* const namespaces[] = {&server_namespace, nullptr};
 static const muon_plugin_metadata metadata = {namespaces, &Stop, &ReleaseOwner};
 
+static bool IsServerOrigin(const std::string& origin) {
+  if (origin.size() > 2048 || origin.find('*') != std::string::npos) return false;
+  CefURLParts parts;
+  if (!CefParseURL(origin, parts)) return false;
+  const auto scheme = CefString(&parts.scheme).ToString();
+  const auto host = CefString(&parts.host).ToString();
+  const auto port = CefString(&parts.port).ToString();
+  if ((scheme != "http" && scheme != "https" && scheme != "asset") || host.empty()) return false;
+  // Requiring the serialized origin rejects paths, userinfo, whitespace and
+  // opaque origins rather than silently broadening a caller's allowlist.
+  const auto serialized = scheme + "://" + host + (port.empty() ? "" : ":" + port);
+  return origin == serialized;
+}
+
 void InitializeMuonBuiltinServer(const muon_plugin_init_context* context) {
   server_helpers = context->helpers;
-  server_service = CreateMuonServerService();
+  server_service = CreateMuonServerService(IsServerOrigin);
 }
 const muon_plugin_metadata* GetMuonBuiltinServerMetadata() { return &metadata; }
 void ShutdownMuonBuiltinServer() {

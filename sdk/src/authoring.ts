@@ -5,7 +5,9 @@ import { promisify } from 'node:util';
 import { runScriptOnceToText } from 'funcity';
 import {
   packagePlugin,
+  packageService,
   readPluginArtifact,
+  readServiceArtifact,
   type PackagePluginTargetInput,
 } from './artifact.js';
 import { getSdkDirectory, renderSdkTemplate } from './native.js';
@@ -28,6 +30,7 @@ export interface PluginBuildCommand {
 }
 /** Source-owned authoring configuration. */
 export interface PluginBuildConfig {
+  /** Artifact role; omission means a page plugin. */ readonly kind?: 'plugin';
   /** Plugin-specific target development dependencies checked before building. */ readonly packages?: PluginToolchainOptions['packages'];
   /** Configuration revision. */ readonly schemaVersion: 1;
   /** Plugin registration name. */ readonly name: string;
@@ -53,6 +56,15 @@ export interface PluginBuildConfig {
     Record<MuonPluginTarget, readonly string[]>
   >;
 }
+/** Source configuration for an independent native service factory. */
+export interface ServiceBuildConfig extends Omit<
+  PluginBuildConfig,
+  'kind' | 'functions'
+> {
+  /** Factory artifact name, independent of configured logical service IDs. */ readonly name: string;
+  /** Required discriminator for service source projects. */ readonly kind: 'service';
+  /** Service factories have no page plugin function catalog. */ readonly functions?: never;
+}
 /** Inputs to generate a minimal independent source project. */
 export interface CreatePluginProjectOptions {
   /** Empty destination directory. */ readonly directory: string;
@@ -60,6 +72,13 @@ export interface CreatePluginProjectOptions {
   /** Defaults to C++20 with cardio. */ readonly language?: 'c' | 'c++';
   /** Standard Make or an independent CMake project. */ readonly buildSystem?:
     'make' | 'cmake';
+}
+/** Source destination, factory name, language and build system for a service. */
+export interface CreateServiceProjectOptions extends Omit<
+  CreatePluginProjectOptions,
+  'name'
+> {
+  /** Factory artifact name, independent of configured logical service IDs. */ readonly name: string;
 }
 
 /**
@@ -69,6 +88,20 @@ export interface CreatePluginProjectOptions {
  */
 export const createPluginProject = async (
   options: CreatePluginProjectOptions
+): Promise<void> => await createProject(options, 'plugin');
+
+/**
+ * Creates a C99 or C++20 service factory with independent instance ownership.
+ * @param options - Source directory, artifact name, language and build system.
+ * @returns Resolves when the source and build configuration have been written.
+ */
+export const createServiceProject = async (
+  options: CreateServiceProjectOptions
+): Promise<void> => await createProject(options, 'service');
+
+const createProject = async (
+  options: CreatePluginProjectOptions,
+  kind: 'plugin' | 'service'
 ): Promise<void> => {
   if (
     !/^[A-Za-z_][A-Za-z0-9_]*$/.test(options.name) ||
@@ -81,35 +114,44 @@ export const createPluginProject = async (
   const language = options.language ?? 'c++';
   const build = options.buildSystem ?? 'make';
   const extension = language === 'c' ? 'c' : 'cpp';
+  const sourceFile = `${kind}.${extension}`;
   const variables = new Map<string, unknown>([
     ['name', options.name],
     ['language', language],
-    ['extension', extension],
+    ['sourceFile', sourceFile],
     ['cmakeLanguage', language === 'c' ? 'C' : 'CXX'],
     ['cmakeTarget', language === 'c' ? 'Plugin' : 'Cardio'],
     ['components', language === 'c' ? '' : 'COMPONENTS Cardio'],
   ]);
   for (const file of [
-    `plugin.${extension}`,
+    sourceFile,
     build === 'make' ? 'Makefile' : 'CMakeLists.txt',
-    'index.d.ts',
+    ...(kind === 'plugin' ? ['index.d.ts'] : []),
   ])
     await writeFile(
       join(options.directory, file),
       await renderSdkTemplate(
-        join(getSdkDirectory(), 'templates', file + '.fc'),
+        join(
+          getSdkDirectory(),
+          'templates',
+          kind === 'service' && file === sourceFile
+            ? 'service.fc'
+            : file + '.fc'
+        ),
         variables
       )
     );
-  const config: PluginBuildConfig = {
+  const config: PluginBuildConfig | ServiceBuildConfig = {
     schemaVersion: 1,
     name: options.name,
     language,
-    functions: [`muon.${options.name}.increment`],
+    ...(kind === 'service'
+      ? { kind: 'service' as const }
+      : { functions: [`muon.${options.name}.increment`] }),
     targets: muonPluginTargets,
-    sources: [`plugin.${extension}`],
+    sources: [sourceFile],
     build: { system: build },
-    types: ['index.d.ts'],
+    ...(kind === 'plugin' ? { types: ['index.d.ts'] } : {}),
   };
   await writeFile(
     join(options.directory, 'muon-plugin.build.json'),
@@ -126,6 +168,8 @@ export interface BuildPluginOptions extends Omit<
   /** Explicit source configuration file. */ readonly configPath: string;
   /** Artifact output directory, defaults to .muon-plugin next to the config. */ readonly outputDirectory?: string;
 }
+/** Source configuration and explicit target/toolchain for a native service. */
+export type BuildServiceOptions = BuildPluginOptions;
 
 /**
  * Builds one explicitly selected target and packages its final outputs.
@@ -136,16 +180,34 @@ export interface BuildPluginOptions extends Omit<
  */
 export const buildPlugin = async (
   options: BuildPluginOptions
+): Promise<string> => await buildArtifact(options, 'plugin');
+
+/**
+ * Builds and packages one target of a native service factory project.
+ * @param options - Service source configuration and explicit toolchain selection.
+ * @returns Absolute muon-plugin.json path with kind service.
+ * @remarks Existing targets are retained only when the factory identity matches.
+ */
+export const buildService = async (
+  options: BuildServiceOptions
+): Promise<string> => await buildArtifact(options, 'service');
+
+const buildArtifact = async (
+  options: BuildPluginOptions,
+  kind: 'plugin' | 'service'
 ): Promise<string> => {
   const configPath = resolve(options.configPath);
   const source = dirname(configPath);
-  const config = JSON.parse(
-    await readFile(configPath, 'utf8')
-  ) as PluginBuildConfig;
+  const config = JSON.parse(await readFile(configPath, 'utf8')) as
+    PluginBuildConfig | ServiceBuildConfig;
+  if ((config.kind === undefined ? 'plugin' : config.kind) !== kind)
+    throw new Error(`Expected ${kind} build configuration kind: ${configPath}`);
+  if (kind === 'service' && 'functions' in config)
+    throw new Error('Service build configurations must not contain functions.');
   if (
     config.schemaVersion !== 1 ||
     !Array.isArray(config.targets) ||
-    !Array.isArray(config.functions) ||
+    (kind === 'plugin' && !Array.isArray(config.functions)) ||
     !/^[A-Za-z_][A-Za-z0-9_]*$/.test(config.name)
   )
     throw new Error(`Invalid plugin build configuration: ${configPath}`);
@@ -304,10 +366,9 @@ export const buildPlugin = async (
   // Preserve independently built targets when assembling a multi-target package.
   try {
     const previous = JSON.parse(await readFile(manifestPath, 'utf8'));
-    const artifact = await readPluginArtifact(
-      manifestPath,
-      Object.keys(previous.targets) as MuonPluginTarget[]
-    );
+    const artifact = await (
+      kind === 'service' ? readServiceArtifact : readPluginArtifact
+    )(manifestPath, Object.keys(previous.targets) as MuonPluginTarget[]);
     if (
       artifact.manifest.name !== config.name ||
       JSON.stringify(artifact.manifest.functions) !==
@@ -338,13 +399,15 @@ export const buildPlugin = async (
     language,
     cardio,
   };
-  return await packagePlugin({
+  const packaged = {
     outputDirectory,
     name: config.name,
-    functions: config.functions,
     headers: resources(config.headers),
     types: resources(config.types),
     licenses: resources(config.licenses),
     targets: inputs,
-  });
+  };
+  return config.kind === 'service'
+    ? await packageService({ ...packaged, kind: 'service' })
+    : await packagePlugin({ ...packaged, functions: config.functions });
 };

@@ -25,6 +25,7 @@ const createCapabilityClient = (
   ...client,
   call: async (id, path, args, options) => {
     if (
+      path.startsWith('muon.services.') ||
       !(muonAndroidBuiltinFunctionPaths as readonly string[]).includes(path)
     ) {
       return await client.call(id, path, args, options);
@@ -33,6 +34,7 @@ const createCapabilityClient = (
       'muon.browser': id,
       'muon.environments': id,
       'muon.fs': id,
+      'muon.services': id,
       'muon.android.systemBars': id,
       'muon.android.settings': id,
       'muon.android.notifications': id,
@@ -89,6 +91,7 @@ export const bootstrapMuonAndroid = (
     'muon.browser': 'browser-capability',
     'muon.environments': 'environment-capability',
     'muon.fs': 'fs-capability',
+    'muon.services': 'services-capability',
     'muon.android.systemBars': 'system-bars-capability',
     'muon.android.settings': 'settings-capability',
     'muon.android.notifications': 'android-notifications-capability',

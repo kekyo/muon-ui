@@ -490,22 +490,6 @@ struct MuonPluginConfig {
 };
 
 /**
- * Node.js sidecar host section from muon.json.
- */
-struct MuonNodeConfig {
-  /**
-   * Whether node.project was explicitly configured.
-   */
-  bool has_project = false;
-  /**
-   * Node.js project directory used as the sidecar module resolution root.
-   *
-   * @remarks Relative paths are resolved from the containing config file.
-   */
-  std::filesystem::path project;
-};
-
-/**
  * Asset storage section from muon.json.
  */
 struct MuonAssetConfig {
@@ -565,6 +549,12 @@ struct MuonNotificationsConfig {
  * Root muon.json configuration.
  */
 struct MuonConfig {
+  /** Resolved generated service registry path; empty when services are absent. */
+  std::filesystem::path service_registry;
+  /** Development sessions never register a command for OS login startup. */
+  bool service_development = false;
+  /** Supervisor-owned endpoint; nonempty only in development configuration. */
+  std::string service_endpoint;
   /** Application-owned local notification settings. */
   MuonNotificationsConfig notifications;
   /**
@@ -610,10 +600,6 @@ struct MuonConfig {
    * Native plugin load configuration.
    */
   MuonPluginConfig plugin;
-  /**
-   * Optional Node.js sidecar host configuration.
-   */
-  MuonNodeConfig node;
 };
 
 /**

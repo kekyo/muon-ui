@@ -59,25 +59,6 @@ Android WebViewがService Workerの一部を実装していることと、ブラ
 
 これはWebにおけるpageとService Workerの関係に近いものです。ただし、同じglobal stateやmodule instanceを共有するものではありません。
 
-## 現行QuickJS実装はまだこの役割を果たさない
-
-現在のQuickJS Serviceは、Activity生成時にWebView bridgeからbindされます。core/android-test/android/app/src/main/java/dev/muon/runtime/MuonActivity.java:107
-
-Activity破棄時にはruntimeをすべてshutdownしてunbindします。core/android-poc/android/app/src/main/java/dev/muon/runtime/MuonJavaScriptRuntimeBridge.java:310
-
-したがって現在は、
-
-  WebView -> QuickJS runtime
-
-という構造であり、必要なのは、
-
-  WebView -> shared QuickJS client
-  Android background Worker -> shared QuickJS client
-
-への変更です。
-
-push受信componentはまずeventを永続保存し、WorkManagerがActivityとは独立してQuickJS Serviceへbindし、background moduleを実行する形が適しています。
-
 ## QuickJSを採用しない場合との差
 
 QuickJSなしでもnative push自体は受信できます。その場合は、

@@ -21,7 +21,6 @@ const projectRoot = resolve(
   process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..')
 );
 const repositoryRoot = resolve(projectRoot, '../..');
-const includeQuickJs = process.argv.includes('--quickjs');
 const androidRoot = join(projectRoot, 'android');
 const ndkVersion = '29.0.14206865';
 const buildToolsVersion = '36.0.0';
@@ -38,7 +37,7 @@ const runtimeSonames = [
   'libc++_shared.so',
   'libcardio.so',
   'libmuon_android_rpc.so',
-  ...(includeQuickJs ? ['libmuon_javascript_runtime.so'] : []),
+  'libmuon_android_services.so',
 ];
 const forbiddenDependencies = ['libcef', 'libgtk', 'libgio', 'muon-executor'];
 const allowedDependencies = new Set([
@@ -114,15 +113,13 @@ const inspectElf = (readelf, filePath, entry, soname, plugin) => {
       needed.includes('libc++_shared.so') && needed.includes('libandroid.so'),
       `${filePath}: cardio DT_NEEDED mismatch`
     );
-  } else if (soname === 'libmuon_android_rpc.so') {
+  } else if (
+    soname === 'libmuon_android_rpc.so' ||
+    soname === 'libmuon_android_services.so'
+  ) {
     expectCondition(
       needed.includes('libcardio.so') && needed.includes('libc++_shared.so'),
       `${filePath}: muon runtime DT_NEEDED mismatch`
-    );
-  } else if (soname === 'libmuon_javascript_runtime.so') {
-    expectCondition(
-      needed.includes('libc++_shared.so') && needed.includes('liblog.so'),
-      `${filePath}: JavaScript runtime DT_NEEDED mismatch`
     );
   }
 
@@ -176,12 +173,6 @@ try {
     execute(zipalign, ['-c', '-P', '16', '4', apkPath]);
     entriesByApk.set(apkPath, execute('unzip', ['-Z1', apkPath]).split('\n'));
   }
-  expectCondition(
-    [...entriesByApk.values()].some((entries) =>
-      entries.includes('assets/third-party/quickjs-LICENSE')
-    ) === includeQuickJs,
-    `${archivePath}: unexpected QuickJS license presence`
-  );
 
   const masterVariantSuffixes = apkPaths
     .map((apkPath) => /^base-master(_\d+)?\.apk$/.exec(basename(apkPath)))

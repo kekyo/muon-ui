@@ -241,6 +241,7 @@ describe('packaged Android renderer', () => {
       'environments',
       'fs',
       'notifications',
+      'services',
     ]);
     const result = api.environments.getConfigValues();
     const call = JSON.parse(sent[0]!);

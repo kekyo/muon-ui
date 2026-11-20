@@ -1,7 +1,7 @@
 {
   "name": "muon-node",
   "version": "0.0.1",
-  "description": "Out-of-process Node.js bridge for muon.",
+  "description": "Node.js service runtime for muon.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,12 +12,12 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "dependencies": {
-    "import-meta-resolve": ">=4.2.0",
     "semver": ">=7.8.5"
   },
   "devDependencies": {
     "@types/node": ">=24.0.0",
     "@types/semver": ">=7.7.0",
+    "muon-plugin-sdk": "*",
     "prettier-max": ">=1.16.0",
     "screw-up": ">=1.35.0",
     "typescript": ">=5.9.0",

@@ -5,6 +5,7 @@
  */
 
 #include "muon_android_process_runtime.h"
+#include "muon_android_dispatcher.h"
 
 #include "muon_cardio_post.h"
 
@@ -162,7 +163,9 @@ struct MuonAndroidProcessRuntimeControllerImpl {
   std::map<int, std::string> dispatcher_file_descriptors;
   uint64_t opened_library_handles = 0;
   uint64_t closed_library_handles = 0;
+  size_t retained_library_handles = 0;
   std::map<void*, std::string> live_library_locators;
+  std::map<void*, size_t> live_library_references;
   std::vector<std::pair<void*, std::string>> deferred_library_handles;
   std::vector<std::string> last_closed_libraries;
 #if defined(MUON_TEST_BUILD)
@@ -174,8 +177,10 @@ struct MuonAndroidProcessRuntimeControllerImpl {
   std::map<int, MuonAndroidProcessSession> sessions;
   std::vector<MuonRpcOwner> pending_probes;
   MuonAndroidPluginCatalog plugin_catalog;
-  std::unique_ptr<cardio::dispatcher_host_android_auto> dispatcher_host;
+  std::shared_ptr<cardio::dispatcher_host_android_auto> dispatcher_host;
   std::shared_ptr<MuonPluginRuntime> plugin_runtime;
+  // A dispatcher can outlive this controller when a Java-only FD client owns it.
+  std::shared_ptr<int> diagnostics_lifetime = std::make_shared<int>(0);
 };
 
 static std::string GetFileDescriptorTarget(int descriptor) {
@@ -348,8 +353,7 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
   // dispatcher so those concurrent opens are not attributed to cardio.
   const auto descriptors_before = GetOpenDispatcherFileDescriptors();
   try {
-    dispatcher_host =
-        std::make_unique<cardio::dispatcher_host_android_auto>();
+    dispatcher_host = AcquireMuonAndroidDispatcher();
   } catch (const std::exception& exception) {
     *error_message = exception.what();
     return false;
@@ -469,6 +473,7 @@ bool MuonAndroidProcessRuntimeControllerImpl::CreateRuntime(
     if (handle != nullptr) {
       opened_library_handles += 1;
       live_library_locators[handle] = locator;
+      ++live_library_references[handle];
     }
     return handle;
   };
@@ -651,31 +656,44 @@ void MuonAndroidProcessRuntimeControllerImpl::CompleteStop() {
   }
   stop_completion_posted = false;
   plugin_runtime.reset();
-  dispatcher_host.reset();
   // Dispatcher work-item destructors can execute std::function managers that
-  // were instantiated in a plugin DSO, so dlclose must be the final step.
-  for (const auto& deferred : deferred_library_handles) {
-    if (deferred.first != nullptr) {
-      (void)::dlclose(deferred.first);
-      closed_library_handles += 1;
-      last_closed_libraries.push_back(deferred.second);
-      live_library_locators.erase(deferred.first);
-    }
-  }
+  // were instantiated in a plugin DSO, so dlclose must be the final step. An
+  // independent FD client may retain this Looper host after the page exits.
+  auto libraries = std::move(deferred_library_handles);
   deferred_library_handles.clear();
+  retained_library_handles += libraries.size();
+  auto descriptors = std::move(dispatcher_file_descriptors);
+  dispatcher_file_descriptors.clear();
+  const auto alive = std::weak_ptr<int>(diagnostics_lifetime);
+  RetainMuonAndroidDispatcherCleanup(dispatcher_host,
+      [this, alive, libraries = std::move(libraries), descriptors = std::move(descriptors)] {
+    for (const auto& deferred : libraries) {
+      if (deferred.first == nullptr) continue;
+      (void)::dlclose(deferred.first);
+      if (!alive.expired()) {
+        ++closed_library_handles;
+        --retained_library_handles;
+        last_closed_libraries.push_back(deferred.second);
+        const auto found = live_library_references.find(deferred.first);
+        if (found != live_library_references.end() && --found->second == 0) {
+          live_library_references.erase(found);
+          live_library_locators.erase(deferred.first);
+        }
+      }
+    }
+    if (alive.expired()) return;
+    for (const auto& [descriptor, fingerprint] : descriptors) {
+      errno = 0;
+      if ((::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) &&
+          GetDispatcherFileDescriptorFingerprint(descriptor) == fingerprint)
+        ++leaked_dispatcher_file_descriptors;
+    }
+    ++destroyed_dispatcher_hosts;
+  });
+  dispatcher_host.reset();
 #if defined(MUON_TEST_BUILD)
   active_startup_fault = MuonAndroidRuntimeStartupFault::None;
 #endif
-  for (const auto& [descriptor, fingerprint] :
-       dispatcher_file_descriptors) {
-    errno = 0;
-    if ((::fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) &&
-        GetDispatcherFileDescriptorFingerprint(descriptor) == fingerprint) {
-      leaked_dispatcher_file_descriptors += 1;
-    }
-  }
-  dispatcher_file_descriptors.clear();
-  destroyed_dispatcher_hosts += 1;
   probe_function_id = 0;
   plugin_catalog = MuonAndroidPluginCatalog{};
   state = MuonAndroidProcessRuntimeState::Idle;
@@ -971,9 +989,9 @@ MuonAndroidProcessRuntimeController::GetDiagnostics() const {
   diagnostics.suppressed_probe_results = impl_->suppressed_probe_results;
   diagnostics.opened_library_handles = impl_->opened_library_handles;
   diagnostics.closed_library_handles = impl_->closed_library_handles;
-  diagnostics.live_library_handles = impl_->live_library_locators.size();
+  diagnostics.live_library_handles = impl_->opened_library_handles - impl_->closed_library_handles;
   diagnostics.deferred_library_handles =
-      impl_->deferred_library_handles.size();
+      impl_->deferred_library_handles.size() + impl_->retained_library_handles;
   diagnostics.last_closed_libraries = impl_->last_closed_libraries;
 #if defined(MUON_TEST_BUILD)
   if (impl_->plugin_runtime) {

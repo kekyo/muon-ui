@@ -18,13 +18,12 @@ import {
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import AdmZip from "adm-zip";
+import { createTarPacker, type EntryItem } from "tar-vern";
 import {
-  createDirectoryItem,
+  createReadDirectoryItem,
   createReadFileItem,
-  createTarPacker,
   storeReaderToFile,
-  type EntryItem,
-} from "tar-vern";
+} from "tar-vern/node";
 
 import {
   buildMuonApp,
@@ -73,8 +72,8 @@ import {
 } from "./linux-desktop.js";
 import {
   assertMuonNodeProjectPackCleanupIsSafe,
-  resolveMuonNodeProject,
-} from "./node-project.js";
+  resolveMuonNodeServiceProjects,
+} from "./node-project.ts";
 import type { MuonProgressCallback } from "../common/progress.js";
 import { isJsonObject } from "../common/build-config.js";
 
@@ -461,9 +460,7 @@ const createTarGzEntryGenerator = async function* (
   directory: string,
   entryRoot: string,
 ): AsyncGenerator<EntryItem, void, unknown> {
-  yield await createDirectoryItem(entryRoot, "exceptName", {
-    directoryPath: directory,
-  });
+  yield await createReadDirectoryItem(entryRoot, directory);
 
   const walk = async function* (
     currentDirectory: string,
@@ -475,12 +472,10 @@ const createTarGzEntryGenerator = async function* (
       const relativePath = toArchivePath(relative(directory, path));
       const entryName = `${entryRoot}/${relativePath}`;
       if (entry.isDirectory()) {
-        yield await createDirectoryItem(entryName, "exceptName", {
-          directoryPath: path,
-        });
+        yield await createReadDirectoryItem(entryName, path);
         yield* walk(path);
       } else if (entry.isFile()) {
-        yield await createReadFileItem(entryName, path, "exceptName");
+        yield await createReadFileItem(entryName, path);
       }
     }
   };
@@ -1460,17 +1455,17 @@ export const packDesktopMuonApp = async (
     root,
     options.configPath ?? pluginBuildOptions.configPath,
   );
-  const nodeProject = await resolveMuonNodeProject(
+  const nodeProjects = await resolveMuonNodeServiceProjects(
     windowsResourceConfig.config,
     windowsResourceConfig.directory,
   );
-  await assertMuonNodeProjectPackCleanupIsSafe(nodeProject, packageBuildRoot);
+  await assertMuonNodeProjectPackCleanupIsSafe(nodeProjects, packageBuildRoot);
   await assertMuonNodeProjectPackCleanupIsSafe(
-    nodeProject,
+    nodeProjects,
     join(artifactsRoot, "deb"),
   );
   await assertMuonNodeProjectPackCleanupIsSafe(
-    nodeProject,
+    nodeProjects,
     join(artifactsRoot, "nsis"),
   );
   const windowsResource = await resolveMuonWindowsResource({

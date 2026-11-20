@@ -4,10 +4,18 @@ import { dirname, resolve } from 'node:path';
 import { Command, Option } from 'commander';
 import {
   buildPlugin,
+  buildService,
   createPluginProject,
+  createServiceProject,
   type PluginBuildConfig,
+  type ServiceBuildConfig,
 } from './authoring.js';
-import { packagePlugin, readPluginArtifact } from './artifact.js';
+import {
+  packagePlugin,
+  packageService,
+  readPluginArtifact,
+  readServiceArtifact,
+} from './artifact.js';
 import { getNativeBuildEnvironment } from './native.js';
 import {
   diagnosePluginToolchain,
@@ -38,11 +46,16 @@ const platformOptions = (command: Command): Command =>
 const program = new Command()
   .name('muon-plugin')
   .description(
-    'Build and distribute native muon plugins independently of muon-ui.'
+    'Build and distribute native muon plugins and services independently of muon-ui.'
   );
 program
   .command('init <directory>')
-  .requiredOption('--name <name>', 'Plugin registration name')
+  .requiredOption('--name <name>', 'Native artifact name')
+  .addOption(
+    new Option('--kind <kind>', 'Native artifact role')
+      .choices(['plugin', 'service'])
+      .default('plugin')
+  )
   .addOption(languageOption())
   .addOption(
     new Option('--build-system <system>', 'Project build system')
@@ -50,7 +63,9 @@ program
       .default('make')
   )
   .action(async (directory, options) => {
-    await createPluginProject({ ...options, directory: resolve(directory) });
+    await (
+      options.kind === 'service' ? createServiceProject : createPluginProject
+    )({ ...options, directory: resolve(directory) });
   });
 platformOptions(program.command('doctor'))
   .addOption(languageOption())
@@ -68,9 +83,10 @@ platformOptions(program.command('doctor'))
     async (
       options: PluginToolchainOptions & { config?: string; json?: boolean }
     ) => {
-      const config: PluginBuildConfig | undefined = options.config
-        ? JSON.parse(await readFile(options.config, 'utf8'))
-        : undefined;
+      const config: PluginBuildConfig | ServiceBuildConfig | undefined =
+        options.config
+          ? JSON.parse(await readFile(options.config, 'utf8'))
+          : undefined;
       const report = await diagnosePluginToolchain({
         ...options,
         ...(config
@@ -146,10 +162,12 @@ platformOptions(program.command('build [config]'))
       config: string | undefined,
       options: PluginToolchainOptions & { out?: string }
     ) => {
+      const configPath = resolve(config ?? 'muon-plugin.build.json');
+      const metadata = JSON.parse(await readFile(configPath, 'utf8'));
       process.stdout.write(
-        (await buildPlugin({
+        (await (metadata.kind === 'service' ? buildService : buildPlugin)({
           ...options,
-          configPath: resolve(config ?? 'muon-plugin.build.json'),
+          configPath,
           ...(options.out ? { outputDirectory: resolve(options.out) } : {}),
         })) + '\n'
       );
@@ -164,10 +182,9 @@ program
   )
   .action(async (path: string, options: { target?: MuonPluginTarget[] }) => {
     const raw = JSON.parse(await readFile(path, 'utf8'));
-    const artifact = await readPluginArtifact(
-      path,
-      options.target ?? (Object.keys(raw.targets) as MuonPluginTarget[])
-    );
+    const artifact = await (
+      raw.kind === 'service' ? readServiceArtifact : readPluginArtifact
+    )(path, options.target ?? (Object.keys(raw.targets) as MuonPluginTarget[]));
     process.stdout.write(
       `${artifact.manifest.name}: verified ${Object.keys(artifact.targets).join(', ')}\n`
     );
@@ -175,11 +192,14 @@ program
 program
   .command('package <inputs>')
   .description(
-    'Package final binaries described by a PackagePluginOptions JSON file; paths are relative to the working directory'
+    'Package final binaries described by PackagePluginOptions or PackageServiceOptions JSON; paths are relative to the working directory'
   )
   .action(async (path: string) => {
+    const options = JSON.parse(await readFile(path, 'utf8'));
     process.stdout.write(
-      (await packagePlugin(JSON.parse(await readFile(path, 'utf8')))) + '\n'
+      (await (options.kind === 'service' ? packageService : packagePlugin)(
+        options
+      )) + '\n'
     );
   });
 try {

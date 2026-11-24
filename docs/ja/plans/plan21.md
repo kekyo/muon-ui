@@ -6,7 +6,7 @@
 
 対象はデスクトップの `dist-muon/<target>/` とそこから作るパッケージ、およびAndroidのAPKである。開発環境にインストールするnpmパッケージには、各構成のアプリを作るための部品とビルド時の検査データを置く。
 
-## 現在の構成と実測値
+## 変更前の構成と実測値
 
 調査時点は `595c6828`。デスクトップのビルダーはターゲット別の固定リストに挙げたファイルを検査してコピーし、別の一覧に従って実行権限を設定する。Linuxでは `muon-core` が直接リンクする `libmuon-ui.so` と `libcardio.so` に加え、サービスホストと外部プロセス起動用の補助プログラムも全アプリに入る。Node.jsサービス用ブリッジ、Windowsの通知アイコン、宣言されたネイティブプラグインは、すでに設定に応じてコピーしている。CEF本体と、Node.jsサービスが使うNode.js本体はランチャーが起動時に準備する。[ターゲット別のファイル一覧](../../../ui/cef/targets.ts)・[配布ディレクトリの生成](../../../ui/cef/build.ts)・[ランタイムの配置](../getting-started.md#パッケージ生成)
 
@@ -49,44 +49,78 @@ Releaseビルドの登録箇所と専用の実装を一つずつ外して再リ�
 
 debとAppImageの作成時は、有効な `packageDirectory` の `runtime/<target>/linux-dependencies.json` を読み、アプリの配布ディレクトリにある実際のELFファイルと照合する。これによりdebの `Depends` 算出とAppImageのABI検査を続けながら、ビルド時のJSONを配布物から省ける。[依存検査とパッケージ生成](../../../ui/cef/pack.ts)・[既存のパッケージ試験](../../../ui/cef-test/pack.test.ts)
 
-- [ ] 配布ディレクトリ、tar.gz、deb、AppImageに検査用JSONが入らず、最小アプリが起動する。
-- [ ] `packageDirectory` を切り替えても正しいターゲットのデータを使う。追加の共有ライブラリが必要とする依存はdebに反映され、ABIが合わなければパッケージ作成時に検出できる。
+- [x] 配布ディレクトリ、tar.gz、deb、AppImageに検査用JSONが入らず、最小アプリが起動する。
+- [x] `packageDirectory` を切り替えても正しいターゲットのデータを使う。追加の共有ライブラリが必要とする依存はdebに反映され、ABIが合わなければパッケージ作成時に検出できる。
 
 ### 段階2　サービスを宣言しないAndroidアプリのAPKを小さくする
 
-ターゲット向けに解決したサービス件数から、現在マニフェストの生成に使っている `servicesEnabled` をGradleにも渡す。0件のときは `packaging.jniLibs.excludes` で `libmuon_android_services.so` を除く。画面の通信に使う `libmuon_android_rpc.so` と、それが必要とする `libcardio.so`、`libc++_shared.so` は選択した各ABIに含める。[Androidプロジェクトの生成](../../../ui/android/build.ts)・[アプリのGradleテンプレート](../../../ui/android/templates/app/build.gradle)・[Android Gradle PluginのJNIライブラリ除外設定](https://developer.android.com/reference/tools/gradle-api/9.2/com/android/build/api/dsl/JniLibsPackaging)
+ターゲット向けに解決したサービス件数から、マニフェストの生成に使う `servicesEnabled` をGradleにも渡す。0件のときは `packaging.jniLibs.excludes` で `libmuon_android_services.so` を除く。画面の通信に使う `libmuon_android_rpc.so` と、それが必要とする `libcardio.so`、`libc++_shared.so` は選択した各ABIに含める。[Androidプロジェクトの生成](../../../ui/android/build.ts)・[アプリのGradleテンプレート](../../../ui/android/templates/app/build.gradle)・[Android Gradle PluginのJNIライブラリ除外設定](https://developer.android.com/reference/tools/gradle-api/9.2/com/android/build/api/dsl/JniLibsPackaging)
 
-- [ ] サービスなしのAPKをインストールしてページを開き、画面からのRPCが動く。両ABIの収録内容、APK署名、16 KiB整列を確認する。
-- [ ] nativeまたはQuickJSのサービスを宣言したAPKにはサービス用ライブラリが入り、画面からサービスに接続できる。自動起動を有効にしたサービスは画面を開く前にも起動する。
+- [x] サービスなしのAPKをインストールしてページを開き、画面からのRPCが動く。両ABIの収録内容、APK署名、16 KiB整列を確認する。
+- [x] nativeまたはQuickJSのサービスを宣言したAPKにはサービス用ライブラリが入り、画面からサービスに接続できる。自動起動を有効にしたサービスは画面を開く前にも起動する。
 
 ### 段階3　デスクトップの配布用バイナリから不要なシンボルを除く
 
 muonのRelease成果物をnpmパッケージ用に用意する段階で、各ターゲット用の `strip` を `muon-core` と `muon-service-host` の配布用コピーに適用する。シンボル付きのビルド成果物はデバッグに使える形で保管する。Windowsではこの処理をアプリのリソース編集と署名の前に済ませる。アプリ開発者はこれまでどおりnpmパッケージからビルドできる。[Release成果物の配置](../../../ui/scripts/stage-muon-builder.mjs)・[GNU stripの仕様](https://sourceware.org/binutils/docs/binutils/strip.html)
 
-- [ ] 同じアプリの展開後と圧縮後の容量を変更前後で測り、LinuxとWindowsで配布物から起動する。ネイティブプラグインを呼び出し、サービスホスト経由でも応答を得られる。
+- [x] 同じアプリの展開後と圧縮後の容量を変更前後で測り、LinuxとWindowsで配布物から起動する。ネイティブプラグインを呼び出し、サービスホスト経由でも応答を得られる。
 
 ### 段階4　Linuxで外部プロセスを起動するアプリにsupervisorを同梱する
 
 `muon.json` とViteの設定を統合した後、ターゲットの基本ファイルに、許可した機能のファイルと依存先を加える。この一覧を入力ファイルの検査、コピー、実行権限の設定で共用する。最初の適用先を `muon-executor-supervisor` とする。`internal` プラグインで `muon.executor.spawn` に一致する許可があれば同梱する。`simple` は `allow`、`validate` は `imports[].allow` の解決結果を使い、ワイルドカードも既存の規則で照合する。[設定の解決](../../../ui/common/plugin-access.ts)・[許可の照合](../../../ui/common/capability.ts)・[supervisorを使う処理](../../../core/cef/src/plugins/builtin/muon_builtin_executor.cpp)
 
-- [ ] 両モードで、明示またはワイルドカードで許可した `spawn` が配布アプリからプロセスを起動し、結果を返す。`loadLibrary` だけを許可した構成ではsupervisorを省いてもライブラリを呼び出せる。
-- [ ] `vite build`、`muon build`、`muon pack` で同じ選択が働く。許可を外して再ビルドすると出力からsupervisorが消え、最小アプリが起動する。
+- [x] 両モードで、明示またはワイルドカードで許可した `spawn` が配布アプリからプロセスを起動し、結果を返す。`loadLibrary` だけを許可した構成ではsupervisorを省いてもライブラリを呼び出せる。
+- [x] `vite build`、`muon build`、`muon pack` で同じ選択が働く。許可を外して再ビルドすると出力からsupervisorが消え、最小アプリが起動する。
 
 ### 段階5　デスクトップのサービスホストをサービスの有無で選ぶ
 
-現在は通常起動でもホストに接続する。ホストはサービスの実行に加え、UIと各サービスの自動起動設定をまとめ、いずれかがONならOSのログイン時起動を登録する。サービスが0件のときは、ランタイムが既存のUI設定（`services/.ui-autostart`）を読み書きし、ログイン時起動の登録とUI表示をホストなしで処理できるようにする。通常起動、登録用の `--muon-register-autostart`、ログイン時の `--muon-autostart` に同じ判断を適用する。サービスを一つでも宣言したアプリには、画面の許可や自動起動の初期値にかかわらずホストを同梱する。[通常起動とUI設定](../../../core/cef/src/plugins/builtin/muon_builtin_services.cpp)・[ログイン時の起動](../../../core/cef/src/main.cpp)・[設定の保存先](../../../core/service-host/muon_service_startup.cpp)・[OSへの登録](../../../core/service-host/muon_service_login.cpp)
+変更前のランタイムは通常起動時に、サービスの有無にかかわらずホストに接続していた。ホストはサービスの実行に加え、UIと各サービスの自動起動設定をまとめ、いずれかがONならOSのログイン時起動を登録する。サービスが0件のときは、ランタイムが既存のUI設定（`services/.ui-autostart`）を読み書きし、ログイン時起動の登録とUI表示をホストなしで処理できるようにする。通常起動、登録用の `--muon-register-autostart`、ログイン時の `--muon-autostart` に同じ判断を適用する。サービスを一つでも宣言したアプリには、画面の許可や自動起動の初期値にかかわらずホストを同梱する。[通常起動とUI設定](../../../core/cef/src/plugins/builtin/muon_builtin_services.cpp)・[ログイン時の起動](../../../core/cef/src/main.cpp)・[設定の保存先](../../../core/service-host/muon_service_startup.cpp)・[OSへの登録](../../../core/service-host/muon_service_login.cpp)
 
-- [ ] LinuxとWindowsで、サービスなしのアプリにホストを同梱せず、通常起動で画面が開く。`muon.environments.setAutostart` で保存したON/OFFを再起動後に `getAutostart` で取得でき、登録を更新した後もログイン時のUI表示が設定に従う。
-- [ ] UIの自動起動をOFF、サービスの自動起動をONにしてログインすると、サービスだけが起動する。後から画面を開いて同じサービスに接続できる。サービスを追加または削除するアプリ更新の後も、保存済みのUI設定が働く。
+- [x] LinuxとWindowsで、サービスなしのアプリにホストを同梱せず、通常起動で画面が開く。`muon.environments.setAutostart` で保存したON/OFFを再起動後に `getAutostart` で取得でき、登録を更新した後もログイン時のUI表示が設定に従う。
+- [x] UIの自動起動をOFF、サービスの自動起動をONにしてログインすると、サービスだけが起動する。後から画面を開いて同じサービスに接続できる。サービスを追加または削除するアプリ更新の後も、保存済みのUI設定が働く。
 
 ### 段階6　配布サイズを再測定し、サーバー分離の採否を決める
 
 シンボルと不要なホストを除いた段階5の配布物を比較の基準にする。ページ側は `internal` プラグインが `muon.server.createServer` を許可するとき、サービス側はいずれかのサービスが `io.server.listen: true` を宣言するときに待受を使える。分離する場合は、共通のHTTP・WebSocket実装を一つの共有ライブラリにして、どちらかが待受を使えるアプリに同梱する案を検討する。[ページのローカルサーバー](../local-server.md)・[サービスのI/O設定](../../../ui/common/service-io.ts)
 
-- [ ] ページ側だけを外した場合の削減量は圧縮後で約160 KiBだった。段階5の配布物で差を再測定し、分離の採否と理由を記録する。共有ライブラリを採用する場合は、試作で「両方なし」「ページのみ」「サービスのみ」「両方あり」の4構成を比較し、ライブラリ本体と読み込み処理を含めた展開時・圧縮後の容量を根拠にする。
+- [x] ページ側だけを外した場合の削減量は圧縮後で約160 KiBだった。段階5の配布物で差を再測定し、分離の採否と理由を記録する。共有ライブラリを採用する場合は、試作で「両方なし」「ページのみ」「サービスのみ」「両方あり」の4構成を比較し、ライブラリ本体と読み込み処理を含めた展開時・圧縮後の容量を根拠にする。
 
 `muon.launcher` と `muon.environments` の個別分離は、圧縮後の削減量が各12〜16 KiBのため優先度を下げる。他の候補の判断には上表の値を使う。通知を今後分離する場合には、通知を無効化する更新でも以前の通知履歴を消せることを条件とする。[通知履歴の削除経路](../../../core/cef/src/main.cpp)
 
 ## 完了条件
 
 公開用npmパッケージから最小構成と各機能を使う構成をビルドし、各段階の完了条件と照合する。リポジトリ直下で `npm test` を実行し、対象OSでの起動・更新の結果、最終的な配布サイズ、サーバー分離の判断をこの計画に記録する。
+
+## 実装後の配布サイズ
+
+デスクトップでは、変更前の調査で使ったHTMLが1枚のアプリを `muon pack` でビルドした。展開時は配布ディレクトリにある全ファイルのバイト数の合計、圧縮後は配布するアーカイブのサイズである。Androidの比較には、サービスを宣言せず、組み込みの `muon.fs` でファイルを読み書きする同じアプリのdebug APKを使った。1 MiBは1,048,576バイト、1 KiBは1,024バイトとして換算した。
+
+| 配布物 | 変更前 | 変更後 | 削減率 |
+| --- | ---: | ---: | ---: |
+| Linux amd64、展開時 | 25.17 MiB | 5.73 MiB | 77.2% |
+| Linux amd64、tar.gz | 5.10 MiB | 2.44 MiB | 52.2% |
+| Windows amd64、展開時 | 68.98 MiB | 37.57 MiB | 45.5% |
+| Windows amd64、ZIP | 16.23 MiB | 11.73 MiB | 27.7% |
+| Android、arm64-v8aとx86_64を含むAPK | 14.02 MiB | 7.56 MiB | 46.0% |
+
+### `muon.server` の分離判断
+
+ページ用の `muon.server` とサービス用の `io.server.listen` はそれぞれの実行ファイルに静的リンクする。シンボルを除いたReleaseビルドから待受機能の登録と専用コードを外して再リンクし、同じアプリを再度パッケージ化した。表は待受機能を外して減った容量である。
+
+| 比較した構成 | Linux 展開時 | Linux tar.gz | Windows 展開時 | Windows ZIP |
+| --- | ---: | ---: | ---: | ---: |
+| サービスなし。ページの待受を外す | 336 KiB | 154 KiB | 346 KiB | 158 KiB |
+| QuickJSサービスが1件。ページとホストの両方から待受を外す | 628 KiB | 291 KiB | 919 KiB | 323 KiB |
+
+サービスを使わないアプリでは、サービス側の待受コードはホストとともに配布物から外れる。ページ側をさらに分離して削減できる容量の目安は、圧縮後で約0.15 MiBである。共有ライブラリ化すると、待受を使うアプリではそのライブラリの同梱と読み込み、ページとホストの両方から使うためのバイナリ互換性の管理が必要になる。今回の実測差を踏まえ、分離は見送った。
+
+## 配布物での動作確認
+
+配布用npmパッケージを新しいアプリにインストールし、サービスなしとQuickJSサービス1件の構成でLinuxのtar.gzとWindowsのZIPを作成した。デスクトップの全5ターゲットで、配布用の `muon-core` と `muon-service-host` から不要なシンボルを除き、シンボル付きの原本が `core/cef/.build/dist/<target>/release/unstripped/` に残ることを確認した。
+
+- Linuxのtar.gz、deb、AppImageを展開して、いずれにも `linux-dependencies.json` が入っていないことを確認した。debの `Depends` とAppImageのABI検査には、開発環境のターゲット別データを使う。
+- Linuxでは `simple` と `validate` の両方で、明示的な許可とワイルドカードの許可を試した。配布アプリの `spawn` から外部コマンドを実行できた。`loadLibrary` だけを許可したアプリではsupervisorを同梱せず、システムライブラリの `getpid` を呼び出せた。
+- LinuxとWindowsで、ネイティブ、QuickJS、Node.jsの各サービスに接続し、画面を閉じて再度開いた後もサービスの状態を読み取れた。同じアプリIDでサービスを削除し、再び追加する更新を試し、UIの自動起動設定が引き継がれることも確認した。[配布パッケージを使った更新試験](../../../core/cef-test/service-consumer.test.ts)
+- Androidの16 KiBページのエミュレーターに、サービスなしの署名済みrelease APKをインストールした。画面から書き込んだデータを、アプリの再起動後と更新後にも読み出せた。サービスを宣言したAPKでは、端末を再起動してロックを解除すると、アプリの画面を開く前にnativeとQuickJSのサービスが起動した。その後、画面から同じサービスに接続できた。[サービスの起動試験](../../../ui/android-test/service-boot-e2e.test.ts)
+
+リポジトリ直下の `npm test` は、Windows 32ビット版の通知試験1件で停止した。録画には通知が表示されていたが、試験がアクセシビリティAPIから通知を取得できずにタイムアウトした。コードを変更せずに通知試験を再実行すると9件すべてが通った。全体コマンドがそこで打ち切った64ビット版の通知試験と、後続のサーバー、サービスホスト、ログイン時起動を含むUI連携の各試験も個別に実行し、すべて通過した。

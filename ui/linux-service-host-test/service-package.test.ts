@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
   cp,
@@ -19,25 +19,11 @@ import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
-import { beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { buildService, createServiceProject } from "muon-plugin-sdk";
 import { resolveMuonServices } from "../common/service-config.ts";
 import { stageMuonDesktopServices } from "../cef/services.ts";
 import { createMuonServicesApi } from "../../core/common/renderer/services.ts";
-
-beforeAll(async () => {
-  // A clean SDK build can refresh the host's native dependencies. Keep build
-  // time separate from the runtime behavior deadline and build only this host.
-  await mkdir("../core/service-host/.build", { recursive: true });
-  await promisify(execFile)("flock", [
-    "../core/service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../core/service-host",
-    ".build/muon-service-host",
-  ]);
-}, 600000);
 
 it.each(["native", "source", "node"] as const)(
   "loads an SDK %s service from a relocated desktop distribution",

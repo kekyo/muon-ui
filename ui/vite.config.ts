@@ -15,6 +15,8 @@ import { buildMuonServiceRenderer } from "../core/common/build-service-renderer.
 
 import muonNodePackageJson from "../node/package.json" with { type: "json" };
 
+const testFile = "*.{test,spec}.?(c|m)[jt]s?(x)";
+
 export default defineConfig(async ({ mode }): Promise<UserConfig> => {
   const isCjs = mode === "cjs";
   const isAndroidHost = mode === "android-host";
@@ -102,6 +104,23 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => {
       restoreMocks: true,
       hookTimeout: 60000,
       testTimeout: 60000,
+      projects: [
+        {
+          extends: true,
+          test: {
+            name: "ui",
+            include: [`{android,cef,common}-test/**/${testFile}`],
+          },
+        },
+        {
+          extends: true,
+          test: {
+            name: "ui-linux-service-host",
+            include: [`linux-service-host-test/**/${testFile}`],
+            globalSetup: "./linux-service-host-test/setup.ts",
+          },
+        },
+      ],
     },
     resolve: {
       alias: {

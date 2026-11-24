@@ -72,8 +72,13 @@ static cardio::promise<void> PrepareLogin(const MuonConfig& config,
   result = 1;
   try {
     session = CreateMuonBuiltinServiceSession(config, paths, setup, !setup);
-    co_await session->Start();
-    show_ui = !setup && (co_await session->Call("@login", "getUiAutostart", "{}")) == "true";
+    if (session) {
+      co_await session->Start();
+      show_ui = !setup && (co_await session->Call("@login", "getUiAutostart", "{}")) == "true";
+    } else {
+      const auto enabled = co_await ReadMuonUiOnlyLogin(config, paths, setup);
+      show_ui = !setup && enabled;
+    }
     result = 0;
   } catch (const std::exception& error) {
     std::fprintf(stderr, "muon login startup failed: %s\n", error.what());

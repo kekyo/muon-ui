@@ -583,6 +583,7 @@ const buildMuonTarget = async (input: {
     descriptor,
     sourceRuntimePath,
     input.sourceConfig.plugin,
+    input.services.length > 0,
     input.nodeRuntimeRequirement !== undefined,
   );
   await verifyTargetInputs({
@@ -796,12 +797,12 @@ const resolveRuntimeFiles = async (
   descriptor: MuonTargetDescriptor,
   sourceRuntimePath: string,
   plugin: unknown,
+  needsServiceHost: boolean,
   needsNodeBridge: boolean,
 ): Promise<{ name: string; executable: boolean }[]> => {
-  const executables = [
-    descriptor.runtimeExecutableName,
-    "muon-service-host" + descriptor.launcherExtension,
-  ];
+  const executables = [descriptor.runtimeExecutableName];
+  if (needsServiceHost)
+    executables.push("muon-service-host" + descriptor.launcherExtension);
   if (
     descriptor.os === "linux" &&
     isJsonObject(plugin) &&

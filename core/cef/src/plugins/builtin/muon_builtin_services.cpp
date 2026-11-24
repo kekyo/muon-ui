@@ -11,6 +11,9 @@
 #include "config/muon_autostart.h"
 #include "config/muon_startup.h"
 #include "muon_filesystem.h"
+#include "muon_service_policy.h"
+#include "muon_service_process_lock.h"
+#include "muon_service_startup.h"
 #include "muon_service_renderer_generated.h"
 #include "sha2.h"
 #include <yyjson.h>
@@ -28,15 +31,51 @@
 static std::shared_ptr<MuonServiceSession> session;
 static bool shutdown_requested = false;
 
-static cardio::promise<void> Start(std::shared_ptr<MuonServiceSession> state) {
-  try { co_await state->Start(); }
+struct UiOnlyLogin {
+  std::filesystem::path directory;
+  std::string startup;
+  cardio::primitives::mutex access;
+  bool refresh;
+};
+static std::shared_ptr<UiOnlyLogin> ui_only;
+
+static cardio::promise<bool> UiOnlyPreference(std::shared_ptr<UiOnlyLogin> state,
+    std::optional<bool> enabled) {
+  auto lock = std::move(co_await state->access.lock());
+  // Installer registration can run while the UI is committing an override.
+  // Both must derive the OS entry from the preference in the same transaction.
+  std::shared_ptr<void> transaction;
+  if (state->refresh || enabled.has_value())
+    transaction = std::move(co_await AcquireMuonServiceProcessLock(
+        "ui-login:" + muon_internal::FilesystemPathToUtf8(state->directory), {}));
+  auto policy = std::move(co_await CreateMuonServiceLoginPolicy(state->directory, {}, state->startup));
+  if (state->refresh) {
+    co_await policy->Reconcile();
+    state->refresh = false;
+  }
+  if (enabled.has_value()) {
+    const auto create_directory = [directory = state->directory] {
+      std::filesystem::create_directories(muon_internal::FilesystemPathForIo(
+          directory, muon_internal::FilesystemIoUsage::Tree));
+    };
+    co_await RunMuonServiceFileWork(create_directory);
+    co_await policy->Set("", *enabled);
+  }
+  co_return policy->UiEnabled();
+}
+
+static cardio::promise<void> Start(std::shared_ptr<MuonServiceSession> state, std::shared_ptr<UiOnlyLogin> local) {
+  try {
+    if (state) co_await state->Start();
+    else co_await UiOnlyPreference(local, std::nullopt);
+  }
   catch (const std::exception& error) { std::fprintf(stderr, "muon services startup: %s\n", error.what()); }
 }
 
 static cardio::promise<void> Invoke(std::shared_ptr<MuonServiceSession> state,
     muon_completion_func completion, std::string operation, std::string json, std::string owner) {
   try {
-    if (!state) throw std::runtime_error("Services are disabled");
+    if (!state) throw std::runtime_error("service is not configured");
     muon_internal::CompleteMuonString(completion,
         co_await state->Call(std::move(owner), std::move(operation), std::move(json)));
   } catch (const std::exception& error) { muon_internal::CompleteMuonError(completion, error.what()); }
@@ -63,13 +102,16 @@ static void Rpc(muon_completion_func completion, const char* json, const char* o
 static void ReleaseOwner(const char* owner) { if (session && owner) session->ReleaseOwner(owner); }
 
 static cardio::promise<void> StopAsync(std::shared_ptr<MuonServiceSession> state,
-    bool shutdown, muon_plugin_stop_completion completion, void* data) {
-  try { if (state) co_await state->Stop(shutdown); }
+    std::shared_ptr<UiOnlyLogin> local, bool shutdown, muon_plugin_stop_completion completion, void* data) {
+  try {
+    if (state) co_await state->Stop(shutdown);
+    else if (local) { auto lock = std::move(co_await local->access.lock()); }
+  }
   catch (const std::exception& error) { std::fprintf(stderr, "muon services shutdown: %s\n", error.what()); }
   completion(data);
 }
 static void Stop(muon_plugin_stop_completion completion, void* data) {
-  cardio::fire_and_forget(StopAsync(session, shutdown_requested, completion, data));
+  cardio::fire_and_forget(StopAsync(session, ui_only, shutdown_requested, completion, data));
 }
 
 static const muon_type_descriptor string_type{MUON_TYPE_STRING, nullptr};
@@ -139,6 +181,24 @@ static std::string StartupMetadata(const MuonConfig& config,
   return {json.get(), size};
 }
 
+static std::string ProfileIdentity(const MuonConfig& config) {
+  return config.app_id + "\n" + muon_internal::FilesystemPathToUtf8(config.browser.profile.lexically_normal());
+}
+
+static std::shared_ptr<UiOnlyLogin> CreateUiOnlyLogin(const MuonConfig& config,
+    const std::vector<std::filesystem::path>& paths, bool refresh) {
+  auto local = std::make_shared<UiOnlyLogin>();
+  local->directory = config.browser.profile / "services";
+  local->startup = StartupMetadata(config, paths, ProfileIdentity(config), false);
+  local->refresh = refresh;
+  return local;
+}
+
+cardio::promise<bool> ReadMuonUiOnlyLogin(const MuonConfig& config,
+    const std::vector<std::filesystem::path>& config_paths, bool refresh) {
+  return UiOnlyPreference(CreateUiOnlyLogin(config, config_paths, refresh), std::nullopt);
+}
+
 std::shared_ptr<MuonServiceSession> CreateMuonBuiltinServiceSession(const MuonConfig& config,
     const std::vector<std::filesystem::path>& config_paths, bool refresh, bool login_launch) {
   if (!config.service_endpoint.empty()) {
@@ -148,7 +208,8 @@ std::shared_ptr<MuonServiceSession> CreateMuonBuiltinServiceSession(const MuonCo
         "", muon_internal::FilesystemPathToUtf8(config.service_registry), config.service_endpoint,
         muon_internal::FilesystemPathToUtf8(config.browser.profile / "services"), "", true});
   }
-  auto identity = config.app_id + "\n" + muon_internal::FilesystemPathToUtf8(config.browser.profile.lexically_normal());
+  if (config.service_registry.empty() && !config.service_development) return nullptr;
+  auto identity = ProfileIdentity(config);
   const auto startup = StartupMetadata(config, config_paths, identity, refresh);
 #if defined(_WIN32)
   DWORD logon_session = 0;
@@ -179,11 +240,22 @@ void InitializeMuonBuiltinServices(const MuonConfig& config,
   const auto arguments = GetMuonStartupCommandLine();
   const auto login = std::find(arguments.begin(), arguments.end(), "--muon-autostart") != arguments.end();
   session = CreateMuonBuiltinServiceSession(config, config_paths, !login, login);
-  cardio::fire_and_forget(Start(session));
+  ui_only = session ? nullptr : CreateUiOnlyLogin(config, config_paths, !login);
+  cardio::fire_and_forget(Start(session, ui_only));
+}
+
+static cardio::promise<void> CompleteUiOnlyPreference(std::shared_ptr<UiOnlyLogin> local,
+    muon_completion_func completion, std::optional<bool> enabled) {
+  try {
+    const auto current = co_await UiOnlyPreference(local, enabled);
+    if (enabled.has_value()) muon_internal::CompleteMuonVoid(completion);
+    else muon_internal::CompleteMuonString(completion, current ? "true" : "false");
+  } catch (const std::exception& error) { muon_internal::CompleteMuonError(completion, error.what()); }
 }
 
 void GetMuonBuiltinUiAutostart(muon_completion_func completion) {
-  cardio::fire_and_forget(Invoke(session, completion, "getUiAutostart", "{}", "@ui-policy"));
+  if (ui_only) cardio::fire_and_forget(CompleteUiOnlyPreference(ui_only, completion, std::nullopt));
+  else cardio::fire_and_forget(Invoke(session, completion, "getUiAutostart", "{}", "@ui-policy"));
 }
 
 static cardio::promise<void> SetUiAutostart(std::shared_ptr<MuonServiceSession> state,
@@ -196,9 +268,10 @@ static cardio::promise<void> SetUiAutostart(std::shared_ptr<MuonServiceSession> 
 }
 
 void SetMuonBuiltinUiAutostart(muon_completion_func completion, bool enabled) {
-  cardio::fire_and_forget(SetUiAutostart(session, completion, enabled));
+  if (ui_only) cardio::fire_and_forget(CompleteUiOnlyPreference(ui_only, completion, enabled));
+  else cardio::fire_and_forget(SetUiAutostart(session, completion, enabled));
 }
 
-const muon_plugin_metadata* GetMuonBuiltinServicesMetadata() { return session ? &metadata : nullptr; }
+const muon_plugin_metadata* GetMuonBuiltinServicesMetadata() { return session || ui_only ? &metadata : nullptr; }
 void RequestMuonBuiltinServicesShutdown() { shutdown_requested = true; }
-void ShutdownMuonBuiltinServices() { session.reset(); }
+void ShutdownMuonBuiltinServices() { session.reset(); ui_only.reset(); }

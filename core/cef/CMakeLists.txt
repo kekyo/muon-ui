@@ -775,7 +775,12 @@ if(WIN32)
 else()
   set(MUON_SERVICE_PLATFORM linux)
 endif()
+set(MUON_SERVICE_LOGIN_SOURCES
+  ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
+  ../service-host/muon_service_login.cpp
+  ../service-host/muon_service_startup.cpp)
 add_library(muon_service_desktop STATIC
+  ${MUON_SERVICE_LOGIN_SOURCES}
   ${MUON_COMMON_ROOT}/src/services/muon_service_client.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_session.cpp
   ../service-host/muon_service_transport_${MUON_SERVICE_PLATFORM}.cpp
@@ -783,7 +788,8 @@ add_library(muon_service_desktop STATIC
   ../service-host/muon_service_process_${MUON_SERVICE_PLATFORM}.cpp)
 target_compile_features(muon_service_desktop PRIVATE cxx_std_20)
 target_include_directories(muon_service_desktop PUBLIC
-  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include")
+  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
+  PRIVATE src "${MUON_COMMON_ROOT}/../../sdk/include")
 target_link_libraries(muon_service_desktop PUBLIC muon_cardio PRIVATE yyjson)
 MUON_APPLY_SANITIZERS(muon_service_desktop)
 include("${MUON_COMMON_ROOT}/cmake/MuonQuickJs.cmake")
@@ -795,9 +801,7 @@ add_executable(muon_service_host
   ../service-host/muon_node_service_host.cpp
   ../../node/native/node_process.cpp
   ../service-host/muon_service_host_${MUON_SERVICE_PLATFORM}.cpp
-  ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
-  ../service-host/muon_service_login.cpp
-  ../service-host/muon_service_startup.cpp
+  ${MUON_SERVICE_LOGIN_SOURCES}
   ../service-host/muon_service_protocol.cpp
   ../service-host/muon_service_plugins.cpp
   src/config/muon_autostart.cpp
@@ -1361,6 +1365,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 target_include_directories(${APP_NAME} PRIVATE
   "${MUON_GENERATED_INCLUDE_DIR}"
+  ../service-host
   "${MUON_COMMON_ROOT}/../../sdk/include"
   src
   "${MUON_COMMON_ROOT}/src"

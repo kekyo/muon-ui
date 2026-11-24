@@ -308,6 +308,7 @@ const assertPage = async (
   artifacts: string,
   backend: Backend,
   lifecycle: Lifecycle,
+  uiLogin?: { before: boolean; after: boolean },
 ): Promise<number> => {
   const screenshotPath = resolve(artifacts, "frame.png");
   await mkdir(artifacts, { recursive: true });
@@ -390,6 +391,21 @@ const assertPage = async (
     } else {
       expect(value.environment.GDK_BACKEND).toBe("x11");
     }
+    if (uiLogin) {
+      const preference = await client.callTool({
+        name: "browser_evaluate",
+        arguments: {
+          function: `async () => {
+          const api = window.muon.environments;
+          const before = await api.getAutostart();
+          await api.setAutostart(${uiLogin.after});
+          return {before, after: await api.getAutostart()};
+        }`,
+        },
+      });
+      expect(preference.isError, resultText(preference.content)).not.toBe(true);
+      expect(parseEvaluation(resultText(preference.content))).toEqual(uiLogin);
+    }
     if (lifecycle !== undefined) {
       try {
         const action = await client.callTool({
@@ -424,6 +440,7 @@ const launchEnvironment = (
   backend: Backend,
 ): NodeJS.ProcessEnv => ({
   ...process.env,
+  XDG_CONFIG_HOME: join(consumer, "config"),
   XDG_STATE_HOME: join(consumer, "state"),
   ...(backend === "wayland"
     ? { DISPLAY: "", GDK_BACKEND: "wayland" }
@@ -469,6 +486,8 @@ const writeConsumer = async (consumer: string, port: number): Promise<void> => {
             allow: [
               "muon.environments.getVariables",
               "muon.environments.getProcessId",
+              "muon.environments.getAutostart",
+              "muon.environments.setAutostart",
               "muon.browser.close",
               "muon.browser.recycle",
             ],
@@ -640,6 +659,7 @@ it.skipIf(archive === undefined)(
           join(consumer, "playwright", "launcher"),
           backend,
           "close",
+          { before: false, after: true },
         );
         expect(requestedClose).toBe(launcherMuon);
         const [code, signal] = await waitForChildClose(launcher);
@@ -649,6 +669,28 @@ it.skipIf(archive === undefined)(
       } finally {
         await stop(launcher);
       }
+      const executable = result.targets[0]!.launcherPath;
+      const loginOptions = {
+        cwd: consumer,
+        env: launchEnvironment(consumer, backend),
+      };
+      await execute(executable, ["--muon-register-autostart"], loginOptions);
+      const login = launch(executable, ["--muon-autostart"], consumer, backend);
+      try {
+        await waitForCdp(login, launcherPort, readDiagnostics(login));
+        await assertPage(
+          launcherPort,
+          join(consumer, "playwright", "login"),
+          backend,
+          "close",
+          { before: true, after: false },
+        );
+        expect(await waitForChildClose(login)).toEqual([0, null]);
+      } finally {
+        await stop(login);
+      }
+      await execute(executable, ["--muon-register-autostart"], loginOptions);
+      await execute(executable, ["--muon-autostart"], loginOptions);
     } finally {
       await rm(consumer, { recursive: true, force: true });
     }

@@ -955,6 +955,9 @@ describe("muon build", () => {
     const registry = JSON.parse(
       await readFile(join(output, "muon-services.json"), "utf8"),
     );
+    expect((await stat(join(output, "muon-service-host"))).mode & 0o777).toBe(
+      0o755,
+    );
     expect(registry.services.worker).toMatchObject({
       runtime: "node",
       project: "./services/node/worker",
@@ -1237,11 +1240,12 @@ describe("muon build", () => {
       );
       await expect(exists(supervisorPath)).resolves.toBe(false);
       const serviceHost = join(root, "dist-muon", target, "muon-service-host");
-      await expect(readFile(serviceHost, "utf8")).resolves.toBe(
-        `${target} service host\n`,
-      );
-      expect((await stat(serviceHost)).mode & 0o777).toBe(0o755);
+      await expect(exists(serviceHost)).resolves.toBe(false);
     }
+    for (const target of ["windows-i686", "windows-amd64"])
+      await expect(
+        exists(join(root, "dist-muon", target, "muon-service-host.exe")),
+      ).resolves.toBe(false);
   });
 
   it("selects the Linux supervisor from the effective internal spawn permission on each build", async () => {

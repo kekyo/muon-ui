@@ -53,13 +53,6 @@ export interface MuonTargetDescriptor {
    */
   runtimeExecutableName: string;
   /**
-   * Runtime executable file names other than {@link runtimeExecutableName}.
-   *
-   * @remarks Every entry must also be present in {@link runtimeFiles}. Generated
-   * distributions normalize these files to executable mode.
-   */
-  runtimeAuxiliaryExecutableNames: readonly string[];
-  /**
    * muon-launcher executable file name for this target.
    */
   launcherExecutableName: string;
@@ -72,9 +65,9 @@ export interface MuonTargetDescriptor {
    */
   launcherExtension: string;
   /**
-   * Required runtime files copied into generated app distributions.
+   * Shared libraries required by the core runtime.
    */
-  runtimeFiles: readonly string[];
+  runtimeLibraryNames: readonly string[];
   /**
    * Optional runtime files copied when they exist.
    */
@@ -100,20 +93,10 @@ const targetDescriptors = {
     arch: "amd64",
     distributionDirectoryName: "dist-muon/linux-amd64",
     runtimeExecutableName: "muon-core",
-    runtimeAuxiliaryExecutableNames: [
-      "muon-executor-supervisor",
-      "muon-service-host",
-    ],
     launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
-    runtimeFiles: [
-      "muon-core",
-      "muon-executor-supervisor",
-      "muon-service-host",
-      "libmuon-ui.so",
-      "libcardio.so",
-    ],
+    runtimeLibraryNames: ["libmuon-ui.so", "libcardio.so"],
   },
   "linux-armhf": {
     id: "linux-armhf",
@@ -122,20 +105,10 @@ const targetDescriptors = {
     arch: "armhf",
     distributionDirectoryName: "dist-muon/linux-armhf",
     runtimeExecutableName: "muon-core",
-    runtimeAuxiliaryExecutableNames: [
-      "muon-executor-supervisor",
-      "muon-service-host",
-    ],
     launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
-    runtimeFiles: [
-      "muon-core",
-      "muon-executor-supervisor",
-      "muon-service-host",
-      "libmuon-ui.so",
-      "libcardio.so",
-    ],
+    runtimeLibraryNames: ["libmuon-ui.so", "libcardio.so"],
   },
   "linux-arm64": {
     id: "linux-arm64",
@@ -144,20 +117,10 @@ const targetDescriptors = {
     arch: "arm64",
     distributionDirectoryName: "dist-muon/linux-arm64",
     runtimeExecutableName: "muon-core",
-    runtimeAuxiliaryExecutableNames: [
-      "muon-executor-supervisor",
-      "muon-service-host",
-    ],
     launcherExecutableName: "muon-launcher",
     runtimeHelperExecutableName: "muon-runtime-helper",
     launcherExtension: "",
-    runtimeFiles: [
-      "muon-core",
-      "muon-executor-supervisor",
-      "muon-service-host",
-      "libmuon-ui.so",
-      "libcardio.so",
-    ],
+    runtimeLibraryNames: ["libmuon-ui.so", "libcardio.so"],
   },
   "windows-i686": {
     id: "windows-i686",
@@ -166,15 +129,9 @@ const targetDescriptors = {
     arch: "i686",
     distributionDirectoryName: "dist-muon/windows-i686",
     runtimeExecutableName: "muon-core.exe",
-    runtimeAuxiliaryExecutableNames: ["muon-service-host.exe"],
     launcherExecutableName: "muon-launcher.exe",
     launcherExtension: ".exe",
-    runtimeFiles: [
-      "muon-core.exe",
-      "muon-service-host.exe",
-      "libmuon-ui.dll",
-      "libcardio.dll",
-    ],
+    runtimeLibraryNames: ["libmuon-ui.dll", "libcardio.dll"],
     optionalRuntimeFilePatterns: [
       /^libgcc_s_.*-1\.dll$/,
       /^libstdc\+\+-6\.dll$/,
@@ -188,15 +145,9 @@ const targetDescriptors = {
     arch: "amd64",
     distributionDirectoryName: "dist-muon/windows-amd64",
     runtimeExecutableName: "muon-core.exe",
-    runtimeAuxiliaryExecutableNames: ["muon-service-host.exe"],
     launcherExecutableName: "muon-launcher.exe",
     launcherExtension: ".exe",
-    runtimeFiles: [
-      "muon-core.exe",
-      "muon-service-host.exe",
-      "libmuon-ui.dll",
-      "libcardio.dll",
-    ],
+    runtimeLibraryNames: ["libmuon-ui.dll", "libcardio.dll"],
     optionalRuntimeFilePatterns: [
       /^libgcc_s_.*-1\.dll$/,
       /^libstdc\+\+-6\.dll$/,

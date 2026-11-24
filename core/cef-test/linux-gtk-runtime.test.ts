@@ -31,6 +31,13 @@ it.skipIf(runtime === undefined)(
           { env: environment },
         );
         expect(stdout).not.toContain("not found");
+        if (name === "muon-core") {
+          const cef = stdout.match(/^\s*libcef\.so => (.+?) \(0x[\da-f]+\)$/m);
+          expect(cef, stdout).not.toBeNull();
+          expect(await realpath(cef![1]!)).toBe(
+            await realpath(join(runtimeDirectory, "libcef.so")),
+          );
+        }
         for (const library of [
           "libgtk-3.so.0",
           "libgdk-3.so.0",

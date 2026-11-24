@@ -1377,6 +1377,17 @@ if(MUON_BUILD_TESTS)
 endif()
 MUON_APPLY_SANITIZERS(${APP_NAME})
 
+if(NOT MUON_RUNTIME_INCLUDE_APP_FILES AND CMAKE_BUILD_TYPE STREQUAL "Release")
+  foreach(target IN ITEMS ${APP_NAME} muon_service_host)
+    set(original "${CMAKE_CURRENT_BINARY_DIR}/unstripped/$<TARGET_FILE_NAME:${target}>")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/unstripped"
+      COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:${target}>" "${original}"
+      COMMAND "${CMAKE_STRIP}" --strip-unneeded "$<TARGET_FILE:${target}>"
+      VERBATIM)
+  endforeach()
+endif()
+
 if(MUON_BUILD_TESTS)
   set(TEST_PLUGIN_OUTPUT_DIR "${MUON_RUNTIME_DIR}/test-plugins")
   foreach(TEST_PLUGIN_TARGET IN ITEMS
@@ -1611,6 +1622,15 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
 endif()
 
 enable_testing()
+if(NOT MUON_RUNTIME_INCLUDE_APP_FILES AND CMAKE_BUILD_TYPE STREQUAL "Release")
+  foreach(target IN ITEMS ${APP_NAME} muon_service_host)
+    add_test(NAME "${target}_distribution_size"
+      COMMAND bash -c
+        "test -x \"$1\" && test -x \"$2\" && test \"$(stat -c %s \"$1\")\" -lt \"$(stat -c %s \"$2\")\""
+        _ "${MUON_RUNTIME_DIR}/$<TARGET_FILE_NAME:${target}>"
+        "${CMAKE_CURRENT_BINARY_DIR}/unstripped/$<TARGET_FILE_NAME:${target}>")
+  endforeach()
+endif()
 add_test(
   NAME cardio_build_variant_isolated
   COMMAND ${CMAKE_COMMAND}

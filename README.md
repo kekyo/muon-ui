@@ -215,3 +215,102 @@ See the following documents for more detailed information about muon.
 ## License
 
 Under MIT.
+
+---
+
+## History
+
+- 0.35.0
+  - Added C/C++ and QuickJS background services on Linux, Windows, and Android. Services can keep running after the last window closes. On desktop, Node.js services replaced the page-based Node.js sidecar API. [Background services](./docs/en/services.md)
+  - Added typed service calls and events, plus APIs for file I/O, outgoing HTTP requests, and loopback HTTP and WebSocket servers. Each service has its own permissions for these APIs.
+  - Added service autostart at desktop login and, for eligible Android services, after the first unlock following a reboot.
+- 0.34.0
+  - Switched Linux packages to the system's GTK 3 and GLib 2.74 or later. This fixed startup on GNOME Wayland and lets apps use the desktop's input methods and themes. [Linux runtime requirements](./docs/en/muon-cli-advanced-topics.md#linux-runtime-environment)
+  - Vite now reports when the muon runtime fails to start or exits unexpectedly, and includes the runtime's last output when available.
+- 0.33.0
+  - Added `muon.server` so desktop pages can accept HTTP and WebSocket connections on the loopback interface. Apps can stream HTTP responses, require a bearer token, and expose Model Context Protocol (MCP) tools. [HTTP and WebSocket server API](./docs/en/muon-built-in-plugin-reference.md#http-and-websocket-servers-on-cef)
+- 0.32.0
+  - Added native notifications with action buttons on Linux, Windows, and Android.
+  - Android apps gained control over the status and navigation bars and can read safe-area and keyboard insets.
+  - Added support for long Unicode paths in Windows filesystem operations and build tools.
+- 0.31.0
+  - Fixed the contrast of custom title bar controls on light and dark backgrounds.
+  - Fixed dependency detection for shared libraries when building Debian packages.
+- 0.30.0
+  - Fixed focus and input handling for modal file dialogs on Linux, including dialogs opened by HTML file inputs.
+  - Fixed a Windows GPU process startup issue that prevented WebGL 2 rendering.
+- 0.29.0
+  - Fixed Linux development launches through Vite and `muon run` so they use the GTK modules shipped with the runtime.
+- 0.28.0
+  - Added `muon pack --type appimage` to create single-file Linux apps for amd64, armhf, and arm64. Launching a moved AppImage updates its desktop menu entry and any existing autostart entry.
+- 0.27.0
+  - Added `muon-plugin-sdk` for building C/C++ plugins and distributing prebuilt binaries through npm. Apps can use plugins from local directories or installed packages. [Plugin SDK guide](./docs/en/muon-plugin-sdk.md)
+  - Extended plugin access rules and Vite capability imports to built-in and native plugins on Android.
+- 0.26.0
+  - Introduced the experimental Android WebView backend. Vite projects can package their web assets as debug or signed release APKs using a prebuilt Android runtime. [Android build guide](./docs/en/android.md)
+- 0.25.0
+  - Updated `cardio`, the native asynchronous I/O library, and refreshed npm dependencies.
+- 0.24.0
+  - Added `browser.userAgent` to set the HTTP `User-Agent` header and JavaScript's `navigator.userAgent` for the main window and popups.
+- 0.23.0
+  - Added `network.localAccess.allowInsecureLocalhost` to `muon.json` so packaged apps can opt in to accepting invalid HTTPS certificates on localhost.
+- 0.22.0
+  - Added automatic Node.js runtime selection and installation, support for multiple sidecar instances, and JSON object and array transfers between a page and a sidecar.
+  - Added a daemon option to `executor.spawn()` so a child process can keep running after muon exits.
+- 0.21.0
+  - Added a Node.js sidecar so desktop pages could call Node.js modules in a separate process.
+  - Added support for asynchronous plugin shutdown.
+- 0.20.0
+  - Added inline images (`data:image/**`) to the default network allowlist.
+- 0.19.0
+  - Added per-origin permissions for access to loopback addresses and the local network. Development launches could also opt in to accepting invalid HTTPS certificates on localhost.
+- 0.18.0
+  - Added `getConfigValues()` for reading merged application settings and `dev.config` for overriding them during Vite development.
+- 0.17.0
+  - Added the `--no-muon` flag to start the Vite dev server on its own while keeping muon's virtual modules available.
+- 0.16.0
+  - Extended wildcard plugin access rules to expose named functions from built-in and external plugins.
+  - Added limits on active filesystem watchers and tray items.
+  - The Vite dev server now stops by default when muon exits normally.
+- 0.15.0
+  - Switched integrity checks for native plugins and asset archives from SHA-1 to SHA-256.
+  - Added configurable size limits for individual `readFile()` and `readTextFile()` calls.
+  - Renamed `muon-bootstrap` to `muon-launcher` and the corresponding `muon.json` key from `bootstrap` to `launcher`.
+- 0.14.0
+  - Added `executor.loadLibrary()` so JavaScript can call functions in native `.so` and `.dll` libraries.
+  - Added string settings for plugins.
+  - Renamed the child process handle's `dispose()` method to `release()`.
+- 0.13.0
+  - Added Windows code signing for the runtime, launcher, and NSIS installer and uninstaller.
+- 0.12.0
+  - Updated `muon run` to build and open web assets by default in projects using the muon Vite plugin.
+  - Portable archives now keep CEF and the browser profile in the extracted app directory. Apps can also include extra distribution files such as a license.
+- 0.11.0
+  - Added interactive child process handles to `executor.spawn()` so apps can write to stdin and stream stdout and stderr.
+- 0.10.0
+  - Added APIs for custom context menus and system tray icons.
+  - Fixed handling of Vite's `base` setting in packaged apps.
+- 0.9.0
+  - Renamed `muon dev` to `muon run`.
+  - Made validated imports the default for plugin access and added optional signature checks for native plugins.
+- 0.8.0
+  - Added Linux `.tar.gz` packages and desktop menu entries. Windows installers now register the app for uninstallation and support custom icons and version information.
+- 0.7.0
+  - Added `muon pack` to create ZIP archives, Debian packages, and Windows NSIS installers.
+  - Added `getWindowBounds()` and `setWindowBounds()` to read and change a window's position and size.
+- 0.6.0
+  - Fixed the CEF setup progress indicator on Linux and Windows.
+  - Renamed the bundled license and third-party notices file to `CREDITS.md`.
+- 0.5.0
+  - Added a startup dialog showing CEF download and installation progress. Fixed draggable page regions on Windows.
+- 0.4.0
+  - Added `muon dev` to open local web assets directly and `browser.recycle()` to restart the app.
+  - Added draggable page regions and support for using the page favicon as the title bar icon.
+- 0.3.0
+  - Added a configurable title bar with icon and visibility controls.
+  - Added `muon init` to set up the project's `.gitignore` and enabled debugging by default during Vite development.
+  - Renamed `asset.from` to `asset.sourcePath` in `muon.json`.
+- 0.2.0
+  - Added support for prebuilt asset ZIP files in `muon build`. Vite now warns when the project configuration is missing or unreadable.
+- 0.1.0
+  - Initial CEF-based release for Linux and Windows, with Vite hot reload, network filtering, and native plugins.

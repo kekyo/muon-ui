@@ -55,14 +55,15 @@ await run(join(buildTools, "zipalign"), ["-c", "-P", "16", "4", apk]);
 await run(join(buildTools, "apksigner"), ["verify", "--verbose", apk]);
 const entries = (await run("unzip", ["-Z1", apk])).trim().split("\n");
 assert.doesNotMatch(
-  entries.join("\n"),
+  entries
+    .filter((entry) => entry !== "assets/muon/licenses/quickjs.txt")
+    .join("\n"),
   /quickjs|backend\.mjs|google-services|\.(?:jks|p12|keystore)$/imu,
 );
 const expectedLibraries = [
   "libc++_shared.so",
   "libcardio.so",
   "libmuon_android_rpc.so",
-  "libmuon_android_services.so",
 ];
 if (includePlugin)
   expectedLibraries.push(

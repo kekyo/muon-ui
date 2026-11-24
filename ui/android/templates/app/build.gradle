@@ -17,6 +17,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    packaging { jniLibs { useLegacyPackaging = false } }
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+            if (!muon.servicesEnabled) excludes.add('**/libmuon_android_services.so')
+        }
+    }
 }
 dependencies { implementation "dev.muon:runtime:${muon.runtimeVersion}" }

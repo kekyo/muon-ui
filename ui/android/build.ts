@@ -312,6 +312,7 @@ export const buildAndroidApplication = async (
       ),
     );
   }
+  const servicesEnabled = input.services.length > 0;
   await writeFile(
     join(project, "muon-build.json"),
     JSON.stringify(
@@ -321,6 +322,7 @@ export const buildAndroidApplication = async (
         versionCode: input.versionCode,
         versionName: input.versionName,
         abis: input.abis,
+        servicesEnabled,
         maven: pathToFileURL(join(tools.componentsDirectory, "maven")).href,
       },
       null,
@@ -351,7 +353,7 @@ export const buildAndroidApplication = async (
         ["permissions", [...permissions].map(xml)],
         ["serviceCleartext", cleartextHosts.length > 0],
         ["notificationsEnabled", input.notifications.enabled],
-        ["servicesEnabled", input.services.length > 0],
+        ["servicesEnabled", servicesEnabled],
         [
           "services",
           input.services.map((service) => ({

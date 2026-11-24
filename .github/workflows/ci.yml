@@ -68,9 +68,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          bash scripts/test-ci-dependencies.sh
+          sudo bash scripts/install-ci-dependencies.sh \
             at-spi2-core \
             build-essential \
             ca-certificates \

@@ -725,7 +725,7 @@ afterEach(async () => {
 });
 
 describe("muon build", () => {
-  it("carries the Linux system dependency report into the app", async () => {
+  it("keeps the Linux system dependency report in the build environment", async () => {
     const root = await createTemporaryDirectory("muon-build-baseline-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     const source = join(packageDirectory, "runtime/linux-amd64");
@@ -749,11 +749,7 @@ describe("muon build", () => {
       assetSourcePath: "assets",
     });
     const output = result.targets[0]!.outputPath;
-    expect(
-      JSON.parse(
-        await readFile(join(output, "linux-dependencies.json"), "utf8"),
-      ).referenceCef.version,
-    ).toBe("build-reference");
+    expect(await exists(join(output, "linux-dependencies.json"))).toBe(false);
     expect(await exists(join(output, "libcef.so"))).toBe(false);
   });
 

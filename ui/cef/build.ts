@@ -809,17 +809,6 @@ const copyRuntimeFiles = async (
       join(outputPath, fileName),
     );
   }
-  if (
-    descriptor.os === "linux" &&
-    (await statOrUndefined(
-      join(sourceRuntimePath, "linux-dependencies.json"),
-    )) !== undefined
-  ) {
-    await copyFile(
-      join(sourceRuntimePath, "linux-dependencies.json"),
-      join(outputPath, "linux-dependencies.json"),
-    );
-  }
   if (descriptor.optionalRuntimeFilePatterns !== undefined) {
     const fileNames = await readdir(sourceRuntimePath);
     for (const fileName of fileNames) {

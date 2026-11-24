@@ -220,6 +220,10 @@ Under MIT.
 
 ## History
 
+- 0.36.0
+  - Reduced package sizes for apps without background services. Linux and Windows builds omit the service host for these apps, and Android APKs omit the native service library.
+  - Stripped unused symbols from desktop runtime executables. Linux builds keep the dependency report in the build environment and bundle the helper for launching external processes only when the app allows `muon.executor.spawn`.
+  - Lowered the minimum glibc version from 2.35 to 2.34 for Linux amd64, arm64, and armhf. [Linux runtime requirements](./docs/en/muon-cli-advanced-topics.md#linux-runtime-environment)
 - 0.35.0
   - Added C/C++ and QuickJS background services on Linux, Windows, and Android. Services can keep running after the last window closes. On desktop, Node.js services replaced the page-based Node.js sidecar API. [Background services](./docs/en/services.md)
   - Added typed service calls and events, plus APIs for file I/O, outgoing HTTP requests, and loopback HTTP and WebSocket servers. Each service has its own permissions for these APIs.

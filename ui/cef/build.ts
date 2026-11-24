@@ -73,7 +73,10 @@ import {
 } from "./windows-code-signing.js";
 import { appIconAssetEntryName, appIconAssetUrl } from "../common/app-icon.js";
 import type { MuonRuntimePluginConfig } from "../common/capability.js";
-import { expandMuonServicePermissions } from "../common/capability.ts";
+import {
+  expandMuonServicePermissions,
+  selectMuonPluginFunctionPaths,
+} from "../common/capability.ts";
 import type { MuonProgressCallback } from "../common/progress.js";
 import {
   assertMuonNodeProjectAssetSourceIsSafe,
@@ -575,22 +578,28 @@ const buildMuonTarget = async (input: {
         )
       : undefined;
 
+  await assertDirectory(sourceRuntimePath, `muon runtime for ${input.target}`);
+  const runtimeFiles = await resolveRuntimeFiles(
+    descriptor,
+    sourceRuntimePath,
+    input.sourceConfig.plugin,
+    input.services.length > 0,
+    input.nodeRuntimeRequirement !== undefined,
+  );
   await verifyTargetInputs({
     sourceRuntimePath,
     sourceLauncherPath,
     sourceRuntimeHelperPath,
-    descriptor,
+    runtimeFiles,
     target: input.target,
   });
 
   await rm(outputPath, { recursive: true, force: true });
   await mkdir(outputPath, { recursive: true, mode: directoryMode });
-  await copyRuntimeFiles(sourceRuntimePath, outputPath, descriptor);
-  for (const executableName of [
-    descriptor.runtimeExecutableName,
-    ...descriptor.runtimeAuxiliaryExecutableNames,
-  ]) {
-    await chmod(join(outputPath, executableName), executableMode);
+  for (const { name, executable } of runtimeFiles) {
+    const destination = join(outputPath, name);
+    await copyFile(join(sourceRuntimePath, name), destination);
+    if (executable) await chmod(destination, executableMode);
   }
   await copyFile(sourceLauncherPath, launcherPath);
   await chmod(launcherPath, executableMode);
@@ -600,12 +609,6 @@ const buildMuonTarget = async (input: {
   ) {
     await copyFile(sourceRuntimeHelperPath, runtimeHelperPath);
     await chmod(runtimeHelperPath, executableMode);
-  }
-  if (input.nodeRuntimeRequirement !== undefined) {
-    await copyFile(
-      join(sourceRuntimePath, "node-service-bridge.mjs"),
-      join(outputPath, "node-service-bridge.mjs"),
-    );
   }
   await copyDistributionFiles(input.distributionFiles, outputPath);
   if (notificationRegistration !== undefined) {
@@ -755,13 +758,9 @@ const verifyTargetInputs = async (input: {
   sourceRuntimePath: string;
   sourceLauncherPath: string;
   sourceRuntimeHelperPath: string | undefined;
-  descriptor: MuonTargetDescriptor;
+  runtimeFiles: readonly { name: string; executable: boolean }[];
   target: MuonDesktopTarget;
 }): Promise<void> => {
-  await assertDirectory(
-    input.sourceRuntimePath,
-    `muon runtime for ${input.target}`,
-  );
   await assertFile(
     input.sourceLauncherPath,
     `muon launcher for ${input.target}`,
@@ -772,16 +771,12 @@ const verifyTargetInputs = async (input: {
       `muon runtime helper for ${input.target}`,
     );
   }
-  for (const fileName of input.descriptor.runtimeFiles) {
+  for (const { name } of input.runtimeFiles) {
     await assertFile(
-      join(input.sourceRuntimePath, fileName),
-      `muon runtime file ${fileName} for ${input.target}`,
+      join(input.sourceRuntimePath, name),
+      `muon runtime file ${name} for ${input.target}`,
     );
   }
-  await assertFile(
-    join(input.sourceRuntimePath, muonLicenseFileName),
-    `muon license file for ${input.target}`,
-  );
 };
 
 const getLauncherFileName = (
@@ -798,47 +793,44 @@ const getLauncherFileName = (
   return appName;
 };
 
-const copyRuntimeFiles = async (
-  sourceRuntimePath: string,
-  outputPath: string,
+const resolveRuntimeFiles = async (
   descriptor: MuonTargetDescriptor,
-): Promise<void> => {
-  for (const fileName of descriptor.runtimeFiles) {
-    await copyFile(
-      join(sourceRuntimePath, fileName),
-      join(outputPath, fileName),
-    );
-  }
+  sourceRuntimePath: string,
+  plugin: unknown,
+  needsServiceHost: boolean,
+  needsNodeBridge: boolean,
+): Promise<{ name: string; executable: boolean }[]> => {
+  const executables = [descriptor.runtimeExecutableName];
+  if (needsServiceHost)
+    executables.push("muon-service-host" + descriptor.launcherExtension);
   if (
     descriptor.os === "linux" &&
-    (await statOrUndefined(
-      join(sourceRuntimePath, "linux-dependencies.json"),
-    )) !== undefined
+    isJsonObject(plugin) &&
+    Array.isArray(plugin.plugins)
   ) {
-    await copyFile(
-      join(sourceRuntimePath, "linux-dependencies.json"),
-      join(outputPath, "linux-dependencies.json"),
+    const internal = plugin.plugins.find(
+      (entry) => isJsonObject(entry) && entry.name === "internal",
     );
+    if (
+      Array.isArray(internal?.allow) &&
+      selectMuonPluginFunctionPaths(["muon.executor.spawn"], internal.allow)
+        .length > 0
+    )
+      executables.push("muon-executor-supervisor");
   }
-  if (descriptor.optionalRuntimeFilePatterns !== undefined) {
-    const fileNames = await readdir(sourceRuntimePath);
-    for (const fileName of fileNames) {
-      if (
-        descriptor.optionalRuntimeFilePatterns.some((pattern) =>
-          pattern.test(fileName),
-        )
-      ) {
-        await copyFile(
-          join(sourceRuntimePath, fileName),
-          join(outputPath, fileName),
-        );
-      }
-    }
-  }
-  await copyFile(
-    join(sourceRuntimePath, muonLicenseFileName),
-    join(outputPath, muonLicenseFileName),
-  );
+  const files = [...descriptor.runtimeLibraryNames, muonLicenseFileName];
+  if (needsNodeBridge) files.push("node-service-bridge.mjs");
+  const patterns = descriptor.optionalRuntimeFilePatterns;
+  if (patterns)
+    files.push(
+      ...(await readdir(sourceRuntimePath)).filter((name) =>
+        patterns.some((pattern) => pattern.test(name)),
+      ),
+    );
+  return [
+    ...executables.map((name) => ({ name, executable: true })),
+    ...files.map((name) => ({ name, executable: false })),
+  ];
 };
 
 const copyDistributionFiles = async (

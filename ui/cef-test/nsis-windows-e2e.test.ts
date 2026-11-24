@@ -352,14 +352,15 @@ const createRemoteFakeLinuxPackageDist = async (
       Buffer.from("\ncore suffix\n"),
     ]),
   );
-  for (const fileName of descriptor.runtimeFiles) {
-    if (fileName !== descriptor.runtimeExecutableName) {
-      await writeRemoteTextFile(
-        agent,
-        joinWindowsPath(runtimeDirectory, fileName),
-        `${fileName}\n`,
-      );
-    }
+  for (const fileName of [
+    ...descriptor.runtimeLibraryNames,
+    "muon-service-host.exe",
+  ]) {
+    await writeRemoteTextFile(
+      agent,
+      joinWindowsPath(runtimeDirectory, fileName),
+      `${fileName}\n`,
+    );
   }
   await writeRemoteTextFile(
     agent,

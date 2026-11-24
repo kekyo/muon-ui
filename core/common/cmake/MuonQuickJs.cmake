@@ -24,6 +24,10 @@ function(muon_add_quickjs target source_root)
   # enough to reject valid maximum-size messages on supported devices.
   target_compile_options(${target} PRIVATE -fwrapv -O2)
   target_include_directories(${target} SYSTEM PUBLIC "${source_root}")
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set_property(SOURCE "${source_root}/quickjs.c" APPEND PROPERTY COMPILE_OPTIONS
+      -include "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src/quickjs/muon_quickjs_glibc.h")
+  endif()
   if(UNIX)
     target_link_libraries(${target} PUBLIC ${CMAKE_DL_LIBS} m)
   elseif(WIN32)

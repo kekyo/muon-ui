@@ -652,7 +652,7 @@ describe("muon pack", () => {
     await expect(exists(join(payload, "libcef.so"))).resolves.toBe(false);
     await expect(
       exists(join(payload, "linux-dependencies.json")),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
   });
 
   it("packages independent AppImages concurrently", async () => {
@@ -734,6 +734,9 @@ describe("muon pack", () => {
       true,
     );
     const entries = await readTarGzEntryNames(artifact?.path ?? "");
+    expect(entries).not.toContain(
+      "packed-sample/linux-amd64/linux-dependencies.json",
+    );
     expect(entries).toContain("packed-sample/linux-amd64/assets.zip");
     expect(entries).toContain("packed-sample/linux-amd64/muon-install.json");
     expect(entries).not.toContain("dist-muon/linux-amd64/assets.zip");
@@ -1296,6 +1299,9 @@ printf 'deb\\n' > "$output_path"
     await expect(
       readFile(join(root, "deb-files.txt"), "utf8"),
     ).resolves.toContain("/usr/bin/packed-sample");
+    await expect(
+      readFile(join(root, "deb-files.txt"), "utf8"),
+    ).resolves.not.toContain("/linux-dependencies.json");
     await expect(
       readFile(join(root, "deb-files.txt"), "utf8"),
     ).resolves.toContain(

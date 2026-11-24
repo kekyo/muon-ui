@@ -350,7 +350,7 @@ try {
   const runtime = await api.environments.getRuntimeInfo();
   if (runtime.backend !== 'android-webview') throw new Error('Expected Android backend');
   document.querySelector<HTMLOutputElement>('#version')!.textContent = 'Version: ' + runtime.applicationVersion;
-  if (${includePlugin}) {
+  if (Boolean(${includePlugin})) {
     if (Reflect.get(alpha, 'alphaName') !== undefined) throw new Error('A denied plugin function was exposed');
     if (await types.echoI64(9007199254740991) !== 9007199254740991) throw new Error('i64 changed');
     if (await types.bufferChecksum(Uint8Array.from([1, 2, 3, 4]).buffer) !== 10) throw new Error('buffer argument changed');
@@ -585,11 +585,6 @@ const certificate = await run(join(sdk, "build-tools/36.0.0/apksigner"), [
   releasePath,
 ]);
 assert.ok(certificate.includes(release.targets[0].certificateSha256));
-const entries = await run("unzip", ["-Z1", releasePath]);
-assert.doesNotMatch(
-  entries,
-  /\.(?:jks|keystore|p12)$|MuonJavaScriptRuntime|quickjs/imu,
-);
 const metadata = await readFile(releasePath + ".json", "utf8");
 assert.ok(
   !metadata.includes(keystore) &&

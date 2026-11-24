@@ -92,6 +92,7 @@ it("drains independent consumer resources after a cleanup failure", async () => 
 
 const runWindowsConsumer = async (
   distribution: string,
+  uiOnlyDistribution: string,
   launcherName: string,
   port: number,
   servicePorts: readonly number[],
@@ -188,15 +189,15 @@ const runWindowsConsumer = async (
       { timeout: 30000, interval: 100 },
     );
     const endpoint = `http://${host}:${relayPort}`;
-    const launch = async () => {
+    const launch = async (directory = runtime, args: string[] = []) => {
       const capture = win32.join(remoteRoot, "capture-" + iteration++);
       await agent.files.mkdir(capture, { recursive: true });
       const launched = await launchWindowsTestProcess(
         agent,
         {
-          path: win32.join(runtime, launcherName),
-          arguments: [],
-          workingDirectory: runtime,
+          path: win32.join(directory, launcherName),
+          arguments: args,
+          workingDirectory: directory,
           environment: { LOCALAPPDATA: win32.join(remoteRoot, "local") },
         },
         capture,
@@ -340,6 +341,52 @@ const runWindowsConsumer = async (
     await evaluate(
       "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
     );
+    await evaluate("await muon.environments.setAutostart(true);return true;");
+    await closeUi(true);
+    const uiOnly = win32.join(remoteRoot, "UI only");
+    await agent.files.syncDirectory({
+      localPath: uiOnlyDistribution,
+      remotePath: uiOnly,
+      mode: "mirror",
+      checksum: "sha256",
+    });
+    const headless = async (argument: string) => {
+      const process = await agent.processes.launchManaged({
+        path: win32.join(uiOnly, launcherName),
+        arguments: [argument],
+        workingDirectory: uiOnly,
+        environment: { LOCALAPPDATA: win32.join(remoteRoot, "local") },
+        captureStderr: true,
+      });
+      try {
+        // Switching distributions can reinstall CEF before the headless core runs.
+        expect(
+          (await process.waitForExit({ timeoutMs: 120000 })).root.exitCode,
+          await process.stderrText(),
+        ).toBe(0);
+      } finally {
+        await process.releaseAsync();
+      }
+    };
+    await headless("--muon-register-autostart");
+    await launch(uiOnly, ["--muon-autostart"]);
+    expect(
+      await evaluate("return await muon.environments.getAutostart();"),
+    ).toBe(true);
+    await evaluate("await muon.environments.setAutostart(false);return true;");
+    await closeUi(true);
+    await headless("--muon-autostart");
+    await launch(uiOnly);
+    expect(
+      await evaluate("return await muon.environments.getAutostart();"),
+    ).toBe(false);
+    await evaluate("await muon.environments.setAutostart(true);return true;");
+    await closeUi(true);
+    await launch();
+    expect(
+      await evaluate("return await muon.environments.getAutostart();"),
+    ).toBe(true);
+    await evaluate("await muon.environments.setAutostart(false);return true;");
     await closeUi(true);
   } catch (error) {
     failed = true;
@@ -804,6 +851,8 @@ export default defineService({
                 "muon.services.*",
                 "muon.browser.close",
                 "muon.browser.shutdown",
+                "muon.environments.getAutostart",
+                "muon.environments.setAutostart",
               ],
             },
           ],
@@ -866,15 +915,39 @@ export default defineService({
         environment,
       ),
     ).targets[0];
-    // Move the complete distribution and remove every source, package and SDK.
+    // Prepare both versions before removing every source, package and SDK.
     const distribution = join(root, "distribution with spaces 日本");
     await cp(dirname(built.launcherPath), distribution, { recursive: true });
     const launcher = join(distribution, built.launcherPath.split("/").at(-1));
+    const configPath = join(app, "muon.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    delete config.services;
+    await writeFile(configPath, JSON.stringify(config));
+    const uiOnlyDistribution = join(root, "UI only");
+    await run(
+      process.execPath,
+      [
+        join(app, "node_modules/muon-ui/dist/cli.cjs"),
+        "build",
+        "--target",
+        target,
+      ],
+      environment,
+    );
+    await cp(dirname(built.launcherPath), uiOnlyDistribution, {
+      recursive: true,
+    });
+    expect(await readdir(uiOnlyDistribution)).not.toContain(
+      target.startsWith("windows")
+        ? "muon-service-host.exe"
+        : "muon-service-host",
+    );
     await rm(app, { recursive: true });
     if (target.startsWith("windows-")) {
       await execute(process.execPath, [resolve("build-windows-cdp-relay.mjs")]);
       await runWindowsConsumer(
         distribution,
+        uiOnlyDistribution,
         basename(launcher),
         address.port,
         servicePorts,
@@ -900,16 +973,20 @@ export default defineService({
         closeMcp = undefined;
       }
     };
-    const launch = async () => {
-      child = spawn(launcher, ["--ozone-platform=x11", "--disable-gpu"], {
-        cwd: distribution,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          XDG_CONFIG_HOME: join(root, "xdg"),
-          XDG_STATE_HOME: join(root, "state"),
+    const launch = async (directory = distribution, args: string[] = []) => {
+      child = spawn(
+        join(directory, basename(launcher)),
+        [...args, "--ozone-platform=x11", "--disable-gpu"],
+        {
+          cwd: directory,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: join(root, "xdg"),
+            XDG_STATE_HOME: join(root, "state"),
+          },
         },
-      });
+      );
       exited = once(child, "exit", { signal: AbortSignal.timeout(120000) });
       child.stdout!.on("data", (chunk) => {
         diagnostic += String(chunk);
@@ -1054,6 +1131,28 @@ export default defineService({
       await evaluate(
         "await api.setAutostart('native',false);await api.setAutostart('script',false);await api.setAutostart('node',false);return true;",
       );
+      await evaluate("await muon.environments.setAutostart(true);return true;");
+      const shutdown = async () => {
+        await Promise.allSettled([
+          evaluate("await browser.shutdown(0);return true;"),
+          exited!,
+        ]);
+        expect(child!.exitCode, diagnostic).toBe(0);
+        await disconnect();
+      };
+      await shutdown();
+      await launch(uiOnlyDistribution, ["--muon-autostart"]);
+      expect(
+        await evaluate("return await muon.environments.getAutostart();"),
+      ).toBe(true);
+      await evaluate(
+        "await muon.environments.setAutostart(false);return true;",
+      );
+      await shutdown();
+      await launch();
+      expect(
+        await evaluate("return await muon.environments.getAutostart();"),
+      ).toBe(false);
       await Promise.allSettled([
         evaluate("await browser.shutdown(0);return true;"),
         exited!,

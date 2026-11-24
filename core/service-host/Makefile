@@ -43,6 +43,7 @@ QUICKJS_SOURCES += $(COMMON)/quickjs/muon_quickjs_module.cpp $(COMMON)/services/
 PLUGIN_SOURCES := muon_service_plugins.cpp $(COMMON)/plugins/muon_plugin_runtime.cpp $(COMMON)/plugins/muon_plugin_metadata.cpp $(COMMON)/plugins/muon_traffic_type_metadata.cpp $(COMMON)/plugins/muon_function_wrapper_lifecycle.cpp $(COMMON)/muon_sha256.cpp $(COMMON)/config/muon_glob.cpp $(COMMON)/plugins/muon_plugin_policy.cpp $(COMMON)/plugins/muon_type_metadata.cpp $(COMMON)/rpc/muon_rpc.cpp $(COMMON)/rpc/muon_rpc_host.cpp
 CPPFLAGS += -I../../deps/tra-ffic/include -I../../deps/sha2
 QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
+QUICKJS_GLIBC_HEADER := $(COMMON)/quickjs/muon_quickjs_glibc.h
 CPPFLAGS += -isystem $(QUICKJS_SOURCE_DIR)
 LOGIN := muon_service_login.cpp muon_service_startup.cpp ../cef/src/config/muon_autostart.cpp ../cef/src/config/muon_paths.cpp ../cef/src/config/muon_startup.cpp ../cef/src/muon_string_helpers.cpp
 
@@ -54,8 +55,10 @@ quickjs-source:
 $(OUT)/quickjs:
 	mkdir -p $@
 
+$(OUT)/quickjs/quickjs.o: $(QUICKJS_GLIBC_HEADER)
+$(OUT)/quickjs/quickjs.o: private QUICKJS_CPPFLAGS := -include $(QUICKJS_GLIBC_HEADER)
 $(QUICKJS_OBJECTS): $(OUT)/quickjs/%.o: ../common/quickjs-source.json ../common/prepare-quickjs-source.mjs Makefile | quickjs-source $(OUT)/quickjs
-	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
+	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' $(QUICKJS_CPPFLAGS) -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
 all: $(OUT)/server-service.so $(OUT)/http-service.so $(OUT)/muon-service-host $(OUT)/probe-service.so $(OUT)/linux-client-driver $(OUT)/linux-process-driver $(OUT)/process-lock-driver
 
 $(OUT):

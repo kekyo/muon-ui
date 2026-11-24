@@ -123,7 +123,7 @@ AppImageの内容は読み取り専用です。CEF、Node.js、起動状態は`$
 
 配布バイナリのビルド基準はDebian 12です。実行先にはGTK 3、GLib 2.74以上と、対応する入力メソッド・画像ローダー・設定データが必要です。これらはOSのパッケージとして導入してください。GLibの下限は、muonが使用する[非同期のシンボリックリンク作成API](https://docs.gtk.org/gio/method.File.make_symbolic_link_async.html)によるものです。
 
-GTK・GLibとその関連モジュールはシステムのものを使います。入力メソッドやテーマも実行先の設定に従います。glibc、C++ランタイム、NSS、ALSA、X11・Wayland、GPUドライバー、GBM、CA証明書、`curl`なども必要です。例えば最小構成のコンテナには、AppImageだけを置いても実行に必要なライブラリがそろいません。
+GTK・GLibとその関連モジュールはシステムのものを使います。入力メソッドやテーマも実行先の設定に従います。amd64、arm64、armhfの配布バイナリにはglibc 2.34以上が必要です。C++ランタイム、NSS、ALSA、X11・Wayland、GPUドライバー、GBM、CA証明書、`curl`なども必要です。例えば最小構成のコンテナには、AppImageだけを置いても実行に必要なライブラリがそろいません。
 
 最低要件は、muonをビルドした際のCEFと完成した全ネイティブ部品から算出します。詳細はNPM配布物の`dist/runtime/<target>/linux-dependencies.json.txt`と同じ場所の`linux-dependencies.json`で確認できます。debには、この情報とアプリのネイティブ部品から求めた依存条件を設定します。GTKやGLibの版だけを満たしても、任意のディストリビューションで動作するとは限りません。
 

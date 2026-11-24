@@ -125,7 +125,7 @@ Menu and autostart entries retain the original AppImage path but do not store th
 
 Distribution binaries use Debian 12 as their build baseline. The runtime system needs GTK 3, GLib 2.74 or later, and matching input methods, image loaders, and settings data. Install these through the operating system's packages. The GLib minimum comes from the [asynchronous symbolic link creation API](https://docs.gtk.org/gio/method.File.make_symbolic_link_async.html) used by muon.
 
-GTK, GLib, and their related modules come from the system. Input methods and themes also follow the runtime system's settings. Other requirements include glibc, the C++ runtime, NSS, ALSA, X11/Wayland, GPU drivers, GBM, CA certificates, and `curl`. Placing an AppImage in a minimal container does not supply all required host libraries.
+GTK, GLib, and their related modules come from the system. Input methods and themes also follow the runtime system's settings. The amd64, arm64, and armhf distribution binaries require glibc 2.34 or later. Other requirements include the C++ runtime, NSS, ALSA, X11/Wayland, GPU drivers, GBM, CA certificates, and `curl`. Placing an AppImage in a minimal container does not supply all required host libraries.
 
 Minimum requirements are derived from the CEF used to build muon and all completed native components. Details are available in the NPM package's `dist/runtime/<target>/linux-dependencies.json.txt` and adjacent `linux-dependencies.json`. A deb package declares dependencies calculated from this information and the application's native components. Meeting the GTK and GLib version requirements alone does not guarantee support for an arbitrary distribution.
 

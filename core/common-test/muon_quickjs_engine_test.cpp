@@ -46,6 +46,14 @@ int main() {
       std::chrono::milliseconds(100)};
   {
     MuonQuickJsEngine engine(limits);
+    assert(Text(engine.Context(), engine.Evaluate(R"(
+      [1, 2 ** 600, 2 ** -600].every(scale =>
+        Math.hypot(3 * scale, 4 * scale) === 5 * scale) &&
+        Math.hypot(NaN, Infinity) === Infinity && Number.isNaN(Math.hypot(1, NaN))
+    )", "hypot.js", JS_EVAL_TYPE_GLOBAL)) == "true");
+  }
+  {
+    MuonQuickJsEngine engine(limits);
     JS_SetModuleLoaderFunc(engine.Runtime(), nullptr, Load, nullptr);
     const auto module = engine.Evaluate(
         "import api, { answer } from 'muon:fixture'; globalThis.same = api.answer === answer;",

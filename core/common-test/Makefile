@@ -21,6 +21,7 @@ TESTS := $(OUT)/service-files $(OUT)/rpc $(OUT)/rpc-portable $(OUT)/function-lif
 QUICKJS_VERSION := $(shell node -p "require('../common/quickjs-source.json').version")
 QUICKJS_SOURCE_DIR := $(COMMON)/.deps/quickjs/quickjs-$(QUICKJS_VERSION)
 QUICKJS_OBJECTS := $(addprefix $(OUT)/quickjs/,quickjs.o dtoa.o libregexp.o libunicode.o cutils.o)
+QUICKJS_GLIBC_HEADER := $(COMMON)/src/quickjs/muon_quickjs_glibc.h
 TESTS += $(OUT)/quickjs-engine $(OUT)/quickjs-service $(OUT)/quickjs-service-sdk
 TESTS += $(OUT)/service-execution-router
 TESTS += $(OUT)/service-plugin-pool
@@ -60,8 +61,10 @@ $(OUT)/quickjs:
 
 # The verified dependency is immutable; its profile and preparation script are
 # the build inputs. Do not modify the downloaded third-party source directory.
+$(OUT)/quickjs/quickjs.o: $(QUICKJS_GLIBC_HEADER)
+$(OUT)/quickjs/quickjs.o: private QUICKJS_CPPFLAGS := -include $(QUICKJS_GLIBC_HEADER)
 $(QUICKJS_OBJECTS): $(OUT)/quickjs/%.o: $(COMMON)/quickjs-source.json $(COMMON)/prepare-quickjs-source.mjs Makefile | quickjs-source $(OUT)/quickjs
-	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
+	$(CC) -std=gnu11 -O2 -fwrapv -D_GNU_SOURCE -DCONFIG_VERSION='"$(QUICKJS_VERSION)"' $(QUICKJS_CPPFLAGS) -c $(QUICKJS_SOURCE_DIR)/$*.c -o $@
 
 $(OUT)/quickjs-engine: muon_quickjs_engine_test.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.cpp $(COMMON)/src/quickjs/muon_quickjs_engine.h $(COMMON)/src/quickjs/muon_quickjs_module.cpp $(COMMON)/src/quickjs/muon_quickjs_module.h $(QUICKJS_OBJECTS)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -isystem $(QUICKJS_SOURCE_DIR) $(filter %.cpp %.o,$^) -lm -o $@

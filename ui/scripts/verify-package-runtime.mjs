@@ -3,7 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { access, readdir, stat } from "node:fs/promises";
+import { access, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageRuntimeTargets = {
@@ -161,11 +161,17 @@ for (const target of targets) {
     await assertHasMatchingFile(runtimePath, /^libgcc_s_.*-1\.dll$/);
     await assertExists(join(runtimePath, "libstdc++-6.dll"));
   } else {
-    for (const name of [
-      "linux-dependencies.json",
-      "linux-dependencies.json.txt",
-    ])
-      await assertExists(join(runtimePath, name));
+    const manifest = JSON.parse(
+      await readFile(join(runtimePath, "linux-dependencies.json"), "utf8"),
+    );
+    const libc = manifest.debian?.depends?.find((entry) =>
+      /^libc6(?: |$)/.test(entry),
+    );
+    if (libc !== "libc6 (>= 2.34)")
+      throw new Error(
+        `${target}: expected libc6 (>= 2.34), found ${libc ?? "no libc6 dependency"}`,
+      );
+    await assertExists(join(runtimePath, "linux-dependencies.json.txt"));
     await assertMissing(join(runtimePath, "libcef.so"));
   }
   await assertMissing(join(runtimePath, "THIRD_PARTY_NOTICES.md"));

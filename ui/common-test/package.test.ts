@@ -807,7 +807,7 @@ exit 99
     }
   });
 
-  it("rejects incomplete Linux dependency payloads before publishing", async () => {
+  it("requires Linux dependency reports with a libc6 minimum of 2.34 before publishing", async () => {
     const root = await mkdtemp(join(tmpdir(), "muon-package-verify-"));
     cleanupDirectories.push(root);
     const native = join(root, "dist/native/linux-amd64");
@@ -837,8 +837,19 @@ exit 99
         [resolve("scripts/verify-package-runtime.mjs"), "linux-amd64"],
         { cwd: root },
       );
+    const manifest = join(runtime, "linux-dependencies.json");
     await expect(verify()).rejects.toThrow("linux-dependencies.json");
-    await writeFile(join(runtime, "linux-dependencies.json"), "{}\n");
+    await writeFile(manifest, "{}\n");
+    await expect(verify()).rejects.toThrow("no libc6 dependency");
+    await writeFile(
+      manifest,
+      JSON.stringify({ debian: { depends: ["libc6 (>= 2.35)"] } }),
+    );
+    await expect(verify()).rejects.toThrow("found libc6 (>= 2.35)");
+    await writeFile(
+      manifest,
+      JSON.stringify({ debian: { depends: ["libc6 (>= 2.34)"] } }),
+    );
     await expect(verify()).rejects.toThrow("linux-dependencies.json.txt");
     await writeFile(join(runtime, "linux-dependencies.json.txt"), "audit\n");
     await expect(verify()).resolves.toMatchObject({ stderr: "" });

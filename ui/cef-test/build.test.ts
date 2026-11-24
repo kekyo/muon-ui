@@ -725,7 +725,7 @@ afterEach(async () => {
 });
 
 describe("muon build", () => {
-  it("carries the Linux system dependency report into the app", async () => {
+  it("keeps the Linux system dependency report in the build environment", async () => {
     const root = await createTemporaryDirectory("muon-build-baseline-");
     const packageDirectory = await createFakeMuonPackageDist(root);
     const source = join(packageDirectory, "runtime/linux-amd64");
@@ -749,11 +749,7 @@ describe("muon build", () => {
       assetSourcePath: "assets",
     });
     const output = result.targets[0]!.outputPath;
-    expect(
-      JSON.parse(
-        await readFile(join(output, "linux-dependencies.json"), "utf8"),
-      ).referenceCef.version,
-    ).toBe("build-reference");
+    expect(await exists(join(output, "linux-dependencies.json"))).toBe(false);
     expect(await exists(join(output, "libcef.so"))).toBe(false);
   });
 
@@ -958,6 +954,9 @@ describe("muon build", () => {
     const output = join(root, "dist-muon/linux-amd64");
     const registry = JSON.parse(
       await readFile(join(output, "muon-services.json"), "utf8"),
+    );
+    expect((await stat(join(output, "muon-service-host"))).mode & 0o777).toBe(
+      0o755,
     );
     expect(registry.services.worker).toMatchObject({
       runtime: "node",
@@ -1239,16 +1238,64 @@ describe("muon build", () => {
         target,
         "muon-executor-supervisor",
       );
-      await expect(readFile(supervisorPath, "utf8")).resolves.toBe(
-        `${target} executor supervisor\n`,
-      );
-      expect((await stat(supervisorPath)).mode & 0o777).toBe(0o755);
+      await expect(exists(supervisorPath)).resolves.toBe(false);
       const serviceHost = join(root, "dist-muon", target, "muon-service-host");
-      await expect(readFile(serviceHost, "utf8")).resolves.toBe(
-        `${target} service host\n`,
-      );
-      expect((await stat(serviceHost)).mode & 0o777).toBe(0o755);
+      await expect(exists(serviceHost)).resolves.toBe(false);
     }
+    for (const target of ["windows-i686", "windows-amd64"])
+      await expect(
+        exists(join(root, "dist-muon", target, "muon-service-host.exe")),
+      ).resolves.toBe(false);
+  });
+
+  it("selects the Linux supervisor from the effective internal spawn permission on each build", async () => {
+    const { root, packageDirectory } = await createDistributionFileBuildProject(
+      "muon-executor-distribution-",
+      { name: "executor-sample" },
+    );
+    const options = {
+      root,
+      packageDirectory,
+      targets: ["linux-amd64"] as const,
+    };
+    const supervisor = "muon-executor-supervisor";
+    const output = join(root, "dist-muon/linux-amd64", supervisor);
+    await writeFile(
+      join(root, "muon.json"),
+      JSON.stringify({
+        plugin: {
+          plugins: [{ name: "internal", allow: ["muon.executor.spawn"] }],
+        },
+      }),
+    );
+    await buildMuonApp(options);
+    expect((await stat(output)).mode & 0o777).toBe(0o755);
+    const plugins = [
+      { name: "internal", allow: ["muon.executor.loadLibrary"] },
+      { name: "external", allow: ["muon.executor.*"] },
+    ];
+    await buildMuonApp({
+      ...options,
+      runtimePluginConfig: { mode: "simple", plugins },
+    });
+    await expect(exists(output)).resolves.toBe(false);
+    const wildcard = [{ name: "internal", allow: ["muon.executor.*"] }];
+    await buildMuonApp({
+      ...options,
+      runtimePluginConfig: {
+        mode: "validate",
+        plugins: wildcard,
+        capabilities: [],
+      },
+    });
+    expect((await stat(output)).mode & 0o777).toBe(0o755);
+    await rm(join(packageDirectory, "runtime/linux-amd64", supervisor));
+    await expect(buildMuonApp(options)).rejects.toThrow(supervisor);
+    await buildMuonApp({
+      ...options,
+      runtimePluginConfig: { mode: "validate", plugins, capabilities: [] },
+    });
+    await expect(exists(output)).resolves.toBe(false);
   });
 
   it("copies MinGW runtime DLLs into Windows target distributions", async () => {

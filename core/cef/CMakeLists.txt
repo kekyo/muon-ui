@@ -775,7 +775,12 @@ if(WIN32)
 else()
   set(MUON_SERVICE_PLATFORM linux)
 endif()
+set(MUON_SERVICE_LOGIN_SOURCES
+  ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
+  ../service-host/muon_service_login.cpp
+  ../service-host/muon_service_startup.cpp)
 add_library(muon_service_desktop STATIC
+  ${MUON_SERVICE_LOGIN_SOURCES}
   ${MUON_COMMON_ROOT}/src/services/muon_service_client.cpp
   ${MUON_COMMON_ROOT}/src/services/muon_service_session.cpp
   ../service-host/muon_service_transport_${MUON_SERVICE_PLATFORM}.cpp
@@ -783,7 +788,8 @@ add_library(muon_service_desktop STATIC
   ../service-host/muon_service_process_${MUON_SERVICE_PLATFORM}.cpp)
 target_compile_features(muon_service_desktop PRIVATE cxx_std_20)
 target_include_directories(muon_service_desktop PUBLIC
-  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include")
+  "${MUON_COMMON_ROOT}/src" "${MUON_COMMON_ROOT}/include"
+  PRIVATE src "${MUON_COMMON_ROOT}/../../sdk/include")
 target_link_libraries(muon_service_desktop PUBLIC muon_cardio PRIVATE yyjson)
 MUON_APPLY_SANITIZERS(muon_service_desktop)
 include("${MUON_COMMON_ROOT}/cmake/MuonQuickJs.cmake")
@@ -795,9 +801,7 @@ add_executable(muon_service_host
   ../service-host/muon_node_service_host.cpp
   ../../node/native/node_process.cpp
   ../service-host/muon_service_host_${MUON_SERVICE_PLATFORM}.cpp
-  ../service-host/muon_service_policy_${MUON_SERVICE_PLATFORM}.cpp
-  ../service-host/muon_service_login.cpp
-  ../service-host/muon_service_startup.cpp
+  ${MUON_SERVICE_LOGIN_SOURCES}
   ../service-host/muon_service_protocol.cpp
   ../service-host/muon_service_plugins.cpp
   src/config/muon_autostart.cpp
@@ -1361,6 +1365,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 target_include_directories(${APP_NAME} PRIVATE
   "${MUON_GENERATED_INCLUDE_DIR}"
+  ../service-host
   "${MUON_COMMON_ROOT}/../../sdk/include"
   src
   "${MUON_COMMON_ROOT}/src"
@@ -1376,6 +1381,17 @@ if(MUON_BUILD_TESTS)
   target_compile_definitions(${APP_NAME} PRIVATE MUON_TEST_BUILD)
 endif()
 MUON_APPLY_SANITIZERS(${APP_NAME})
+
+if(NOT MUON_RUNTIME_INCLUDE_APP_FILES AND CMAKE_BUILD_TYPE STREQUAL "Release")
+  foreach(target IN ITEMS ${APP_NAME} muon_service_host)
+    set(original "${CMAKE_CURRENT_BINARY_DIR}/unstripped/$<TARGET_FILE_NAME:${target}>")
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/unstripped"
+      COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:${target}>" "${original}"
+      COMMAND "${CMAKE_STRIP}" --strip-unneeded "$<TARGET_FILE:${target}>"
+      VERBATIM)
+  endforeach()
+endif()
 
 if(MUON_BUILD_TESTS)
   set(TEST_PLUGIN_OUTPUT_DIR "${MUON_RUNTIME_DIR}/test-plugins")
@@ -1611,6 +1627,15 @@ if(MUON_RUNTIME_INCLUDE_APP_FILES AND NOT MUON_CONFIG_COPY_MODE STREQUAL "none")
 endif()
 
 enable_testing()
+if(NOT MUON_RUNTIME_INCLUDE_APP_FILES AND CMAKE_BUILD_TYPE STREQUAL "Release")
+  foreach(target IN ITEMS ${APP_NAME} muon_service_host)
+    add_test(NAME "${target}_distribution_size"
+      COMMAND bash -c
+        "test -x \"$1\" && test -x \"$2\" && test \"$(stat -c %s \"$1\")\" -lt \"$(stat -c %s \"$2\")\""
+        _ "${MUON_RUNTIME_DIR}/$<TARGET_FILE_NAME:${target}>"
+        "${CMAKE_CURRENT_BINARY_DIR}/unstripped/$<TARGET_FILE_NAME:${target}>")
+  endforeach()
+endif()
 add_test(
   NAME cardio_build_variant_isolated
   COMMAND ${CMAKE_COMMAND}

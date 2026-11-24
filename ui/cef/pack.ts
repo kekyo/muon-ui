@@ -75,7 +75,10 @@ import {
   resolveMuonNodeServiceProjects,
 } from "./node-project.ts";
 import type { MuonProgressCallback } from "../common/progress.js";
-import { isJsonObject } from "../common/build-config.js";
+import {
+  isJsonObject,
+  resolvePackageDirectory,
+} from "../common/build-config.js";
 
 import type {
   MuonPackType,
@@ -519,8 +522,14 @@ const writePortableInstallMetadata = async (
 
 const getDistributionLinuxDependencies = async (
   target: MuonBuildTargetResult,
+  packageDirectory: string,
 ): Promise<string[]> => {
-  const manifestPath = join(target.outputPath, "linux-dependencies.json");
+  const manifestPath = join(
+    packageDirectory,
+    "runtime",
+    target.target,
+    "linux-dependencies.json",
+  );
   let manifest: LinuxDependencyManifest;
   try {
     manifest = JSON.parse(
@@ -546,6 +555,7 @@ const getDistributionLinuxDependencies = async (
 
 const packageAppImage = async (
   target: MuonBuildTargetResult,
+  packageDirectory: string,
   metadata: PackageMetadata,
   artifactsRoot: string,
   packageBuildRoot: string,
@@ -576,7 +586,7 @@ const packageAppImage = async (
     }
     throw error;
   }
-  await getDistributionLinuxDependencies(target);
+  await getDistributionLinuxDependencies(target, packageDirectory);
   const directory = join(
     packageBuildRoot,
     "appimage",
@@ -606,6 +616,7 @@ const packageAppImage = async (
 const packageDeb = async (
   root: string,
   target: MuonBuildTargetResult,
+  packageDirectory: string,
   metadata: PackageMetadata,
   artifactsRoot: string,
   packageBuildRoot: string,
@@ -629,7 +640,10 @@ const packageDeb = async (
     throw error;
   }
   const architecture = descriptor.arch;
-  const dependencies = await getDistributionLinuxDependencies(target);
+  const dependencies = await getDistributionLinuxDependencies(
+    target,
+    packageDirectory,
+  );
   const packageRoot = join(
     packageBuildRoot,
     "deb",
@@ -1498,6 +1512,9 @@ export const packDesktopMuonApp = async (
     project,
   );
   const result = await buildMuonApp(resolvedBuildOptions);
+  const packageDirectory = resolvePackageDirectory(
+    resolvedBuildOptions.packageDirectory,
+  );
   const build = {
     ...result,
     targets: result.targets.map(requireDesktopTarget),
@@ -1578,6 +1595,7 @@ export const packDesktopMuonApp = async (
         artifact = await packageDeb(
           root,
           target,
+          packageDirectory,
           metadata,
           artifactsRoot,
           packageBuildRoot,
@@ -1588,6 +1606,7 @@ export const packDesktopMuonApp = async (
       } else if (type === "appimage") {
         artifact = await packageAppImage(
           target,
+          packageDirectory,
           metadata,
           artifactsRoot,
           packageBuildRoot,

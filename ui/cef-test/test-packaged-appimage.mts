@@ -100,7 +100,12 @@ try {
     );
     const reference: LinuxDependencyManifest = JSON.parse(
       await readFile(
-        join(packageDirectory, "dist/runtime", target, "linux-dependencies.json"),
+        join(
+          packageDirectory,
+          "dist/runtime",
+          target,
+          "linux-dependencies.json",
+        ),
         "utf8",
       ),
     );

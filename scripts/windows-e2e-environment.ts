@@ -70,3 +70,21 @@ export const connectWindowsE2eAgent = async (
     };
   }
 };
+
+/**
+ * Prepare a Windows test only when its machine is available.
+ * @param config Settings for the test machine.
+ * @param prepare Local build and staging work, run with the machine released.
+ * @returns A new session for the test, or the reason a connection failed.
+ * @remarks Preparation failures propagate to the caller.
+ */
+export const prepareWindowsE2eSession = async (
+  config: WindowsE2eEnvironment,
+  prepare: () => Promise<void>,
+): Promise<WindowsE2eConnection> => {
+  const probe = await connectWindowsE2eAgent(config);
+  if (probe.status === "skip") return probe;
+  probe.agent.release();
+  await prepare();
+  return await connectWindowsE2eAgent(config);
+};

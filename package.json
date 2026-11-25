@@ -2,7 +2,7 @@
   "name": "muon-root",
   "version": "0.0.1",
   "private": true,
-  "description": "A multi-platform GUI application framework that uses CEF as its backend",
+  "description": "A multi-platform framework for building GUI applications with web technologies",
   "keywords": [
     "chromium",
     "chrome",

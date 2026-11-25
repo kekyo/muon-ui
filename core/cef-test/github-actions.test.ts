@@ -76,7 +76,7 @@ describe("GitHub Actions CI", () => {
     }
 
     const buildTestJob = requireMapping(jobs["build-test"], "Build/test job");
-    expect(buildTestJob["timeout-minutes"]).toBe(90);
+    expect(buildTestJob["timeout-minutes"]).toBe(120);
     expect(buildTestJob.permissions).toEqual({ contents: "read" });
     const buildTestSteps = requireSequence(
       buildTestJob.steps,

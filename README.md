@@ -46,7 +46,7 @@ However, we believe that this is the biggest reason existing solutions have beco
 muon also includes a plugin system with fully asynchronous processing for interoperability with native libraries.
 These features are enabled from explicit configuration, so unused capabilities are not left open.
 
-Support for features such as WebGL, WebGPU, WebAssembly, Web Workers, and local storage depends on the CEF or WebView version and its settings.
+WebGL, WebGPU, WebAssembly, Web Workers, local storage, and other features can be used in CEF and WebView just as expected.
 Desktop apps can show DevTools. CDP (Chrome DevTools Protocol) is also available, so you can debug with VS Code, connect Playwright, or control the app externally.
 You can also use remote DevTools from Chromium/Chrome through `chrome://inspect/`.
 

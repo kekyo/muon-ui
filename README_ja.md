@@ -44,7 +44,7 @@ CEFを使うのに、世界中のウェブサイトにアクセス出来ない�
 そして、ネイティブライブラリとの相互運用を実現する、完全に非同期処理に対応したプラグインシステムも搭載しています。
 これらも事前構成に基づいて使用可能になるため、使われない機能を野放しにすることはありません。
 
-WebGL、WebGPU、WebAssembly、Web Workers、ローカルストレージなどの対応範囲は、各環境のCEFやWebViewのバージョンと設定によって異なります。
+WebGL、WebGPU、WebAssembly、Web Workers、ローカルストレージなども、CEFやWebViewでの想定どおりに使用できます。
 デスクトップ版ではDevToolsを表示できます。CDP (Chrome DevTools Protocol) も使用できるため、vscodeなどでデバッグしたり、Playwrightを接続して操ることも可能です。
 Chromium/Chromeから、 `chrome://inspect/` でリモートDevToolsを使用することも可能です。
 

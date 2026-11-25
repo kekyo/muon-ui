@@ -19,7 +19,8 @@ jobs:
   build-test:
     name: Build and test
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # Build and packaging can take 76 minutes before the Android E2E starts.
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:

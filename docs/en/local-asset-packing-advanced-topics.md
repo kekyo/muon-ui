@@ -1,6 +1,7 @@
 # Local asset packing (Advanced topics)
 
-Local asset files can be "packed" into a single file.
+Android apps take an asset directory and bundle its contents in the APK.
+Desktop apps can pack local assets into a single `assets.zip` file.
 This prevents files from being scattered, compresses them to reduce storage size, and enables corruption verification.
 By default, local assets are automatically packed when packages are generated.
 

@@ -16,7 +16,7 @@ If an existing file cannot be read or parsed, it is an error.
 On the other hand, `muon build` treats a missing configuration file as all defaults, but if an existing file cannot be read or parsed, it is a build error.
 It is also an error when a configuration file explicitly specified by `--config` does not exist.
 
-The following is an example of `muon.json`:
+The following example shows a desktop `muon.json` file.
 
 ```json
 {
@@ -168,6 +168,8 @@ Starting an application from a notification also requires OS support and deploym
 
 
 ## browser key
+
+The table lists desktop defaults. On Android, the default start page is `https://main.asset.muon.invalid/index.html`. See [Android configuration](./android.md#configuration-and-muon-apis).
 
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
@@ -329,6 +331,8 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 
 ## asset key
 
+The settings below describe desktop assets. On Android, specify a directory whose contents will be bundled in the APK at build time.
+
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
 | `sourcePath` | `string` | `assets` | Asset directory or ZIP file exposed as `asset://` URLs. |
@@ -342,6 +346,8 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 > Their explanation is omitted.
 
 ## network key
+
+These settings control web page requests on desktop. Specifying them for Android produces a build warning. WebView network access follows Android permissions and the app's network security configuration. See [Android WebView limitations](./limitation.md#android-webview-backend).
 
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
@@ -374,6 +380,8 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
 
 ## plugin key
 
+The table lists desktop defaults. Android bundles external plugins in the APK. Only the main frame on the asset origin can use plugins allowed by `pages`. See [Android plugin configuration](./android.md#import-with-validate-mode).
+
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |
 | `path` | `string` | `"./plugins"` | Directory searched for external plugin files. |
@@ -395,8 +403,8 @@ This setting is used only at build time by `muon build` and `muon pack`, and is 
   `"simple"` exposes `window.muon` and the namespace objects under it to pages as before.
 - `pages` controls only whether the plugin API bridge is injected into a page.
   In `"validate"`, the non-enumerable bridge for capability calls is injected. In `"simple"`, the `window.muon` hierarchy is injected.
-  Whether pages and subresources can actually be loaded must be separately allowed with `network.allow`.
-- When `plugins` is omitted, no plugin functions are exposed.
+  On desktop, loading pages and subresources also requires permission from `network.allow`.
+- On desktop, omitting `plugins` exposes no plugin functions. In Android `simple` mode, omitting it exposes the supported built-in functions. An empty array exposes none.
   To enable built-in plugins, specify `"internal"` for `name`.
   To enable external plugins, specify the filename without extension as `name`.
   For example, when using `muon_fs_dialogs_gtk3.so`, the `name` is `"muon_fs_dialogs_gtk3"`.
@@ -465,6 +473,8 @@ Logs are not output for sources set to `off`.
 - When `output.type` is not `"file"`, specifying `output.path` is a configuration error.
 
 ## cdp key
+
+The settings below configure desktop remote debugging. On Android, omit `cdp.enable` or set it to `false`.
 
 | Key | Type | Default | Summary |
 | :-- | :--- | :------ | :------ |

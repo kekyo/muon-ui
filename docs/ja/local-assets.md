@@ -1,12 +1,12 @@
 # ローカルアセットの構成
 
 muonの特徴的な機能の一つが、ローカルアセットです。
-特殊なURLスキーム `asset://` を使用して、ローカルに配置されたビルド済みのアセットファイルを参照できるものです。
+デスクトップ版は `asset://` でローカルアセットを参照します。Android版はAPKに同梱したアセットを `https://main.asset.muon.invalid/` から読み込みます。[Androidのアセット設定](./android.md#設定とmuon-api)
 
 muon Viteプラグインを使用している場合はあまり意識する必要はありませんが、muonアプリがどのようにページを表示するのかは知っておいたほうが良いでしょう。
-Viteは、ウェブアプリケーションのソースコードをビルドして `dist/` に配置します。その後:
+デスクトップ版では、起動方法によってアセットの参照先が変わります。
 
-1. `npm run dev` 実行時は、 `dist/` の内容が `http://localhost:5173/` として公開され、 muonがこれを表示します。結果として `http://localhost:5173/index.html` が参照されます。
+1. `npm run dev` 実行時は、muonがViteの開発サーバーから `http://localhost:5173/index.html` を読み込みます。
 2. `npx muon run` でmuonアプリを実行した場合は、 muonが `dist/` の内容を直接 `asset://main/` として参照可能にします。結果として `asset://main/index.html` が参照されます。
 3. `npm run build` で生成されたmuonアプリ (`dist-muon/linux-amd64/`など) を実行した場合は、アセットファイル群を直接 `asset://main/` として参照可能にします。結果として `asset://main/index.html` が参照されます。このとき、アセットファイル群は `dist/` ではなく、これらをパッキングした `assets.zip` から参照します。
 

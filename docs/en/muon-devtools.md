@@ -1,7 +1,7 @@
 # muon DevTools
 
-muon can show muon DevTools.
-It provides the same capabilities as Chromium or Chrome DevTools, including ad-hoc debugging, performance measurement, and diagnostics.
+On desktop, you can open muon DevTools as described below to debug and profile your app as you would in Chromium or Chrome.
+To inspect a debuggable Android WebView, connect the device with ADB and open `chrome://inspect/` in Chrome. See [Remote debugging WebViews](https://developer.chrome.com/docs/devtools/remote-debugging/webviews).
 
 When launched by Vite with `vite dev`, the `F12` muon DevTools keybind and the `Ctrl+F12` recycle keybind are automatically enabled.
 After a distribution build, muon apps cannot open muon DevTools by default.

@@ -14,7 +14,7 @@ This is called a "muon plugin".
 The basic muon plugin capabilities are provided by muon's built-in plugins.
 You can also implement the muon plugin API and load it into muon to extend functionality in the same way as the built-in plugins.
 
-Android supports simple and validate modes, with 34 builtin functions and ABI-specific external libraries packaged inside the APK. The process-launching example below is desktop-specific. See [building and distributing Android apps](./android.md) for supported functions, configuration, and access-control boundaries.
+Android supports simple and validate modes. Only the main frame on the asset origin can call plugins, and ABI-specific external libraries are bundled in the APK. The process-launching and plugin placement examples below are for desktop. See [Android configuration and supported APIs](./android.md#configuration-and-muon-apis).
 
 The following example launches a child process by using a muon built-in plugin.
 
@@ -62,7 +62,7 @@ The muon Vite plugin reads this setting and permits access to muon plugins:
 ```
 
 - `mode` determines the plugin access method. It can be omitted, and the default is `"validate"`.
-- `pages` is the list of page URLs that can access muon plugins.
+- On desktop, `pages` lists the URL patterns for pages that can access muon plugins.
   By default, access is allowed only for `asset://main/**`.
   Pages outside this list cannot access muon plugin functions.
 - `name` is the plugin name. Only built-in plugins use the special value `"internal"`.
@@ -196,7 +196,7 @@ The proxy implements `Releaseable`, and `release()` and `[Symbol.dispose]()` per
 
 Calling the proxy after `release()` returns a rejected `Promise`.
 Passing a released proxy as an argument to another plugin function is an argument validation error.
-GC finalizers and V8 context cleanup also help with releasing, but both are fallbacks.
+GC finalizers and cleanup when the page's JavaScript context ends also help release objects, but both are fallbacks.
 Do not depend on them as replacements for deterministic release.
 
 Proxies obtained from different native return values are not guaranteed to be identical JavaScript objects, even when they represent the same native function.

@@ -1,5 +1,7 @@
 # Window communication limitations (Advanced topics)
 
+This setting applies to desktop apps. On Android, omit `browser.allowUnsafeJavaScriptParentAccess` or set it to an empty array.
+
 `browser.allowUnsafeJavaScriptParentAccess` filters whether descendant pages can access objects on the parent page when a page opens another page in another window.
 By default, this is an empty list, and object access to parent pages is not allowed for any page.
 

@@ -1,6 +1,6 @@
 # muon
 
-A multi-platform framework for building GUI applications with web technologies.
+A multi-platform framework for building native applications with web technologies.
 
 ![muon](./images/muon-120.png)
 

@@ -606,8 +606,8 @@ Windowsでは、通常表記の長いパスを読み書き、列挙、コピー�
 - `close()` は複数回呼んでも問題ありません。
 - `watch()` の `listener` が例外を投げたりrejectされた `Promise` を返した場合、そのエラーは無視されます。
   watcher作成前にabortされた場合は `watch()` がrejectされ、作成後にabortされた場合はwatcherが閉じられます。
-- 1つのrenderer V8 contextが同時に保持できるfilesystem watcherは16個までです。
-  上限を超える `watch()` は初回スナップショットを開始する前に `"Filesystem watcher limit exceeded"` でrejectされます。
+- 同時に保持できるfilesystem watcherは、デスクトップ版ではJavaScriptの実行コンテキストごと、Android版ではWebViewごとに16個までです。
+  デスクトップ版で上限を超えた場合、`watch()` は初回スナップショットを開始する前に `"Filesystem watcher limit exceeded"` でrejectされます。
 
 ```js
 await window.muon.fs.writeTextFile("/tmp/muon-note.txt", "hello\n", "utf8");

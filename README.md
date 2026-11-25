@@ -1,6 +1,6 @@
 # muon
 
-A multi-platform GUI application framework that uses CEF as its backend.
+A multi-platform framework for building native applications with web technologies.
 
 ![muon](./images/muon-120.png)
 
@@ -23,7 +23,7 @@ Application replacement is extremely complex, and it has always been a hard prob
 The causes vary widely, so there is no magic solution that makes everything easy.
 Even so, everyone wants to modernize with as little cost as possible.
 
-muon (/ˈmjuːɒn/) is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework) or Android WebView.
+muon (/ˈmjuːɒn/) is a multi-platform GUI application framework that uses CEF (Chromium Embedded Framework) on Linux and Windows and WebView on Android.
 You have probably heard of similar projects such as [Electron](https://www.electronjs.org/).
 
 Roughly speaking, muon is framework software in the same category.
@@ -35,29 +35,26 @@ With muon, you can build native applications using the most mature and widely us
 
 So how is muon different from earlier framework software?
 
-muon specializes in local GUI application development by using a whitelist approach for access to external web resources.
-In practice, access is denied by default.
+muon specializes in local GUI application development.
+On desktop, muon controls access to external web resources with an allowlist.
 
 You may think that using CEF without access to websites around the world is a waste.
 However, we believe that this is the biggest reason existing solutions have become very complex and difficult to handle.
 
-> Note: Network access restrictions work differently with Android WebView.
-
-muon also does not completely forbid access to external resources.
-Because the policy is whitelist-based, permitted websites remain accessible.
+> On Android, WebView network access follows Android permissions and the app's network security configuration. See [Android WebView limitations](./docs/en/limitation.md#android-webview-backend).
 
 muon also includes a plugin system with fully asynchronous processing for interoperability with native libraries.
 These features are enabled from explicit configuration, so unused capabilities are not left open.
 
-Because muon is based on CEF or Android WebView, Chromium features such as WebGL, WebGPU, WebAssembly, Web workers, and Local storage are available as expected.
-DevTools can be shown. CDP (Chrome DevTools Protocol) is also available, so you can debug with VS Code, connect Playwright, or control the app externally.
+Support for features such as WebGL, WebGPU, WebAssembly, Web Workers, and local storage depends on the CEF or WebView version and its settings.
+Desktop apps can show DevTools. CDP (Chrome DevTools Protocol) is also available, so you can debug with VS Code, connect Playwright, or control the app externally.
 You can also use remote DevTools from Chromium/Chrome through `chrome://inspect/`.
 
 In short, muon clearly removes one of the major problems that appears when migrating GTK/Qt/Windows native applications to web applications.
 This lets you build modern local GUI applications with the web technology ecosystem.
 
 muon also minimizes the steps required to create a muon application, keeping the barrier to entry low.
-With the minimal setup, installing the NPM package and adding one line to the configuration file is enough to launch your first muon app.
+With the minimal desktop setup, installing the NPM package and adding one line to the configuration file is enough to launch your first muon app.
 
 You can deploy muon applications to Linux, Windows, and Android.
 
@@ -69,22 +66,23 @@ muon can generate deb packages, AppImages, or tarballs for Linux, and Nullsoft S
 
 ### Features
 
-- Restricts all network access through a whitelist filter, letting you completely exclude problematic content.
+- Desktop apps can restrict access to external web resources with an allowlist.
 - Provided as an easy-to-use NPM package, so you can turn your web application project into a native GUI application without complex configuration or changes.
-- The rendering browser is CEF (Chromium Embedded Framework) or Android WebView. From the web application's point of view, this is almost the same as using Chromium or Chrome.
-- Supports the Vite plugin system. It also supports Vite HMR, so previews update in real time during development.
+- Uses CEF for rendering on Linux and Windows and WebView on Android.
+- Supports Vite plugins. On desktop, Vite HMR updates the preview in real time during development.
 - Supports Linux (deb and AppImage) and Windows (NSIS) package generation, and portable distribution.
 - You can also build Android applications (Experimental).
-- DevTools can be used. CDP (Chrome DevTools Protocol) is also supported, so remote debugging from external tools is possible.
+- Desktop apps can show DevTools and support remote debugging over CDP.
 - Includes a plugin system. Plugin capabilities can also be restricted by a whitelist filter.
 - An independent SDK supports C/C++ plugin development and distribution as prebuilt NPM packages.
-- Built-in plugins provide access to local files, open dialogs, child process launching, and window operations.
+- Built-in plugins provide access to local files. On desktop, they can also open file dialogs, launch child processes, and move or resize windows.
 
 ### Environment
 
-- Supports the following architectures from the official CEF binary architectures:
+- Supported architectures
   - Linux: amd64, armhf, arm64
   - Windows: i686, amd64
+  - Android: arm64-v8a, x86_64
 - Build environment
   - Node.js 20 or later
   - Vite 5 or later

@@ -4,7 +4,7 @@ CEF has native API versioning.
 Usually, this versioning has a "version window", and compatibility is maintained across several CEF versions.
 
 The following is a conceptual diagram.
-A given muon version uses a fixed CEF API version.
+Each desktop version of muon uses a fixed CEF API version.
 The range of multiple CEF binaries that support that CEF API version becomes the version window:
 
 ```mermaid

@@ -1,6 +1,7 @@
 # muon DevTools
 
-muonは、muon DevToolsを表示出来ます。これは、ChromiumやChromeのDevToolsと同じ機能を持ち、アドボックな簡易デバッグや、パフォーマンスの測定、診断などを行うことが出来ます。
+デスクトップ版では、以下の手順でmuon DevToolsを開き、ChromiumやChromeと同様にデバッグやパフォーマンス測定ができます。
+Androidのデバッグ用WebViewを調べるには、ADBで端末を接続し、Chromeで `chrome://inspect/` を開きます。[WebViewのリモートデバッグ](https://developer.chrome.com/docs/devtools/remote-debugging/webviews)
 
 `vite dev` でViteから起動した場合は、`F12` のmuon DevToolsキーバインドと `Ctrl+F12` のリサイクルキーバインドが自動的に有効化されますが、
 配布ビルド後のmuonアプリは、既定ではmuon DevToolsを開くことは出来ません。

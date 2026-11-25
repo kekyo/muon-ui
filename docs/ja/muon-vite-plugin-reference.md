@@ -228,7 +228,7 @@ Node.jsサービスを定義すると、`muon build`と`muon pack`はサービ�
   ディレクトリ、glob、npm の暗黙include/excludeは展開しません。
   `asset.sourcePath` として解決されたパス配下、`node_modules`、`.git`、出力先配布ディレクトリ配下は除外されます。
   同じ `basename` へコピーされる候補が複数ある場合はエラーになります。
-- Viteプラグイン経由のビルドでは、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
+- デスクトップ版をViteプラグインでビルドすると、Viteの `build.outDir` がアセット元として使用され、ZIP内のアセットには `main/` プレフィックスが付きます。
   そのため、ビルド後のアセットは `asset://main/` から参照出来ます。
 - `windowsResource` は `muon.json` の `windows.resource` と同じキーを受け付け、CLIの `--windows-*` オプションと同じ優先度で扱われます。
 - `windowsCodeSigning` は `muon.json` の `windows.codeSigning` と同じキーを受け付け、`false` を指定すると `muon.json` の署名設定を無効化します。

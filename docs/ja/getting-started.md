@@ -1,5 +1,7 @@
 # muonを始める
 
+この章はLinux・Windows向けの手順です。Android向けの設定とAPKの作成方法は[Androidアプリのビルド・配布](./android.md)を参照してください。
+
 早速muonでアプリケーション（muonアプリ）を作ってみましょう。
 新規にアプリケーションを開発する場合だけでなく、既存のウェブアプリケーションをmuonアプリ化するのも非常に簡単です。
 
@@ -147,7 +149,7 @@ npm run build
 
 Viteの `build.outDir` に出力されたファイル群は `assets.zip` にまとめられます。
 Node.jsサービスを定義した場合は、サービスのコードと依存パッケージが配布ディレクトリに入ります。配布先での初回起動時に、muon launcherが各サービスのバージョン条件を満たすNode.jsを準備します。
-既定では、muonがサポートする全ターゲットをビルドし、`dist-muon/` ディレクトリ配下に出力されます:
+既定では、すべてのデスクトップターゲットをビルドし、`dist-muon/` ディレクトリ配下に出力します。
 
 ```text
 dist-muon/
@@ -198,7 +200,7 @@ export default defineConfig({
 });
 ```
 
-`build.targets` に指定可能なターゲット名は、以下のとおりです:
+`build.targets` に指定できるデスクトップターゲットは次のとおりです。
 
 - Linuxターゲット: `linux-amd64`, `linux-armhf`, `linux-arm64`
 - Windowsターゲット: `windows-i686`, `windows-amd64`
@@ -228,7 +230,7 @@ npx muon pack
 その後、指定した形式ごとに `artifacts/` へ最終配布物を出力します。
 `deb` のパッケージツリーや `nsis` の `.nsi` スクリプトなど、パッケージ生成中の作業ファイルは `.muon/pack/` 配下に生成されます。
 
-`muon pack` にオプションを指定しない場合は、すべてのターゲットに対応したファイル群を生成します。
+既定の構成で `muon pack` を実行すると、すべてのデスクトップターゲット向けにパッケージを生成します。
 以下にオプション指定の例を示します:
 
 ```bash
@@ -242,7 +244,7 @@ npx muon pack --target windows-amd64 --type nsis
 ```
 
 - ターゲットは `--target` または `--all` で指定でき、未指定時はViteプラグインの `build` 設定を使用します。
-  muon Viteプラグインが無い場合や未指定時は、すべての対応ターゲットをパッケージ候補にします。
+  muon Viteプラグインがない場合やターゲットを省略した場合は、すべてのデスクトップターゲットをパッケージ候補にします。
   完全なターゲット名に加えて、プラットフォーム名の `linux`, `windows`、アーキテクチャ名の `amd64`, `arm64`, `armhf`, `i686` も指定出来ます。
 - `--type` は `zip`, `tgz`, `tar.gz`, `deb`, `appimage`, `nsis` をカンマ区切りまたは複数指定出来ます。
   省略時は `zip`, `tgz`, `deb`, `appimage`, `nsis` のすべてを対象にします。
@@ -277,7 +279,7 @@ npx muon pack --target windows-amd64 --type nsis
 - Electronは[Chromiumのマルチプロセスモデル](https://www.electronjs.org/docs/latest/tutorial/process-model)を継承しています。
   開発者が用意したエントリポイントはNode.js環境のmain processで実行され、そこで`BrowserWindow`を作成して、ページをChromiumのrenderer processへロードします。
   ページ内JavaScriptは、通常preload scriptを介して公開されたIPC APIでmain processと連携します。
-- muonでは、muon-coreプロセスがCEFを初期化します。
+- デスクトップ版のmuonでは、muon-coreプロセスがCEFを初期化します。
   CEFのブラウザプロセスがアプリケーションのライフサイクル、ウインドウ、muonプラグインランタイムを管理し、開発者が記述するアプリケーションの主な起点は、CEFのレンダラープロセスにロードされるページです。
   muonプラグインの関数は、CEF IPCを経由する非同期APIとしてページへ公開されます。
 - デスクトップでは、[Node.jsサービス](./services.md)を別プロセスで実行できます。ページからはサービスが公開したメソッドを呼び出します。
@@ -292,7 +294,7 @@ flowchart LR
   Main <-->|"IPC, usually exposed through preload"| Renderer
 ```
 
-muon:
+muon（Linux・Windows）
 
 ```mermaid
 flowchart LR

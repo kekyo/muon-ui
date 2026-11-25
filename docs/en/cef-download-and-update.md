@@ -4,7 +4,7 @@ CEF binary asset files are known for being very large.
 When a vulnerability is found in CEF, the CEF binaries need to be updated.
 If a muon app directly included those binaries, updating CEF would require updating the entire muon app distribution.
 
-To reduce muon app distribution size and simplify CEF binary updates, muon downloads the required CEF binaries when the muon app starts and prepares the runtime environment.
+To reduce app distribution size and simplify CEF updates, the desktop version of muon downloads the required CEF binaries when the app starts and prepares the runtime environment.
 For desktop apps that define [Node.js services](services.md), muon also prepares a Node.js runtime that satisfies the `engines.node` ranges in the service projects.
 `muon build` and `muon pack` include the service code, runtime dependencies, and Node.js version requirements. The launcher prepares the Node.js executable.
 

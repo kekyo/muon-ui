@@ -218,6 +218,10 @@ Under MIT.
 
 ## History
 
+- 0.37.0
+  - Clarified how network access, local asset URLs, plugin permissions, and remote debugging differ between desktop CEF and Android WebView. [Configuration reference](./docs/en/muon-json-reference.md)
+  - Linux package tests now check that the runtime prepared from the `muon-ui` npm package starts on Wayland with system GTK. They also verify the dependencies declared by Debian packages.
+  - Updated background service tests on Linux and Windows to check that listening ports are closed after shutdown. CI now builds the Windows service host even without a Windows test machine and allows more time for Android APK tests.
 - 0.36.0
   - Reduced package sizes for apps without background services. Linux and Windows builds omit the service host for these apps, and Android APKs omit the native service library.
   - Stripped unused symbols from desktop runtime executables. Linux builds keep the dependency report in the build environment and bundle the helper for launching external processes only when the app allows `muon.executor.spawn`.

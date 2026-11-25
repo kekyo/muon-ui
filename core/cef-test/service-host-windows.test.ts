@@ -19,24 +19,20 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { build } from "vite";
 import {
-  connectWindowsE2eAgent,
+  prepareWindowsE2eSession,
   resolveWindowsE2eEnvironment,
+  type WindowsE2eConnection,
 } from "../../scripts/windows-e2e-environment.ts";
 
 const execute = promisify(execFile);
 let nodeAssets: string;
+const environment = resolveWindowsE2eEnvironment(process.env);
+let connection: WindowsE2eConnection;
 
-beforeAll(async () => {
+const prepareNodeAssets = async () => {
   // Build before reserving the machine: missing host support must fail even
-  // when no Windows test session is available. Compiling both architectures
-  // has its own preparation budget and must not consume the runtime deadline.
-  await execute(
-    "make",
-    ["-C", "../service-host", "windows-amd64", "windows-i686"],
-    {
-      maxBuffer: 4 * 1024 * 1024,
-    },
-  );
+  // when no Windows test session is available. The npm test:windows-services
+  // entry point compiles both architectures before running this suite.
   await mkdir("../../.build", { recursive: true });
   nodeAssets = await mkdtemp(resolve("../../.build/node-windows-driver-"));
   await writeFile(
@@ -56,6 +52,9 @@ beforeAll(async () => {
           "http-node": resolve("../../sdk/examples/services/http.ts"),
           "node-driver": resolve("../service-host/node-driver.ts"),
           service: resolve("../../node/test/fixtures/node-service.ts"),
+          "draining-listener": resolve(
+            "../../node/test/fixtures/node-draining-listener.ts",
+          ),
           lifecycle: resolve(
             "../../node/test/fixtures/node-lifecycle-service.ts",
           ),
@@ -69,13 +68,13 @@ beforeAll(async () => {
       rolldownOptions: { external: [/^node:/] },
     },
   });
-  await promisify(execFile)(process.execPath, [
+  await execute(process.execPath, [
     "../../sdk/scripts/build-service-runtime-fixture.mjs",
     join(nodeAssets, "http-quick.js"),
     "--entry",
     "../../sdk/examples/services/http.ts",
   ]);
-  await promisify(execFile)(process.execPath, [
+  await execute(process.execPath, [
     "../../sdk/scripts/build-service-runtime-fixture.mjs",
     join(nodeAssets, "server-quick.js"),
     "--entry",
@@ -90,16 +89,25 @@ beforeAll(async () => {
     resolve("../../node/dist/node-service-bridge.mjs"),
     join(nodeAssets, "node-service-bridge.mjs"),
   );
+};
+
+beforeAll(async () => {
+  connection = await prepareWindowsE2eSession(environment, prepareNodeAssets);
+  if (connection.status === "skip")
+    process.stderr.write(
+      `Skipping Windows service host tests: ${connection.reason}\n`,
+    );
 }, 600000);
 
 afterAll(async () => {
+  if (connection?.status === "connected") connection.agent.release();
   if (nodeAssets) await rm(nodeAssets, { recursive: true, force: true });
 });
 
-it("hosts native and Node services independently on both Windows architectures", async () => {
-  const environment = resolveWindowsE2eEnvironment(process.env);
-  const connection = await connectWindowsE2eAgent(environment);
-  if (connection.status !== "connected") throw new Error(connection.reason);
+it("hosts native and Node services independently on both Windows architectures", async ({
+  skip,
+}) => {
+  if (connection.status === "skip") return skip(connection.reason);
   const agent = connection.agent;
   const directory = win32.join(
     environment.workDir,
@@ -180,10 +188,6 @@ it("hosts native and Node services independently on both Windows architectures",
       }
     }
   } finally {
-    try {
-      await agent.files.remove(directory, { recursive: true });
-    } finally {
-      await agent.release();
-    }
+    await agent.files.remove(directory, { recursive: true });
   }
 }, 300000);

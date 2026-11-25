@@ -31,6 +31,9 @@ it("owns a Node service independently of UI and drains asynchronous stop", async
             "http-node": resolve("../../sdk/examples/services/http.ts"),
             "node-driver": resolve("../service-host/node-driver.ts"),
             service: resolve("../../node/test/fixtures/node-service.ts"),
+            "draining-listener": resolve(
+              "../../node/test/fixtures/node-draining-listener.ts",
+            ),
             lifecycle: resolve(
               "../../node/test/fixtures/node-lifecycle-service.ts",
             ),

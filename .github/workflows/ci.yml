@@ -19,7 +19,8 @@ jobs:
   build-test:
     name: Build and test
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # Build and packaging can take 76 minutes before the Android E2E starts.
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
@@ -68,9 +69,8 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          bash scripts/test-ci-dependencies.sh
+          sudo bash scripts/install-ci-dependencies.sh \
             at-spi2-core \
             build-essential \
             ca-certificates \
@@ -177,7 +177,13 @@ jobs:
           npm pack --workspace muon-ui --ignore-scripts --pack-destination .run/linux-package-ci
           archives=("${GITHUB_WORKSPACE}"/.run/linux-package-ci/muon-ui-*.tgz)
           test "${#archives[@]}" -eq 1
-          MUON_TEST_LINUX_RUNTIME="${GITHUB_WORKSPACE}/ui/dist/runtime/linux-amd64" \
+          consumer="$(mktemp -d)"
+          npm install --prefix "${consumer}" --no-audit --no-fund "${archives[0]}"
+          "${consumer}/node_modules/.bin/muon" prepare --target linux-amd64 \
+            --muon-path "${consumer}/node_modules/muon-ui/dist/runtime/linux-amd64" \
+            --stage-dir "${consumer}/runtime" --quiet --json > "${consumer}/prepared.json"
+          runtime="$(jq -er '.stagePath | strings | select(length > 0)' "${consumer}/prepared.json")"
+          MUON_TEST_LINUX_RUNTIME="${runtime}" \
             xvfb-run -a node scripts/run-wayland-command.mjs weston \
             npm exec --workspace muon-core-tester -- vitest run linux-gtk-runtime.test.ts --reporter=default
           MUON_PACKAGED_LINUX_TARBALL="${archives[0]}" \

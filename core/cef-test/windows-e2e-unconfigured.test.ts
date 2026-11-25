@@ -42,6 +42,8 @@ it.each([
   "windows-path.test.ts",
   "windows-builder-path.test.ts",
   "notifications-windows.test.ts",
+  "service-host-windows.test.ts",
+  "services-windows.test.ts",
 ])("skips %s before preparation without a configured machine", async (file) => {
   const directory = await mkdtemp(join(tmpdir(), "muon-unconfigured-e2e-"));
   const reportPath = join(directory, "report.json");

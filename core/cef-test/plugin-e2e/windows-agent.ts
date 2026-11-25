@@ -10,7 +10,7 @@ import type {
 } from "agent-rover";
 
 import {
-  connectWindowsE2eAgent,
+  prepareWindowsE2eSession,
   type WindowsE2eConnection,
   type WindowsE2eEnvironment,
 } from "../../../scripts/windows-e2e-environment.js";
@@ -140,11 +140,7 @@ export const connectWindowsAgent = async (
   config: WindowsE2eEnvironment,
   target: WindowsRuntimeTarget,
 ): Promise<WindowsE2eConnection> => {
-  const probe = await connectWindowsE2eAgent(config);
-  if (probe.status === "skip") {
-    return probe;
-  }
-  probe.agent.release();
-  await buildWindowsRuntime(target);
-  return await connectWindowsE2eAgent(config);
+  return await prepareWindowsE2eSession(config, () =>
+    buildWindowsRuntime(target),
+  );
 };

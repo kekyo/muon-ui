@@ -4,9 +4,63 @@ import { once } from 'node:events';
 import { request } from 'node:http';
 import { createServer, type Socket } from 'node:net';
 import { join } from 'node:path';
-import type { createMuonServicesApi } from '../common/renderer/services.ts';
+import type { createMuonServicesApi, MuonServiceHandle, MuonServicesApi } from '../common/renderer/services.ts';
 
 type Page = {api:ReturnType<typeof createMuonServicesApi>;socket:Socket};
+
+/** Check a fresh HTTP connection after the last owner releases its listener.
+ * @param api Non-owning state observation on a live control connection.
+ * @param handle Last reference to the listening generation.
+ * @param disconnected Close event from its established WebSocket.
+ * @param port Loopback port to probe after disposal.
+ * @returns Completion after the port refuses the new connection.
+ */
+export const verifyListenerShutdown = async (
+  api: MuonServicesApi, handle: MuonServiceHandle, disconnected: Promise<unknown>, port: number,
+): Promise<void> => {
+  const label = `${handle.id} generation ${handle.generation}`;
+  let stopped!: () => void;
+  let failed!: (error: Error) => void;
+  const terminal = new Promise<void>((resolve, reject) => {
+    stopped = resolve;
+    failed = reject;
+  });
+  const watcher = await api.watchState(handle.id, (snapshot) => {
+    if (snapshot.generation !== handle.generation) return;
+    if (snapshot.state === 'stopped') stopped();
+    if (snapshot.state === 'failed') failed(new Error(`${label} failed: ${snapshot.error}`));
+  });
+  try {
+    await Promise.all([handle.release(), disconnected, terminal]);
+    let result: string;
+    try {
+      result = 'HTTP ' + (await query(port, auth)).status;
+    } catch (error) {
+      result = (error as NodeJS.ErrnoException).code ?? String(error);
+    }
+    assert.equal(result, 'ECONNREFUSED', `${label} stopped, connection to port ${port} returned ${result}`);
+  } finally {
+    await watcher.close();
+  }
+};
+
+const auth = { Authorization: 'Bearer local-service' };
+const query = async (port: number, headers: Record<string, string>, data?: Uint8Array) =>
+  await new Promise<{ status: number; generation: unknown; body: Buffer }>((resolve, reject) => {
+  const req = request({ hostname: '127.0.0.1', port, path: '/echo', method: data ? 'POST' : 'GET', headers, agent: false }, response => {
+    const chunks: Buffer[] = [];
+    response.on('data', chunk => chunks.push(chunk));
+    response.on('error', reject);
+    response.on('end', () => resolve({
+      status: response.statusCode!,
+      generation: response.headers['x-service-generation'],
+      body: Buffer.concat(chunks),
+    }));
+  });
+  req.on('error', reject);
+  req.end(data);
+});
+
 export const createServerDriver = async (assets: string,binaries: string) => {
   const ids = ['listenNative','listenQuick','listenNode'];
   const ports: number[] = [];
@@ -22,13 +76,6 @@ export const createServerDriver = async (assets: string,binaries: string) => {
     {runtime:'quickjs',script:join(assets,'server-quick.js')},
     {runtime:'node',project:assets,entry:'./server-node.mjs',executable:process.execPath,bridge:join(assets,'node-service-bridge.mjs')},
   ];
-  const auth = {Authorization:'Bearer local-service'};
-  const query = async (port:number, headers: Record<string,string>, data?: Uint8Array) => await new Promise<{status:number;generation:unknown;body:Buffer}>((resolve,reject)=>{
-    const req=request({hostname:'127.0.0.1',port,path:'/echo',method:data?'POST':'GET',headers,agent:false},response=>{
-      const chunks:Buffer[]=[];response.on('data',chunk=>chunks.push(chunk));response.on('error',reject);
-      response.on('end',()=>resolve({status:response.statusCode!,generation:response.headers['x-service-generation'],body:Buffer.concat(chunks)}));
-    });req.on('error',reject);req.end(data);
-  });
   return {
     services:Object.fromEntries(ids.map((id,i)=>[id,{...sources[i],io:{server:{listen:true}},config:{port:String(ports[i]),bearerToken:"local-service"}}])),
     verify:async (connect:()=>Promise<Page>)=>{
@@ -59,8 +106,7 @@ export const createServerDriver = async (assets: string,binaries: string) => {
         const disconnected=once(ws,'close');
         const last=await control.api.acquire(id);assert.equal(last.generation,generation);
         await control.api.setAutostart(id,false);
-        await last.release();await disconnected;
-        await assert.rejects(query(port,auth),{code:'ECONNREFUSED'});
+        await verifyListenerShutdown(control.api, last, disconnected, port);
         assert.equal((await query(ports[otherIndex]!,auth)).generation,other.generation);
         const next=await control.api.acquire(id);assert.notEqual(next.generation,generation);
         assert.equal((await query(port,auth)).generation,next.generation);

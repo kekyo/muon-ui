@@ -3,28 +3,16 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { promisify } from "node:util";
-import { beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createMuonServicesApi } from "../../core/common/renderer/services.ts";
 import { buildMuonQuickJsService } from "../common/service-build.ts";
-
-beforeAll(async () => {
-  await mkdir("../core/service-host/.build", { recursive: true });
-  await promisify(execFile)("flock", [
-    "../core/service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../core/service-host",
-    ".build/muon-service-host",
-  ]);
-}, 600000);
 
 it.each([false, true])(
   "owns a development host until its services or session end (resident=%s)",

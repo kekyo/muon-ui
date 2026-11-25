@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import type { LinuxDependencyManifest } from "../cef/linux-dependency-manifest.ts";
 
 const execute = promisify(execFile);
 const [archive, ...requestedTargets] = process.argv.slice(2);
@@ -97,16 +98,25 @@ try {
       JSON.parse(await readFile(join(payload, "muon-install.json"), "utf8")),
       { type: "appimage", runtimeMode: "user" },
     );
-    const reference = await readFile(
-      join(packageDirectory, "dist/runtime", target, "linux-dependencies.json"),
+    const reference: LinuxDependencyManifest = JSON.parse(
+      await readFile(
+        join(
+          packageDirectory,
+          "dist/runtime",
+          target,
+          "linux-dependencies.json",
+        ),
+        "utf8",
+      ),
     );
-    assert.deepEqual(
-      await readFile(join(payload, "linux-dependencies.json")),
-      reference,
-    );
-    await assert.rejects(access(join(payload, "libcef.so")));
+    assert.equal(reference.audit.target, target);
+    for (const file of ["linux-dependencies.json", "libcef.so"])
+      await assert.rejects(access(join(payload, file)), { code: "ENOENT" });
     const deb = result.artifacts.find((artifact) => artifact.type === "deb")!;
     const depends = await execute("dpkg-deb", ["--field", deb.path, "Depends"]);
+    const clauses = new Set(depends.stdout.trim().split(/,\s*/));
+    for (const clause of reference.debian.depends)
+      assert(clauses.has(clause), `Missing Debian dependency: ${clause}`);
     assert.match(depends.stdout, /libc6 \(>= /);
     assert.match(depends.stdout, /libgtk-3-0 \(>= /);
     assert.match(depends.stdout, /libglib2.0-0 \(>= 2\.7[34]/);

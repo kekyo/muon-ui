@@ -3,7 +3,6 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
-import { execFile } from "node:child_process";
 import { once } from "node:events";
 import {
   chmod,
@@ -17,8 +16,7 @@ import {
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
-import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { build, createServer } from "vite";
 import { runMuonDev } from "../cef/dev.ts";
 import { runMuonPrepare } from "../cef/prepare.ts";
@@ -35,16 +33,6 @@ vi.mock(import("../cef/prepare.ts"), async (original) => ({
 }));
 
 const directories: string[] = [];
-beforeAll(async () => {
-  await mkdir("../core/service-host/.build", { recursive: true });
-  await promisify(execFile)("flock", [
-    "../core/service-host/.build/driver-build.lock",
-    "make",
-    "-C",
-    "../core/service-host",
-    ".build/muon-service-host",
-  ]);
-}, 600000);
 afterEach(async () => {
   for (const directory of directories.splice(0))
     await rm(directory, { recursive: true, force: true });

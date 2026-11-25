@@ -9,7 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve, win32 } from "node:path";
 import { promisify } from "node:util";
-import type { RemoteAgent, RemoteManagedProcess } from "agent-rover";
+import type { RemoteManagedProcess } from "agent-rover";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createConnection } from "@playwright/mcp";
@@ -19,12 +19,16 @@ import {
   expandMuonServicePermissions,
 } from "../../ui/common/capability.ts";
 import { buildMuonQuickJsService } from "../../ui/common/service-build.ts";
-import { resolveWindowsE2eEnvironment } from "../../scripts/windows-e2e-environment.ts";
 import {
-  connectWindowsAgent,
+  prepareWindowsE2eSession,
+  resolveWindowsE2eEnvironment,
+  type WindowsE2eConnection,
+} from "../../scripts/windows-e2e-environment.ts";
+import {
   launchWindowsTestProcess,
   type WindowsTestProcess,
 } from "./plugin-e2e/windows-agent.ts";
+import { buildWindowsRuntime } from "./plugin-e2e/windows-build.ts";
 import { resolveWindowsRuntimeTarget } from "./plugin-e2e/windows-matrix.ts";
 import { discoverWindowsTestNetwork } from "./plugin-e2e/windows-network.ts";
 import { stageWindowsRuntimeDirectory } from "./plugin-e2e/windows-staging.ts";
@@ -36,7 +40,7 @@ const runtime = win32.join(remoteBase, "runtime");
 const root = win32.join(remoteBase, "run-" + randomUUID());
 const relayPath = win32.join(remoteBase, "muon-cdp-relay.exe");
 const artifacts = resolve(".run/services-windows", target.target);
-let agent: RemoteAgent | undefined;
+let connection: WindowsE2eConnection;
 const nativeAllow = [
   "echo",
   "echoInt64",
@@ -52,7 +56,7 @@ let nativeSignature = "";
 let nativeBundle = "";
 let cdpHost = "";
 
-beforeAll(async () => {
+const prepareServices = async () => {
   const nativeTarget = target.target;
   const manifest = await buildPlugin({
     configPath: resolve("../common-test/muon-service-plugin.build.json"),
@@ -69,9 +73,18 @@ beforeAll(async () => {
   await promisify(execFile)("make", ["-C", "../service-host", target.target], {
     maxBuffer: 4 * 1024 * 1024,
   });
-  const connection = await connectWindowsAgent(environment, target);
-  if (connection.status !== "connected") throw new Error(connection.reason);
-  agent = connection.agent;
+  await buildWindowsRuntime(target);
+};
+
+beforeAll(async () => {
+  connection = await prepareWindowsE2eSession(environment, prepareServices);
+  if (connection.status === "skip") {
+    process.stderr.write(
+      `Skipping Windows service UI tests: ${connection.reason}\n`,
+    );
+    return;
+  }
+  const agent = connection.agent;
   cdpHost = (await discoverWindowsTestNetwork(agent, environment.nodePath))
     .cdpHost;
   await stageWindowsRuntimeDirectory(
@@ -99,7 +112,8 @@ beforeAll(async () => {
 }, 600000);
 
 afterAll(async () => {
-  if (!agent) return;
+  if (connection?.status !== "connected") return;
+  const agent = connection.agent;
   try {
     // A failed page setup can occur before the business probe reveals the host
     // PID. Confine fallback cleanup to this test's staged runtime directory.
@@ -119,11 +133,12 @@ afterAll(async () => {
   }
 });
 
-it.each(["simple", "validate"] as const)(
+it.for(["simple", "validate"] as const)(
   "keeps native work alive after Windows CEF closes in %s mode",
-  async (mode) => {
-    if (!agent) throw new Error("Windows agent is unavailable");
-    const remote = agent;
+  { timeout: 180000 },
+  async (mode, { skip }) => {
+    if (connection.status === "skip") return skip(connection.reason);
+    const remote = connection.agent;
     const directory = win32.join(root, mode);
     const appId = "dev.muon.services." + randomUUID();
     const registrationId =
@@ -823,5 +838,4 @@ it.each(["simple", "validate"] as const)(
       }
     }
   },
-  180000,
 );

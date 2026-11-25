@@ -1,6 +1,6 @@
 # Origin-based permissions (Advanced topics)
 
-You may think that any cloud service can be used by adding it to the `network.allow` list, but there is an important caveat.
+On desktop, allowing access to a cloud service through `network.allow` can require more than one URL pattern.
 
 For example, if `https://auth.example.com/**` represents the login page of an authentication provider and you add it to `network.allow`, access will fail if the provider's login page references resources from origins different from that URL unless all of those URLs are also added to the list.
 However, it is not easy to identify every such URL in external content.

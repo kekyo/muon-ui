@@ -613,8 +613,8 @@ Neither is a quota accumulated across multiple operations.
 - Calling `close()` multiple times is safe.
 - If a `watch()` `listener` throws or returns a rejected `Promise`, the error is ignored.
   If aborted before watcher creation, `watch()` rejects. If aborted after creation, the watcher is closed.
-- A single renderer V8 context can hold at most 16 filesystem watchers at the same time.
-  `watch()` calls exceeding the limit reject with `"Filesystem watcher limit exceeded"` before starting the initial snapshot.
+- The limit is 16 active filesystem watchers per JavaScript context on desktop and per WebView on Android.
+  On desktop, `watch()` calls exceeding the limit reject with `"Filesystem watcher limit exceeded"` before starting the initial snapshot.
 
 ```js
 await window.muon.fs.writeTextFile("/tmp/muon-note.txt", "hello\n", "utf8");

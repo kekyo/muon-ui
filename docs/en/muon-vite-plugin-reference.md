@@ -229,7 +229,7 @@ When an app defines Node.js services, `muon build` and `muon pack` include the s
   Directories, globs, and npm implicit include/exclude rules are not expanded.
   Paths under the resolved `asset.sourcePath`, `node_modules`, `.git`, and output distribution directories are excluded.
   It is an error when multiple candidates would be copied to the same `basename`.
-- In builds through the Vite plugin, Vite's `build.outDir` is used as the asset source, and assets inside the ZIP use the `main/` prefix.
+- In desktop builds through the Vite plugin, Vite's `build.outDir` is used as the asset source, and assets inside the ZIP use the `main/` prefix.
   Therefore, built assets can be referenced from `asset://main/`.
 - `windowsResource` accepts the same keys as `windows.resource` in `muon.json` and is handled with the same priority as CLI `--windows-*` options.
 - `windowsCodeSigning` accepts the same keys as `windows.codeSigning` in `muon.json`. Specifying `false` disables the signing settings from `muon.json`.

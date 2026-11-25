@@ -1,5 +1,7 @@
 # Getting started with muon
 
+This chapter covers Linux and Windows. For Android configuration and APK packaging, see [Build and distribute Android applications](./android.md).
+
 Let's create an application with muon, a muon app.
 It is very easy not only to create a new application, but also to turn an existing web application into a muon app.
 
@@ -149,7 +151,7 @@ npm run build
 
 The files output to Vite's `build.outDir` are collected into `assets.zip`.
 When the app defines Node.js services, the distribution includes their code and runtime dependencies. On first launch, the muon launcher prepares a Node.js version that meets the services’ requirements.
-By default, muon builds all supported targets and outputs them under the `dist-muon/` directory:
+By default, muon builds all desktop targets and writes the output under `dist-muon/`.
 
 ```text
 dist-muon/
@@ -200,7 +202,7 @@ export default defineConfig({
 });
 ```
 
-The target names that can be specified in `build.targets` are:
+You can specify the following desktop targets in `build.targets`.
 
 - Linux targets: `linux-amd64`, `linux-armhf`, `linux-arm64`
 - Windows targets: `windows-i686`, `windows-amd64`
@@ -232,7 +234,7 @@ npx muon pack
 It then outputs the final distribution artifacts for each requested format to `artifacts/`.
 Working files generated during package creation, such as the `deb` package tree and `nsis` `.nsi` scripts, are placed under `.muon/pack/`.
 
-If no options are passed to `muon pack`, files for all targets are generated.
+With the default configuration, `muon pack` generates packages for all desktop targets.
 Examples:
 
 ```bash
@@ -247,7 +249,7 @@ npx muon pack --target windows-amd64 --type nsis
 
 - Targets can be specified with `--target` or `--all`.
   When omitted, the Vite plugin `build` setting is used.
-  If there is no muon Vite plugin or the setting is omitted, all supported targets become package candidates.
+  If there is no muon Vite plugin or the targets are omitted, all desktop targets become package candidates.
   In addition to complete target names, platform names `linux` and `windows`, and architecture names `amd64`, `arm64`, `armhf`, and `i686`, can also be specified.
 - `--type` can specify `zip`, `tgz`, `tar.gz`, `deb`, `appimage`, and `nsis`, either comma-separated or as multiple options.
   When omitted, all of `zip`, `tgz`, `deb`, `appimage`, and `nsis` are targeted.
@@ -282,7 +284,7 @@ The key difference is the entry point for developer-authored application code an
 - Electron inherits [Chromium's multi-process model](https://www.electronjs.org/docs/latest/tutorial/process-model).
   The developer-provided entry point runs in the main process, which has a Node.js environment. It creates `BrowserWindow` instances and loads pages into Chromium renderer processes.
   JavaScript in a page normally coordinates with the main process through IPC APIs exposed by a preload script.
-- In muon, the muon-core process initializes CEF.
+- On desktop, the muon-core process initializes CEF.
   The CEF browser process manages the application lifecycle, windows, and muon plugin runtime, while the primary entry point for developer-authored application code is the page loaded into a CEF renderer process.
   muon plugin functions are exposed to the page as asynchronous APIs over CEF IPC.
 - Desktop apps can run [Node.js services](./services.md) in separate processes. The page calls the methods each service exposes.
@@ -297,7 +299,7 @@ flowchart LR
   Main <-->|"IPC, usually exposed through preload"| Renderer
 ```
 
-muon:
+muon (Linux and Windows)
 
 ```mermaid
 flowchart LR

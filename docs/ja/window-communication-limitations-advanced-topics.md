@@ -1,5 +1,7 @@
 # ウインドウ間連携の制約 (Advanced topics)
 
+以下はデスクトップ版の設定です。Android版では `browser.allowUnsafeJavaScriptParentAccess` を省略するか、空配列を指定します。
+
 `browser.allowUnsafeJavaScriptParentAccess` は、ページから別のページを（別のウインドウで）開いた場合などに、
 子孫のページから親のページのオブジェクトにアクセス出来るかどうかをフィルタします。
 既定では空のリストであり、すべてのページで親ページのオブジェクトアクセスが許可されません。

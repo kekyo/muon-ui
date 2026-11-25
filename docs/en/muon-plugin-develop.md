@@ -4,7 +4,7 @@ Muon plugins use C/C++ and a common C ABI across CEF on Linux/Windows and Androi
 
 ## Overview
 
-A muon plugin runs through the following phases:
+The following sections use the desktop CEF backend to illustrate plugin initialization and function calls.
 
 ### Plugin initialization and wiring
 
@@ -60,7 +60,7 @@ You can think of it simply as a callback function that reports the result.
 
 In this way, all plugin functions natively support asynchronous processing.
 Conversely, plugin functions must **not** block for an extended period.
-This is because plugin functions run in an important CEF thread context, and blocking that thread affects CEF operation.
+On desktop, for example, plugin functions run on a CEF thread, so blocking a call also blocks that thread.
 
 CEF is an embeddable framework based on Chromium, and end users therefore expect a browser experience as smooth as Chromium/Chrome.
 However, blocking the thread inside a plugin function can directly affect the behavior of CEF browser windows.

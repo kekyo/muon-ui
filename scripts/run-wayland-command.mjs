@@ -64,7 +64,7 @@ try {
   }
   process.exitCode = await new Promise((resolve, reject) => {
     const child = spawn(command, args, {
-      env: { ...environment, DISPLAY: "" },
+      env: { ...environment, DISPLAY: "", XDG_SESSION_TYPE: "wayland" },
       stdio: "inherit",
     });
     child.once("error", reject);

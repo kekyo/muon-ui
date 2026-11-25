@@ -1349,7 +1349,12 @@ const waitForWindowsTitleBarHidden = async (
   let lastPixel: RgbaPixel | undefined = undefined;
   while (Date.now() < deadline) {
     const capture = await captureWindowsWindow(window);
-    lastPixel = getWindowsWindowPixel(capture, 8, 8);
+    // The page text starts at the top left. Sample its background at the center.
+    lastPixel = getWindowsWindowPixel(
+      capture,
+      Math.floor(capture.bounds.width / 2),
+      8,
+    );
     if (isPixelNear(lastPixel, expectedAppPageBackgroundColor, 6)) {
       return;
     }

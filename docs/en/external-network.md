@@ -1,7 +1,7 @@
 # Accessing external networks
 
-As explained earlier, muon's various features become available through a whitelist model.
-Network access, which is one of the most important parts of CEF, is also filtered according to a whitelist.
+On Linux and Windows, muon restricts the URLs a web page can access using the allowlist below.
+On Android, WebView network access follows Android permissions and the app's network security configuration. See [Android WebView limitations](./limitation.md#android-webview-backend).
 
 Add an allow list to `muon.json` as follows to access external networks:
 

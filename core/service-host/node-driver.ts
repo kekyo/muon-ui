@@ -5,7 +5,7 @@
 
 // The test suite bundles this observation driver and the SDK fixture before
 // uploading them. Remote machines need only Node and the native host binaries.
-import { createServerDriver } from './server-driver.ts';
+import { createServerDriver, verifyListenerShutdown } from './server-driver.ts';
 import { createHttpDriver } from './http-driver.ts';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -37,6 +37,9 @@ const listenerDriver = await createServerDriver(assets,binaries);
 await writeFile(join(root, 'services.json'), JSON.stringify({ services: {
   ...httpDriver.services,
   ...listenerDriver.services,
+  draining: { runtime: 'node', project: assets, entry: './draining-listener.mjs',
+    executable: process.execPath, bridge: join(assets, 'node-service-bridge.mjs'),
+    config: { origin: `http://127.0.0.1:${address.port}` } },
   worker: { runtime: 'node', project: assets, entry: './service.mjs',
     executable: process.execPath, bridge: join(assets, 'node-service-bridge.mjs'), autostart: true,
     config: { origin: `http://127.0.0.1:${address.port}`, marker } },
@@ -134,6 +137,30 @@ try {
   assert.equal(await reconnected.call('status', []), 'after UI exit');
   await resumed.close();
   await reconnected.release();
+  const draining = await second.api.acquire('draining');
+  const drainingPort = Number(await draining.call('port', []));
+  const drainingSocket = new WebSocket(`ws://127.0.0.1:${drainingPort}`);
+  await once(drainingSocket, 'open');
+  const disconnectedSocket = once(drainingSocket, 'close');
+  const enteredDrain = once(observer, 'request');
+  await Promise.all([
+    verifyListenerShutdown(second.api, draining, disconnectedSocket, drainingPort),
+    (async () => {
+      const [request, response] = await enteredDrain;
+      try {
+        assert.equal(request.url, '/listener-stop');
+        await disconnectedSocket;
+        const state = await second.api.getState(draining.id);
+        assert.equal(state.generation, draining.generation);
+        assert.equal(state.state, 'stopping');
+        const alive = await fetch(`http://127.0.0.1:${drainingPort}/during-stop`);
+        assert.equal(await alive.text(), 'listening');
+      } finally {
+        response.end('finish closing the listener');
+      }
+    })(),
+  ]);
+  console.log(JSON.stringify({ drainingListener: true, passed: true }));
   await assert.rejects(second.api.acquire('absent'), /Failed to start Node executable/);
   assert.equal((await second.api.getState('absent')).state, 'failed');
   // A failed generation must be reaped before a later acquire starts another.

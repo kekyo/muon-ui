@@ -208,6 +208,26 @@ it('rejects unavailable targets and incomplete toolchains before running the bui
   ).rejects.toThrow(/sudo apt install[\s\S]*pkg-config/);
 });
 
+it('replaces the catalog when rebuilding its only target', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'muon-catalog-rebuild-'));
+  directories.push(root);
+  await createPluginProject({ directory: root, name: 'current', language: 'c' });
+  const configPath = join(root, 'muon-plugin.build.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  const target = 'linux-amd64';
+  await buildPlugin({configPath, target});
+  const source = join(root, config.sources[0]);
+  await writeFile(source, (await readFile(source, 'utf8')).replaceAll('increment', 'advance'));
+  config.functions = ['muon.current.advance'];
+  await writeFile(configPath, JSON.stringify(config));
+  const path = await buildPlugin({configPath, target});
+  expect((await readPluginArtifact(path, [target])).manifest.functions).toEqual(config.functions);
+  await buildPlugin({configPath, target: 'android-arm64-v8a'});
+  config.functions = ['muon.current.changed'];
+  await writeFile(configPath, JSON.stringify(config));
+  await expect(buildPlugin({configPath, target})).rejects.toThrow(/catalog/);
+});
+
 it('uses a custom build with vendor sources without writing into the source tree', async () => {
   const root = await mkdtemp(join(tmpdir(), 'muon-vendor-'));
   directories.push(root);

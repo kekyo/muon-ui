@@ -622,12 +622,67 @@ declare global {
 
   /** Operations specific to the Android WebView backend. */
   interface MuonAndroidApi {
+    /** Runtime permission queries and requests for this application. */
+    readonly permissions: MuonAndroidPermissionsApi;
+    /** USB host attachments and their temporary grants. */
+    readonly usb: MuonAndroidUsbApi;
     /** Control and observe the Android system bars. */
     readonly systemBars: MuonAndroidSystemBarsApi;
     /** Open app-scoped Android system settings. */
     readonly settings: MuonAndroidSettingsApi;
     /** Notification permission operations, present only when enabled and permitted. */
     readonly notifications?: MuonAndroidNotificationsApi;
+  }
+
+  /** Android USB device as observed during this attachment. */
+  interface MuonAndroidUsbDevice {
+    /** Opaque ID that expires when this attachment ends. */
+    readonly connectionId: string;
+    /** USB vendor and product identifiers from the device descriptor. */
+    readonly vendorId: number;
+    /** USB product identifier. */
+    readonly productId: number;
+    /** Manufacturer-provided product name, when readable. */
+    readonly productName: string | null;
+    /** Serial number, available only after permission and when supplied. */
+    readonly serialNumber: string | null;
+    /** USB device class. Composite devices can report zero. */
+    readonly deviceClass: number;
+    /** Classes of the interfaces offered by the attached device. */
+    readonly interfaceClasses: readonly number[];
+    /** Whether the application currently has USB permission for this device. */
+    readonly permitted: boolean;
+  }
+
+  /** Runtime permissions declared by the application manifest. */
+  interface MuonAndroidPermissionsApi {
+    /** Read current grants for the supplied Android permission names.
+     * @param names - Fully qualified names from the application manifest.
+     * @returns A map from each requested name to its current grant.
+     */
+    readonly getState: (
+      names: readonly string[],
+    ) => Promise<Readonly<Record<string, boolean>>>;
+    /** Request runtime grants together from the foreground Activity.
+     * @param names - Fully qualified names from the application manifest.
+     * @returns Current grants after the OS responds. Rejects on interruption.
+     */
+    readonly request: (
+      names: readonly string[],
+    ) => Promise<Readonly<Record<string, boolean>>>;
+  }
+
+  /** Observe USB attachments and explicitly ask the user to grant access. */
+  interface MuonAndroidUsbApi {
+    /** List current devices without starting a foreground service.
+     * @returns One entry per attachment, including devices without permission.
+     */
+    readonly listDevices: () => Promise<readonly MuonAndroidUsbDevice[]>;
+    /** Ask Android to grant the application access to one attachment.
+     * @param connectionId - Opaque ID returned by listDevices.
+     * @returns The grant state. Rejects if the device detached.
+     */
+    readonly requestPermission: (connectionId: string) => Promise<boolean>;
   }
 
   /** System settings screens scoped to this application. */

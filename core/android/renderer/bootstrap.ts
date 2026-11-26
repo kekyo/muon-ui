@@ -37,6 +37,8 @@ const createCapabilityClient = (
       'muon.services': id,
       'muon.android.systemBars': id,
       'muon.android.settings': id,
+      'muon.android.permissions': id,
+      'muon.android.usb': id,
       'muon.android.notifications': id,
       'muon.notifications': id,
     });
@@ -94,6 +96,8 @@ export const bootstrapMuonAndroid = (
     'muon.services': 'services-capability',
     'muon.android.systemBars': 'system-bars-capability',
     'muon.android.settings': 'settings-capability',
+    'muon.android.permissions': 'permissions-capability',
+    'muon.android.usb': 'usb-capability',
     'muon.android.notifications': 'android-notifications-capability',
     'muon.notifications': 'notifications-capability',
   });

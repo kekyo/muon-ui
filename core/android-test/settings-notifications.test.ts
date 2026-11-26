@@ -27,6 +27,8 @@ describe('Android settings and notification permissions', () => {
         'muon.services': 'services-capability',
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings',
+        'muon.android.permissions': 'permissions-capability',
+        'muon.android.usb': 'usb-capability',
         'muon.android.notifications': 'notifications',
         'muon.notifications': 'notifications',
       }
@@ -73,6 +75,8 @@ describe('Android settings and notification permissions', () => {
         'muon.services': 'services-capability',
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings',
+        'muon.android.permissions': 'permissions-capability',
+        'muon.android.usb': 'usb-capability',
         'muon.android.notifications': 'notifications',
         'muon.notifications': 'notifications',
       }
@@ -108,6 +112,8 @@ describe('Android settings and notification permissions', () => {
           'muon.services': 'services-capability',
           'muon.android.systemBars': 'bars',
           'muon.android.settings': 'settings',
+          'muon.android.permissions': 'permissions-capability',
+          'muon.android.usb': 'usb-capability',
           'muon.android.notifications': 'notifications',
           'muon.notifications': 'notifications',
         }

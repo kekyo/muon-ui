@@ -14,6 +14,13 @@ import {
 
 import type { MuonWebViewRpcClient } from './webview-rpc.js';
 import {
+  createMuonAndroidPermissionsApi,
+  createMuonAndroidUsbApi,
+  type MuonAndroidPermissionsApi,
+  type MuonAndroidUsbApi,
+} from './devices-api.js';
+export * from './devices-api.js';
+import {
   createMuonAndroidSystemBarsApi,
   type MuonAndroidSystemBarsApi,
 } from './system-bars-api.js';
@@ -42,6 +49,10 @@ export {
 
 /** Capability ids assigned to Android built-in namespaces. */
 export interface MuonAndroidCapabilityIds {
+  /** Capability for runtime permission queries and requests. */
+  readonly 'muon.android.permissions': string;
+  /** Capability for USB device enumeration and user grants. */
+  readonly 'muon.android.usb': string;
   /** Capability for document-owned service references. */
   readonly 'muon.services': string;
   /** Capability for browser operations. */
@@ -393,6 +404,10 @@ export interface MuonAndroidSimpleApi {
   readonly notifications: MuonNotificationsApi;
   /** Android-specific operations available in this runtime. */
   readonly android: {
+    /** Runtime permissions declared by the application. */
+    readonly permissions: MuonAndroidPermissionsApi;
+    /** USB host attachments and grants. */
+    readonly usb: MuonAndroidUsbApi;
     /** System bar visibility and state. */
     readonly systemBars: MuonAndroidSystemBarsApi;
     /** App-scoped operating-system settings. */
@@ -1150,6 +1165,11 @@ export const createMuonAndroidSimpleApi = (
         )
     ),
     android: Object.freeze({
+      permissions: createMuonAndroidPermissionsApi(
+        client,
+        capabilityIds['muon.android.permissions']
+      ),
+      usb: createMuonAndroidUsbApi(client, capabilityIds['muon.android.usb']),
       settings: createMuonAndroidSettingsApi(
         client,
         capabilityIds['muon.android.settings']

@@ -323,6 +323,13 @@ export const buildAndroidApplication = async (
     );
   }
   const servicesEnabled = input.services.length > 0;
+  const access = input.pluginAccess;
+  const usesUsb = (path: string) => path.startsWith("muon.android.usb.");
+  const usbEnabled =
+    access.enabled &&
+    (access.internalAllow.some(usesUsb) ||
+      (access.mode === "validate" &&
+        access.capabilities.some((entry) => entry.allow.some(usesUsb))));
   await writeFile(
     join(project, "muon-build.json"),
     JSON.stringify(
@@ -372,6 +379,7 @@ export const buildAndroidApplication = async (
         ["serviceCleartext", cleartextHosts.length > 0],
         ["notificationsEnabled", input.notifications.enabled],
         ["servicesEnabled", servicesEnabled],
+        ["usbEnabled", usbEnabled],
         [
           "services",
           input.services.map((service) => ({

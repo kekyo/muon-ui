@@ -52,6 +52,8 @@ if (bridge === undefined) {
     'muon.services': 'services-capability',
     'muon.android.systemBars': 'system-bars-capability',
     'muon.android.settings': 'settings-capability',
+    'muon.android.permissions': 'permissions-capability',
+    'muon.android.usb': 'usb-capability',
     'muon.android.notifications': 'android-notifications-capability',
     'muon.notifications': 'notifications-capability',
   });

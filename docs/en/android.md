@@ -166,7 +166,13 @@ apkanalyzer manifest permissions dist-muon/android/com.example.notes-1-debug.apk
 apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
 ```
 
-Declaring a permission in the manifest does not prompt the user. For example, Muon adds `FOREGROUND_SERVICE_LOCATION` for a location service. The app must also declare and obtain `ACCESS_COARSE_LOCATION` or `ACCESS_FINE_LOCATION`. Starting the service from the background may also require an `ACCESS_BACKGROUND_LOCATION` grant. Muon has no general-purpose JavaScript API for requesting Android runtime permissions. [Location service requirements](https://developer.android.com/develop/background-work/services/fgs/service-types#location) · [Android notification permissions](https://developer.android.com/develop/ui/compose/notifications/notification-permission) · [Network security configuration](https://developer.android.com/privacy-and-security/security-config)
+Declaring a permission in the manifest does not prompt the user. For example, Muon adds `FOREGROUND_SERVICE_LOCATION` for a location service. The app must also declare and obtain `ACCESS_COARSE_LOCATION` or `ACCESS_FINE_LOCATION`. Starting the service from the background may also require an `ACCESS_BACKGROUND_LOCATION` grant. The foreground page can request declared permissions using the methods below. [Location service requirements](https://developer.android.com/develop/background-work/services/fgs/service-types#location) · [Android notification permissions](https://developer.android.com/develop/ui/compose/notifications/notification-permission) · [Network security configuration](https://developer.android.com/privacy-and-security/security-config)
+
+### Android runtime permissions and USB devices
+
+Add the methods used by the page to its list of allowed built-in functions. `muon.android.permissions.getState(names)` reads the current grants for permissions declared in the manifest. `request(names)` prompts from the foreground Activity and returns an object mapping each permission name to a boolean. An interrupted request rejects its promise. [Request runtime permissions](https://developer.android.com/training/permissions/requesting)
+
+USB host applications can enumerate attachments with `muon.android.usb.listDevices()`. For USB video devices, obtain the Android camera grant first, then pass the selected attachment’s `connectionId` to `muon.android.usb.requestPermission(connectionId)`. The ID expires on detach. Android service code can open the granted device in its own process with `MuonUsbDeviceProvider.open(context, connectionId)` and must close the connection after use. Enumeration and permission requests work before a foreground service starts. [Android USB host](https://developer.android.com/develop/connectivity/usb/host)
 
 ### Import with validate mode
 

@@ -13,6 +13,10 @@ import {
 import type { MuonWebViewRpcClient } from '../android/renderer/webview-rpc.js';
 
 const expectedFunctionPaths = [
+  'muon.android.permissions.getState',
+  'muon.android.permissions.request',
+  'muon.android.usb.listDevices',
+  'muon.android.usb.requestPermission',
   'muon.browser.reload',
   'muon.browser.toggleFullscreen',
   'muon.browser.enterFullscreen',
@@ -116,6 +120,8 @@ describe('muon Android API metadata', () => {
       'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
+      'muon.android.permissions': 'permissions-capability',
+      'muon.android.usb': 'usb-capability',
       'muon.android.notifications': 'android-notifications-capability',
       'muon.notifications': 'notifications-capability',
     });
@@ -187,6 +193,8 @@ describe('muon Android API metadata', () => {
       'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
+      'muon.android.permissions': 'permissions-capability',
+      'muon.android.usb': 'usb-capability',
       'muon.android.notifications': 'android-notifications-capability',
       'muon.notifications': 'notifications-capability',
     });
@@ -246,6 +254,8 @@ describe('muon Android API metadata', () => {
       'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
+      'muon.android.permissions': 'permissions-capability',
+      'muon.android.usb': 'usb-capability',
       'muon.android.notifications': 'android-notifications-capability',
       'muon.notifications': 'notifications-capability',
     });
@@ -307,6 +317,8 @@ describe('muon Android API metadata', () => {
         'muon.services': 'services-capability',
         'muon.android.systemBars': 'system-bars-capability',
         'muon.android.settings': 'settings-capability',
+        'muon.android.permissions': 'permissions-capability',
+        'muon.android.usb': 'usb-capability',
         'muon.android.notifications': 'android-notifications-capability',
         'muon.notifications': 'notifications-capability',
       });

@@ -34,6 +34,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+{{if usbEnabled}}
+        <provider android:name="dev.muon.runtime.MuonUsbDeviceProvider"
+            android:authorities="${applicationId}.muon.usb" android:exported="false" />
+{{end}}
 {{if servicesEnabled}}
         <receiver android:name="dev.muon.runtime.MuonServiceBootReceiver"
             android:exported="false" android:process=":muon_services">

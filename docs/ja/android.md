@@ -166,7 +166,13 @@ apkanalyzer manifest permissions dist-muon/android/com.example.notes-1-debug.apk
 apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
 ```
 
-Manifestへの宣言だけでは実行時の許可ダイアログは開きません。例えば位置情報サービスでは、muonが追加する `FOREGROUND_SERVICE_LOCATION` に加えて、アプリ開発者が `ACCESS_COARSE_LOCATION` または `ACCESS_FINE_LOCATION` を宣言し、利用者の許可を得る必要があります。バックグラウンドからの開始には、条件に応じて `ACCESS_BACKGROUND_LOCATION` の許可も必要です。muonの公開JS APIには任意のAndroid権限の許可を求める機能はありません。[位置情報サービスの要件](https://developer.android.com/develop/background-work/services/fgs/service-types#location)・[Androidの通知権限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)・[ネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
+Manifestへの宣言だけでは実行時の許可ダイアログは開きません。例えば位置情報サービスでは、muonが追加する `FOREGROUND_SERVICE_LOCATION` に加えて、アプリ開発者が `ACCESS_COARSE_LOCATION` または `ACCESS_FINE_LOCATION` を宣言し、利用者の許可を得る必要があります。バックグラウンドからの開始には、条件に応じて `ACCESS_BACKGROUND_LOCATION` の許可も必要です。画面からは次の手順で宣言済みの権限を要求できます。[位置情報サービスの要件](https://developer.android.com/develop/background-work/services/fgs/service-types#location)・[Androidの通知権限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)・[ネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
+
+### Androidの実行時権限とUSB機器
+
+操作を許可するページの組み込み関数リストに、使うメソッド名を追加します。`muon.android.permissions.getState(names)` は Manifest に宣言した各権限の現在の許可状態を返します。`request(names)` は画面が前面にある間に利用者へ許可を求め、権限名をキー、許可の有無を値とするオブジェクトを返します。OS が要求を中断した場合は Promise が失敗します。[Android の実行時権限](https://developer.android.com/training/permissions/requesting)
+
+USB ホストを使うアプリでは `muon.android.usb.listDevices()` が接続中の機器を列挙します。USB ビデオ機器はカメラ権限を得た後、利用者が選んだ機器の `connectionId` を `muon.android.usb.requestPermission(connectionId)` に渡します。この ID は取り外すと失効します。Android サービスのコードは `MuonUsbDeviceProvider.open(context, connectionId)` で許可済みの機器を開き、使用後に接続を閉じます。列挙と許可要求には前景サービスの起動は不要です。[Android の USB ホスト](https://developer.android.com/develop/connectivity/usb/host)
 
 ### validateモードでimportする
 

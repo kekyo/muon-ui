@@ -29,6 +29,34 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Verifies settings and permission boundaries without requiring a recent WebView. */
 @RunWith(AndroidJUnit4.class)
 public final class MuonSettingsPermissionServiceTest {
+    @Test public void observesDeclaredGrantsAndCurrentUsbAttachmentsBeforeServiceStartup() throws Exception {
+        try (ActivityScenario<MuonWindowActivity> scenario = ActivityScenario.launch(MuonWindowActivity.class)) {
+            Result granted = new Result(), undeclared = new Result(), listed = new Result(), detached = new Result();
+            scenario.onActivity(activity -> {
+                try (MuonAndroidDeviceService service = new MuonAndroidDeviceService(activity)) {
+                    service.setResumed(true);
+                    service.invoke(1, "muon.android.permissions.request",
+                            new JSONArray().put("[\"android.permission.INTERNET\"]"), new byte[0][], granted);
+                    service.invoke(2, "muon.android.permissions.getState",
+                            new JSONArray().put("[\"android.permission.RECORD_AUDIO\"]"), new byte[0][], undeclared);
+                    service.invoke(3, "muon.android.usb.listDevices", new JSONArray(), new byte[0][], listed);
+                    service.invoke(4, "muon.android.usb.requestPermission",
+                            new JSONArray().put("expired-attachment"), new byte[0][], detached);
+                }
+            });
+            assertTrue(new JSONObject(granted.await()).getBoolean("android.permission.INTERNET"));
+            assertTrue(undeclared.await().contains("not declared"));
+            JSONArray devices = new JSONArray(listed.await());
+            for (int i = 0; i < devices.length(); i++) {
+                JSONObject device = devices.getJSONObject(i);
+                assertFalse(device.getString("connectionId").isEmpty());
+                assertFalse(device.has("fileDescriptor"));
+                assertNotNull(device.getJSONArray("interfaceClasses"));
+            }
+            assertTrue(detached.await().contains("usb_disconnected"));
+        }
+    }
+
     private static final class Result implements MuonAndroidPlatformService.Completion {
         final LinkedBlockingQueue<String> values = new LinkedBlockingQueue<>();
         @Override public void completeVoid() { values.add("void"); }

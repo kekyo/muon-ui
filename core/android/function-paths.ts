@@ -92,6 +92,10 @@ export const notificationFunctionNames = [
 
 /** Fully-qualified built-in function paths implemented by the Android backend. */
 export const muonAndroidBuiltinFunctionPaths = [
+  'muon.android.permissions.getState',
+  'muon.android.permissions.request',
+  'muon.android.usb.listDevices',
+  'muon.android.usb.requestPermission',
   ...browserFunctionNames.map((name) => `muon.browser.${name}` as const),
   ...environmentFunctionNames.map(
     (name) => `muon.environments.${name}` as const

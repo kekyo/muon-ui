@@ -175,6 +175,8 @@ Manifestへの宣言だけでは実行時の許可ダイアログは開きませ
 
 USB ホストを使うアプリでは `muon.android.usb.listDevices()` が接続中の機器を列挙します。USB ビデオ機器はカメラ権限を得た後、利用者が選んだ機器の `connectionId` を `muon.android.usb.requestPermission(connectionId)` に渡します。この ID は取り外すと失効します。Android サービスのコードは `MuonUsbDeviceProvider.open(context, connectionId)` で許可済みの機器を開き、使用後に接続を閉じます。列挙と許可要求には前景サービスの起動は不要です。[Android の USB ホスト](https://developer.android.com/develop/connectivity/usb/host)
 
+Java の Android 拡張は、`MuonUsbDeviceProvider.observe(context, changed)` で接続・切断の通知を受け取れます。通知を受けたら `MuonUsbDeviceProvider.list(context)` で現在の機器一覧を読みます。JSON に含まれる接続 ID は画面から取得したものと共通です。通知は拡張を登録したプロセスのメインスレッドに届きます。監視を終えるときは戻り値の `close()` を呼びます。[Android の USB ホスト](https://developer.android.com/develop/connectivity/usb/host)
+
 ### validateモードでimportする
 
 Vite設定の`pluginAccess: false`を外し、`muon.json`に許可するimport元と関数を指定します。

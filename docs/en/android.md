@@ -175,6 +175,8 @@ Add the methods used by the page to its list of allowed built-in functions. `muo
 
 USB host applications can enumerate attachments with `muon.android.usb.listDevices()`. For USB video devices, obtain the Android camera grant first, then pass the selected attachment’s `connectionId` to `muon.android.usb.requestPermission(connectionId)`. The ID expires on detach. Android service code can open the granted device in its own process with `MuonUsbDeviceProvider.open(context, connectionId)` and must close the connection after use. Enumeration and permission requests work before a foreground service starts. [Android USB host](https://developer.android.com/develop/connectivity/usb/host)
 
+An Android extension can call `MuonUsbDeviceProvider.observe(context, changed)` to receive attachment and removal notifications on its process's main looper. Read the current JSON snapshot with `MuonUsbDeviceProvider.list(context)` after a notification. Its attachment IDs match those available to the page. Call `close()` on the returned registration when observation ends. [Android USB host](https://developer.android.com/develop/connectivity/usb/host)
+
 ### Import with validate mode
 
 Remove `pluginAccess: false` from Vite and configure allowed importers and functions in `muon.json`:

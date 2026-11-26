@@ -12,12 +12,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.database.Cursor;
+import android.database.ContentObserver;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -31,6 +34,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Application-private registry of USB attachment IDs shared between Android processes. */
 public final class MuonUsbDeviceProvider extends ContentProvider {
@@ -43,8 +47,45 @@ public final class MuonUsbDeviceProvider extends ContentProvider {
         return Uri.parse("content://" + context.getPackageName() + ".muon.usb");
     }
 
-    static String list(Context context) {
+    /** List current attachments in the same JSON format as the Web USB enumeration API.
+     * @param context Application or service context in either runtime process.
+     * @return JSON array containing attachment IDs, product information, interfaces and current grants.
+     */
+    @NonNull public static String list(@NonNull Context context) {
         return context.getContentResolver().call(uri(context), "list", null, null).getString("devices");
+    }
+
+    /** A single registration for updates to the application's USB attachment registry. */
+    public interface Subscription extends AutoCloseable {
+        /** Stop delivering callbacks. Repeated calls are safe. */
+        @Override void close();
+    }
+
+    /** Observe USB attachments and removals across the application's Android processes.
+     * @param context Application or service context.
+     * @param changed Called on the main looper after an attachment change. Read list() for the current snapshot.
+     * @return Registration to close when the extension has no more USB consumers.
+     */
+    @NonNull public static Subscription observe(@NonNull Context context, @NonNull Runnable changed) {
+        Context app = context.getApplicationContext();
+        AtomicBoolean closed = new AtomicBoolean();
+        ContentObserver observer = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            @Override public void onChange(boolean selfChange) {
+                if (!closed.get()) changed.run();
+            }
+        };
+        app.getContentResolver().registerContentObserver(uri(app), false, observer);
+        Subscription subscription = () -> {
+            if (closed.compareAndSet(false, true)) app.getContentResolver().unregisterContentObserver(observer);
+        };
+        try {
+            // Initialize the authoritative receiver even if the extension is the first user of USB.
+            list(app);
+            return subscription;
+        } catch (RuntimeException error) {
+            subscription.close();
+            throw error;
+        }
     }
 
     static UsbDevice resolve(Context context, String id) {
@@ -77,16 +118,19 @@ public final class MuonUsbDeviceProvider extends ContentProvider {
         }
     }
 
-    private void observe(Context context) {
+    private void observeAttachments(Context context) {
         if (observing) return;
+        IntentFilter changes = new IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED);
+        changes.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         ContextCompat.registerReceiver(context, new BroadcastReceiver() {
             @Override public void onReceive(Context receiverContext, Intent intent) {
                 UsbDevice device = IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_DEVICE, UsbDevice.class);
                 if (device != null && UsbManager.ACTION_USB_DEVICE_DETACHED.equals(intent.getAction())) {
                     synchronized (MuonUsbDeviceProvider.this) { idsByName.remove(device.getDeviceName()); }
                 }
+                receiverContext.getContentResolver().notifyChange(uri(receiverContext), null, 0);
             }
-        }, new IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED), ContextCompat.RECEIVER_NOT_EXPORTED);
+        }, changes, ContextCompat.RECEIVER_NOT_EXPORTED);
         observing = true;
     }
 
@@ -94,7 +138,7 @@ public final class MuonUsbDeviceProvider extends ContentProvider {
         if (Binder.getCallingUid() != Process.myUid()) throw new SecurityException("USB registry is private");
         Context context = getContext();
         UsbManager manager = context.getSystemService(UsbManager.class);
-        observe(context);
+        observeAttachments(context);
         Map<String, UsbDevice> attached = manager == null ? new TreeMap<>() : new TreeMap<>(manager.getDeviceList());
         idsByName.keySet().retainAll(attached.keySet());
         Bundle result = new Bundle();

@@ -164,6 +164,7 @@ describe('durable notification event facade', () => {
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings',
         'muon.android.permissions': 'permissions-capability',
+        'muon.android.accelerometer': 'accelerometer-capability',
         'muon.android.usb': 'usb-capability',
         'muon.android.notifications': 'android',
         'muon.notifications': 'notifications',

@@ -620,10 +620,67 @@ declare global {
     readonly channels: MuonNotificationSupport;
   }
 
+  /** Latest gravity-inclusive reading in the device's natural orientation. */
+  interface MuonAndroidAccelerationSample {
+    /** Measurement time in microseconds since boot, including sleep. */
+    readonly elapsedUs: number;
+    /** Native callback time on the same clock, in microseconds. */
+    readonly receivedElapsedUs: number;
+    /** Acceleration to the right in metres per second squared. */
+    readonly x: number;
+    /** Acceleration toward the top in metres per second squared. */
+    readonly y: number;
+    /** Acceleration out of the screen in metres per second squared. */
+    readonly z: number;
+    /** Android sensor accuracy indicator. */
+    readonly accuracy: number;
+  }
+
+  /** Current ownership, sampling state and most recent foreground measurement. */
+  interface MuonAndroidAccelerationSnapshot {
+    /** Monotonically increasing change number, scoped to this Activity. */
+    readonly revision: number;
+    /** A requested and suspended sensor resumes when the Activity returns. */
+    readonly status: {
+      /** Current registration state. */
+      readonly state: 'stopped' | 'suspended' | 'active' | 'unavailable' | 'failed';
+      /** Stable failure code when acquisition cannot proceed. */
+      readonly error: string | null;
+      /** Requested sampling interval in microseconds. */
+      readonly intervalUs: number;
+    };
+    /** Latest sample since the last state transition, or null before the first reading. */
+    readonly sample: MuonAndroidAccelerationSample | null;
+  }
+
+  /** Page-owned foreground access to the device accelerometer. */
+  interface MuonAndroidAccelerometerApi {
+    /** Read current ownership without registering a listener.
+     * @returns The latest snapshot.
+     */
+    readonly getState: () => Promise<MuonAndroidAccelerationSnapshot>;
+    /** Request readings at approximately 10 Hz while the Activity is resumed.
+     * @returns The resulting state. Repeated requests share one registration.
+     */
+    readonly start: () => Promise<MuonAndroidAccelerationSnapshot>;
+    /** Release this document's registration, including its request to resume later.
+     * @returns The resulting snapshot.
+     */
+    readonly stop: () => Promise<MuonAndroidAccelerationSnapshot>;
+    /** Wait for the next state transition or reading. A slow reader receives the latest snapshot.
+     * @param revision - Last revision observed by this document.
+     * @param options - Optional cancellation of this wait.
+     * @returns The latest snapshot after the supplied revision.
+     */
+    readonly waitForChange: (revision: number, options?: { signal?: AbortSignal }) => Promise<MuonAndroidAccelerationSnapshot>;
+  }
+
   /** Operations specific to the Android WebView backend. */
   interface MuonAndroidApi {
     /** Runtime permission queries and requests for this application. */
     readonly permissions: MuonAndroidPermissionsApi;
+    /** Page-owned foreground measurements. */
+    readonly accelerometer: MuonAndroidAccelerometerApi;
     /** USB host attachments and their temporary grants. */
     readonly usb: MuonAndroidUsbApi;
     /** Control and observe the Android system bars. */

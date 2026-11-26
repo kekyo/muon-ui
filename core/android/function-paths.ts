@@ -92,6 +92,10 @@ export const notificationFunctionNames = [
 
 /** Fully-qualified built-in function paths implemented by the Android backend. */
 export const muonAndroidBuiltinFunctionPaths = [
+  'muon.android.accelerometer.getState',
+  'muon.android.accelerometer.start',
+  'muon.android.accelerometer.stop',
+  'muon.android.accelerometer.waitForChange',
   'muon.android.permissions.getState',
   'muon.android.permissions.request',
   'muon.android.usb.listDevices',

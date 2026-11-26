@@ -38,6 +38,17 @@ declare module "muon:android.permissions" {
   export const request: MuonAndroidPermissionsApi["request"];
 }
 
+declare module "muon:android.accelerometer" {
+  /** Read the current foreground acquisition state. */
+  export const getState: MuonAndroidAccelerometerApi["getState"];
+  /** Request gravity-inclusive measurements. */
+  export const start: MuonAndroidAccelerometerApi["start"];
+  /** Release the current document’s sensor registration. */
+  export const stop: MuonAndroidAccelerometerApi["stop"];
+  /** Wait for the next acquisition change or sample. */
+  export const waitForChange: MuonAndroidAccelerometerApi["waitForChange"];
+}
+
 declare module "muon:android.usb" {
   /** Enumerate attached devices without starting a foreground service. */
   export const listDevices: MuonAndroidUsbApi["listDevices"];

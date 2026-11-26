@@ -375,8 +375,11 @@ const buildArtifact = async (
     )(manifestPath, Object.keys(previous.targets) as MuonPluginTarget[]);
     if (
       artifact.manifest.name !== config.name ||
-      (Object.keys(artifact.targets).some((target) => target !== options.target) &&
-       JSON.stringify(artifact.manifest.functions) !== JSON.stringify(config.functions))
+      (Object.keys(artifact.targets).some(
+        (target) => target !== options.target
+      ) &&
+        JSON.stringify(artifact.manifest.functions) !==
+          JSON.stringify(config.functions))
     )
       throw new Error(
         'Existing plugin output has a different name or catalog; select a fresh output directory.'

@@ -89,6 +89,12 @@ export interface ServiceInvocationContext {
 export interface ServiceStartContext<
   Definition extends ServiceInterface,
 > extends ServiceRuntimeInput {
+  /** Keep accepted work running after the last page releases its reference.
+   * @returns An idempotent release function for this job.
+   * @remarks Available on supporting QuickJS hosts. Call after startup and release
+   * when the job finishes. The grant applies only to this generation.
+   */
+  readonly retainWork?: () => () => void;
   /** Local listeners and connections owned by this generation. */ readonly server: ServiceServer;
   /** Outbound HTTP and HTTPS with per-origin permissions. */ readonly http: ServiceHttpClient;
   /** Permission-checked files, private to the service unless explicitly shared. */ readonly fs: ServiceFileSystem;
@@ -143,6 +149,10 @@ export interface ServiceDefinition<Definition extends ServiceInterface> {
 
 /** Environment-specific delivery; all values here use the shared JSON codec. */
 export interface ServiceRuntimeBridge {
+  /** Change transient work demand for this generation.
+   * @param active - Whether a job still needs the runtime.
+   */
+  readonly setWorkActive?: (active: boolean) => void;
   /** Performs permission-checked I/O for this generation. */ readonly io?: ServiceIoBridge;
   /**
    * Calls a page function within its pending parent invocation.
@@ -353,6 +363,20 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
   let instance: ServiceImplementation<Definition> | undefined;
   let startup: Promise<void> | undefined, shutdown: Promise<void> | undefined;
   const calls = new Map<string, Invocation>();
+  let activeJobs = 0;
+  const setWorkActive = bridge.setWorkActive;
+  const retainWork = () => {
+    if (phase !== 'running' || !setWorkActive)
+      throw failure('unavailable', 'The service cannot accept background work');
+    if (activeJobs === 0) setWorkActive(true);
+    activeJobs++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (--activeJobs === 0 && phase === 'running') setWorkActive(false);
+    };
+  };
   const operations = new Set<{ cancel: () => void; done: Promise<void> }>();
   let cleanupSignal: ServiceCancellationSignal | undefined;
   const io: ServiceIoBridge = async (name, parameters, body, signal) => {
@@ -430,6 +454,7 @@ export const createServiceRuntime = <const Definition extends ServiceInterface>(
           dataDirectory: text(input.dataDirectory),
           config,
           signal: source.signal,
+          ...(setWorkActive ? { retainWork } : {}),
           server: createServiceServer(io, source.signal),
           http: createServiceHttp(io, source.signal),
           fs: createServiceFiles(io, source.signal),

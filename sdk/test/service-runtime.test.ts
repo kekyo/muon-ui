@@ -13,6 +13,39 @@ const deferred = <T>() => {
   });
   return { promise, resolve };
 };
+
+it('retains the generation until the last independent job releases it', async () => {
+  let retain: (() => () => void) | undefined;
+  const active: boolean[] = [];
+  const runtime = createServiceRuntime(
+    defineService({
+      interface: defineServiceInterface({
+        schemaVersion: 1,
+        methods: {},
+        events: {},
+      }),
+      start: (context) => {
+        retain = context.retainWork;
+        return { methods: {}, stop: async () => {} };
+      },
+    }),
+    {
+      callback: unavailable,
+      emit: () => {},
+      setWorkActive: (value) => active.push(value),
+    }
+  );
+  await runtime.start(input);
+  expect(retain).toBeTypeOf('function');
+  const recording = retain!(),
+    preview = retain!();
+  recording();
+  recording();
+  expect(active).toEqual([true]);
+  preview();
+  expect(active).toEqual([true, false]);
+  await runtime.stop({ reason: 'reference-released' });
+});
 const definition = defineServiceInterface({
   schemaVersion: 1,
   methods: {

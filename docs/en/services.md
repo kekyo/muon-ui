@@ -238,7 +238,9 @@ With C ABI v3, start the same operations through `muon_service_context.io->reque
 
 ## References and autostart
 
-A service is needed while a page reference or a host resident reference exists. The host holds at most one resident reference per service.
+A page reference keeps the service running. When autostart is enabled, the host also holds one resident reference per service.
+
+When a QuickJS service accepts work that must continue after the page closes, call `const release = context.retainWork!()`. Call `release()` when that job completes or fails. Each job has its own release function. The last release lets the host stop the service once its other references are gone. A job retains only the current generation. Check `context.retainWork` for host support.
 
 | Operation | Effect |
 | --- | --- |

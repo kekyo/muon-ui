@@ -28,6 +28,7 @@ struct MuonServiceEntry {
   uint64_t generation = 0;
   uint64_t revision = 0;
   bool resident = false;
+  bool work_active = false;
   muon_service_start_reason start_reason = MUON_SERVICE_START_ACQUIRE;
   std::optional<muon_service_start_reason> next_reason;
   std::optional<MuonServiceStopCause> stop;
@@ -77,7 +78,7 @@ static void Changed(MuonServiceLifecycleImpl& impl,
 }
 
 static bool HasDemand(const MuonServiceEntry& entry) {
-  return entry.resident || !entry.references.empty();
+  return entry.resident || entry.work_active || !entry.references.empty();
 }
 
 static void StartIfNeeded(MuonServiceLifecycleImpl& impl,
@@ -314,6 +315,16 @@ void MuonServiceLifecycle::CompleteStart(const std::string& service_id,
   StopIfUnused(*impl_, entry);
 }
 
+bool MuonServiceLifecycle::SetWorkActive(const std::string& service_id, uint64_t generation, bool active) {
+  const auto found = impl_->services.find(service_id);
+  if (impl_->closing || found == impl_->services.end()) return false;
+  auto& entry = found->second;
+  if (entry.state != MuonServiceState::Running || entry.generation != generation || entry.stop) return false;
+  entry.work_active = active;
+  if (!active) StopIfUnused(*impl_, entry);
+  return true;
+}
+
 void MuonServiceLifecycle::CompleteStop(const std::string& service_id,
                                         uint64_t generation) {
   const auto found = impl_->services.find(service_id);
@@ -322,6 +333,7 @@ void MuonServiceLifecycle::CompleteStop(const std::string& service_id,
   if (entry.generation != generation || entry.state != MuonServiceState::Stopping) {
     return;
   }
+  entry.work_active = false;
   if (!entry.forced_stop_reason.empty()) {
     entry.state = MuonServiceState::Failed;
     entry.error = entry.forced_stop_reason;
@@ -370,6 +382,7 @@ void MuonServiceLifecycle::RuntimeExited(const std::string& service_id,
   if (entry.generation != generation || entry.state == MuonServiceState::Stopped ||
       entry.state == MuonServiceState::Failed) return;
   const auto was_stopping = entry.state == MuonServiceState::Stopping;
+  entry.work_active = false;
   entry.state = MuonServiceState::Failed;
   entry.error = error.empty() ? "service runtime exited" : error;
   RemoveReferences(*impl_, entry, false, entry.error);
@@ -426,6 +439,7 @@ void MuonServiceLifecycle::Shutdown(const std::string& reason, MuonServiceStopCa
   const auto diagnostic = reason.empty() ? "service host is shutting down" : reason;
   for (auto& [id, entry] : impl_->services) {
     entry.resident = false;
+    entry.work_active = false;
     if (!entry.stop) {
       entry.stop = cause;
       if (entry.state == MuonServiceState::Starting)

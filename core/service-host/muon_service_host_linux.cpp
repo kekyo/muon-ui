@@ -222,6 +222,9 @@ class ServiceProcess final {
               std::function<void()> wake, std::function<void(const std::string&)> fault) {
             return plugin_startup_ ? plugin_startup_->Attach(spec.id, generation, engine, std::move(wake), std::move(fault))
                                    : MuonQuickJsServiceExtension{};
+          },
+          [this](const std::string& id, uint64_t generation, bool active) {
+            return controller_->SetWorkActive(id, generation, active);
           }};
       native_ = std::make_unique<MuonNativeServiceHost>(MuonNativeServicePlatform{
           LoadMuonNativeServiceFactory, post,

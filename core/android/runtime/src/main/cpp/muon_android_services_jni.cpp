@@ -246,6 +246,9 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
         return state->plugin_startup
             ? state->plugin_startup->Attach(spec.id, generation, engine, std::move(wake), std::move(fault))
             : MuonQuickJsServiceExtension{};
+      },
+      [state](const std::string& id, uint64_t generation, bool active) {
+        return state->controller->SetWorkActive(id, generation, active);
       }});
   std::vector<MuonServiceDefinition> definitions;
   std::vector<MuonServicePluginDefinition> plugin_definitions;

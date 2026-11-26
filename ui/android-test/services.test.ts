@@ -12,7 +12,21 @@ import { resolveMuonServices } from "../common/service-config.ts";
 import {
   resolveAndroidServices,
   getAndroidServicePermissions,
+  getAndroidServiceNetwork,
 } from "../android/services.ts";
+
+it("allows the loopback listener when no outbound HTTP origins were granted", () => {
+  expect(
+    getAndroidServiceNetwork([{ io: { server: { listen: true } } }]),
+  ).toEqual({
+    internet: true,
+    cleartextHosts: ["127.0.0.1"],
+  });
+  expect(getAndroidServiceNetwork([])).toEqual({
+    internet: false,
+    cleartextHosts: [],
+  });
+});
 
 let root: string;
 let manifest: string;

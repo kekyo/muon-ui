@@ -34,6 +34,7 @@ import type {
 import type { MuonNotificationConfig } from "../common/notification-config.js";
 import {
   getAndroidServicePlugins,
+  getAndroidServiceNetwork,
   type MuonAndroidPackagedService,
 } from "./services.ts";
 
@@ -368,22 +369,9 @@ export const buildAndroidApplication = async (
       2,
     ),
   );
-  const origins = input.services.flatMap(
-    (service) => service.io?.http?.origins ?? [],
-  );
-  const cleartextHosts = [
-    ...new Set(
-      origins
-        .filter((origin) => origin.startsWith("http://"))
-        .map((origin) => new URL(origin).hostname),
-    ),
-  ];
+  const { internet, cleartextHosts } = getAndroidServiceNetwork(input.services);
   const permissions = new Set(input.permissions);
-  if (
-    origins.length ||
-    input.services.some((service) => service.io?.server?.listen)
-  )
-    permissions.add("android.permission.INTERNET");
+  if (internet) permissions.add("android.permission.INTERNET");
   await writeFile(
     join(project, "app/src/main/AndroidManifest.xml"),
     await render(

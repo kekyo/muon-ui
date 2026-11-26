@@ -60,6 +60,27 @@ const reserved = new Set([
   "libmuon_android_services.so",
 ]);
 
+/** Resolve manifest network access and exact cleartext hosts from the service I/O grants.
+ * @param services Packaged service policies.
+ * @returns Whether INTERNET is needed and which HTTP hosts may use cleartext.
+ */
+export const getAndroidServiceNetwork = (
+  services: readonly Pick<MuonAndroidPackagedServiceBase, "io">[],
+) => {
+  const origins = services.flatMap(
+    (service) => service.io?.http?.origins ?? [],
+  );
+  const listens = services.some((service) => service.io?.server?.listen);
+  const hosts = origins
+    .filter((origin) => origin.startsWith("http://"))
+    .map((origin) => new URL(origin).hostname);
+  if (listens) hosts.push("127.0.0.1");
+  return {
+    internet: listens || origins.length > 0,
+    cleartextHosts: [...new Set(hosts)],
+  };
+};
+
 /**
  * Resolves verified service artifacts into independently declared Android components.
  * @param definitions - Common service declarations already validated by the SDK.

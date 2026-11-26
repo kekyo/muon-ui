@@ -268,6 +268,16 @@ export const buildMuonAndroidTarget = async (input: {
     return abi;
   });
   if (abis.length === 0) throw new Error("android.abis must not be empty.");
+  const libraries = strings(android.libraries ?? [], "android.libraries").map(
+    (name) => {
+      if (!/\.(jar|aar)$/u.test(name))
+        throw new Error("android.libraries requires JAR or AAR files.");
+      return resolve(
+        options.android?.libraries === undefined ? input.configDirectory : root,
+        name,
+      );
+    },
+  );
   const minSdk = android.minSdk;
   if (
     minSdk !== undefined &&
@@ -461,6 +471,7 @@ export const buildMuonAndroidTarget = async (input: {
     permissions,
     minSdk,
     features,
+    libraries,
     systemBars,
     notifications,
     androidNotifications,

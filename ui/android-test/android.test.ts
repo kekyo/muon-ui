@@ -61,6 +61,24 @@ const project = async (config: unknown): Promise<string> => {
 };
 
 describe("public Android builds", () => {
+  it("packages declared Android libraries for Java classes and manifest components", async () => {
+    const root = await project({
+      android: { libraries: ["camera.aar", "codec.jar"] },
+    });
+    await writeFile(join(root, "camera.aar"), "fixture");
+    await writeFile(join(root, "codec.jar"), "fixture");
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].libraries).toEqual([
+      join(root, "camera.aar"),
+      join(root, "codec.jar"),
+    ]);
+  });
+  it("rejects an Android library with an unsupported file type", async () => {
+    const root = await project({ android: { libraries: ["camera.dex"] } });
+    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
+      /libraries/,
+    );
+  });
   it("builds for the requested minimum API and required or optional hardware", async () => {
     const features = {
       "android.hardware.usb.host": true,

@@ -76,6 +76,8 @@ export interface MuonAndroidOptions {
   minSdk?: number;
   /** Manifest uses-feature names mapped to true for required hardware or false for optional features. */
   features?: Readonly<Record<string, boolean>>;
+  /** Prebuilt JARs and Android library archives supplying classes, resources or manifest components. */
+  libraries?: readonly string[];
   /** PNG launcher icon; relative to the configuration that supplies it. */
   icon?: string;
   /** Android manifest permissions. Runtime permission prompts remain app-specific. */

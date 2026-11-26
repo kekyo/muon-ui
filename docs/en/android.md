@@ -111,6 +111,7 @@ You can also provide Android settings through Vite's `build.android`. Precedence
 | `minSdk` | Lowest Android API level that can install the app. Accepts an integer from the runtime minimum (24 by default) through the target API level. [Android API levels](https://developer.android.com/guide/topics/manifest/uses-sdk-element) |
 | `features` | Maps hardware or software feature names to `true` (required) or `false` (optional). For example, `{"android.hardware.usb.host": true}` requires USB host support. Defaults to an empty map. [Android feature declarations](https://developer.android.com/guide/topics/manifest/uses-feature-element) |
 | `icon` | PNG image path |
+| `libraries` | JAR and AAR paths to include in the APK. Android merges AAR manifests and resources into the app. Supply native libraries as verified plugins or their dependencies. [Android libraries](https://developer.android.com/studio/projects/android-library) |
 | `permissions` | Fully qualified permissions requested by the app. Defaults to an empty array. [Build-time permissions and runtime grants](#build-time-permissions-and-runtime-grants) |
 | `sdkPath` | SDK directory; otherwise detected from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or adb on PATH |
 | `plugins` | Prebuilt plugins described below; empty by default |

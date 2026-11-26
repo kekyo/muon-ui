@@ -24,4 +24,7 @@ android {
         }
     }
 }
-dependencies { implementation "dev.muon:runtime:${muon.runtimeVersion}" }
+dependencies {
+    implementation "dev.muon:runtime:${muon.runtimeVersion}"
+    implementation fileTree(dir: 'libs', include: ['*.aar', '*.jar'])
+}

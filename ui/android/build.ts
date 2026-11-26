@@ -22,6 +22,7 @@ import {
   resolve,
 } from "node:path";
 import { pathToFileURL } from "node:url";
+import AdmZip from "adm-zip";
 import { runScriptOnceToText, type FunCityLogEntry } from "funcity";
 import { runAndroidCommand } from "./command.js";
 import { prepareAndroid } from "./toolchain.js";
@@ -83,6 +84,8 @@ export interface MuonAndroidApplicationInput {
   /** Monotonic Android update number. */ versionCode: number;
   /** User-facing version. */ versionName: string;
   /** Selected runtime ABIs. */ abis: readonly MuonAndroidAbi[];
+  /** Absolute paths to application-owned local Java and Android libraries. */
+  libraries: readonly string[];
   /** Requested installation floor or the packaged runtime default. */ minSdk:
     number | undefined;
   /** Device features explicitly declared required or optional by the application. */ features: Readonly<
@@ -197,6 +200,24 @@ export const buildAndroidApplication = async (
   });
   await chmod(join(project, "gradlew"), 0o755);
   const assets = join(project, "app/src/main/assets");
+  if (input.libraries.length > 0) {
+    const libs = join(project, "app/libs");
+    await mkdir(libs, { recursive: true });
+    for (const [index, path] of input.libraries.entries()) {
+      const bytes = await readFile(path);
+      if (
+        path.endsWith(".aar") &&
+        new AdmZip(bytes)
+          .getEntries()
+          .some((entry) => /^jni\/[^/]+\/[^/]+\.so$/u.test(entry.entryName))
+      ) {
+        throw new Error(
+          `android.libraries: package native binaries as verified plugins or dependencies: ${path}`,
+        );
+      }
+      await writeFile(join(libs, `${index}-${basename(path)}`), bytes);
+    }
+  }
   await mkdir(assets, { recursive: true });
   await cp(input.assetsDirectory, join(assets, input.assetPath), {
     recursive: true,

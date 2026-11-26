@@ -83,6 +83,11 @@ export interface MuonAndroidApplicationInput {
   /** Monotonic Android update number. */ versionCode: number;
   /** User-facing version. */ versionName: string;
   /** Selected runtime ABIs. */ abis: readonly MuonAndroidAbi[];
+  /** Requested installation floor or the packaged runtime default. */ minSdk:
+    number | undefined;
+  /** Device features explicitly declared required or optional by the application. */ features: Readonly<
+    Record<string, boolean>
+  >;
   /** Manifest permissions, already normalized by the public build boundary. */ permissions: readonly string[];
   /** Initial layout and system bar appearance, applied before page startup. */ systemBars: MuonAndroidInitialSystemBars;
   /** Shared notification enablement, separate from runtime permission. */ notifications: MuonNotificationConfig;
@@ -162,6 +167,11 @@ export const buildAndroidApplication = async (
     prepareGradle: false,
   });
   const project = resolve(input.projectDirectory);
+  const minSdk = input.minSdk ?? tools.toolchain.minSdk;
+  if (minSdk < tools.toolchain.minSdk || minSdk > tools.toolchain.targetSdk)
+    throw new Error(
+      `android.minSdk must be between ${tools.toolchain.minSdk} and ${tools.toolchain.targetSdk}.`,
+    );
   const assetRelative = relative(resolve(input.assetsDirectory), project);
   if (
     assetRelative === "" ||
@@ -318,6 +328,7 @@ export const buildAndroidApplication = async (
     JSON.stringify(
       {
         ...tools.toolchain,
+        minSdk,
         applicationId: input.applicationId,
         versionCode: input.versionCode,
         versionName: input.versionName,
@@ -351,6 +362,13 @@ export const buildAndroidApplication = async (
       join(project, "AndroidManifest.xml.fc"),
       new Map<string, unknown>([
         ["permissions", [...permissions].map(xml)],
+        [
+          "features",
+          Object.entries(input.features).map(([name, required]) => ({
+            name: xml(name),
+            required: String(required),
+          })),
+        ],
         ["serviceCleartext", cleartextHosts.length > 0],
         ["notificationsEnabled", input.notifications.enabled],
         ["servicesEnabled", servicesEnabled],

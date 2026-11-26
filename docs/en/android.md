@@ -108,6 +108,8 @@ You can also provide Android settings through Vite's `build.android`. Precedence
 | `versionCode` | Integer from 1 to 2100000000; defaults to 1. Increase for each release |
 | `versionName` | Display version; defaults to `package.json` version |
 | `abis` | Included ABIs; both supported ABIs by default |
+| `minSdk` | Lowest Android API level that can install the app. Accepts an integer from the runtime minimum (24 by default) through the target API level. [Android API levels](https://developer.android.com/guide/topics/manifest/uses-sdk-element) |
+| `features` | Maps hardware or software feature names to `true` (required) or `false` (optional). For example, `{"android.hardware.usb.host": true}` requires USB host support. Defaults to an empty map. [Android feature declarations](https://developer.android.com/guide/topics/manifest/uses-feature-element) |
 | `icon` | PNG image path |
 | `permissions` | Fully qualified permissions requested by the app. Defaults to an empty array. [Build-time permissions and runtime grants](#build-time-permissions-and-runtime-grants) |
 | `sdkPath` | SDK directory; otherwise detected from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or adb on PATH |

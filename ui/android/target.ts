@@ -268,6 +268,26 @@ export const buildMuonAndroidTarget = async (input: {
     return abi;
   });
   if (abis.length === 0) throw new Error("android.abis must not be empty.");
+  const minSdk = android.minSdk;
+  if (
+    minSdk !== undefined &&
+    (typeof minSdk !== "number" || !Number.isSafeInteger(minSdk) || minSdk < 1)
+  )
+    throw new Error("android.minSdk must be a positive integer.");
+  const features = Object.fromEntries(
+    Object.entries(object(android.features, "android.features")).map(
+      ([name, required]) => {
+        if (
+          !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/u.test(name) ||
+          typeof required !== "boolean"
+        )
+          throw new Error(
+            "android.features must map dotted feature names to booleans.",
+          );
+        return [name, required] as const;
+      },
+    ),
+  );
   const catalogs = await readAndroidPluginMetadata(
     android.plugins ?? [],
     abis,
@@ -439,6 +459,8 @@ export const buildMuonAndroidTarget = async (input: {
     ),
     abis,
     permissions,
+    minSdk,
+    features,
     systemBars,
     notifications,
     androidNotifications,

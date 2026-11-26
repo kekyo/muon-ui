@@ -599,6 +599,11 @@ await start();
 await observe("verify", "1.0.0");
 config.android.versionCode = 3;
 config.android.versionName = "1.0.1";
+config.android.minSdk = 33;
+config.android.features = {
+  "android.hardware.touchscreen": true,
+  "android.hardware.usb.host": false,
+};
 await writeFile(join(root, "muon.json"), JSON.stringify(config));
 const update = await muon(["pack", "--target", "android", "--type", "apk"]);
 assert.equal(

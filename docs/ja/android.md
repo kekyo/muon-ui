@@ -108,6 +108,8 @@ npx muon build --target android --assets ./dist
 | `versionCode` | 1～2100000000の整数。既定は1。リリースごとに増やす |
 | `versionName` | 表示バージョン。既定は`package.json`のversion |
 | `abis` | 収録するABI。既定は両対応ABI |
+| `minSdk` | インストールに必要な最小APIレベル。ランタイムの最小API（既定は24）からターゲットAPIまでの整数を指定できる。[AndroidのAPIレベル](https://developer.android.com/guide/topics/manifest/uses-sdk-element) |
+| `features` | 機能名ごとに、必須なら`true`、任意なら`false`を指定する。例えば`{"android.hardware.usb.host": true}`はUSBホストを必須にする。既定は空。[Androidの機能宣言](https://developer.android.com/guide/topics/manifest/uses-feature-element) |
 | `icon` | PNG画像のパス |
 | `permissions` | アプリが明示する権限の完全名の配列。既定は空。[ビルド時に追加される権限と実行時の許可](#ビルド時に追加される権限と実行時の許可) |
 | `sdkPath` | SDKの場所。省略時は`ANDROID_HOME`、`ANDROID_SDK_ROOT`、PATH上のadbから検出 |

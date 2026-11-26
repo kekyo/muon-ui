@@ -3,6 +3,9 @@
 {{for permission permissions}}
     <uses-permission android:name="{{permission}}" />
 {{end}}
+{{for feature features}}
+    <uses-feature android:name="{{feature.name}}" android:required="{{feature.required}}" />
+{{end}}
     <queries>
         <intent>
             <action android:name="android.settings.APPLICATION_DETAILS_SETTINGS" />

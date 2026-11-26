@@ -27,7 +27,19 @@ assert.ok(
 );
 assert.match(badging, /^application-label:'Packaged Muon Notes'$/mu);
 assert.match(badging, /^application-icon-160:'[^']+\.png'$/mu);
-assert.match(badging, /^minSdkVersion:'24'$/mu);
+if (versionCode === "3") {
+  assert.match(badging, /^minSdkVersion:'33'$/mu);
+  assert.match(
+    badging,
+    /^uses-feature: name='android.hardware.touchscreen'$/mu,
+  );
+  assert.match(
+    badging,
+    /^uses-feature-not-required: name='android.hardware.usb.host'$/mu,
+  );
+} else {
+  assert.match(badging, /^minSdkVersion:'24'$/mu);
+}
 assert.match(badging, /^targetSdkVersion:'37'$/mu);
 assert.match(badging, /^native-code: 'arm64-v8a' 'x86_64'$/mu);
 assert.equal(/^application-debuggable$/mu.test(badging), variant === "debug");

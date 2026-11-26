@@ -72,6 +72,10 @@ export interface MuonAndroidOptions {
   versionName?: string;
   /** Native ABIs to package; defaults to both supported ABIs. */
   abis?: readonly MuonAndroidAbi[];
+  /** Minimum Android API allowed to install the app, at least the runtime minimum and at most the target API. */
+  minSdk?: number;
+  /** Manifest uses-feature names mapped to true for required hardware or false for optional features. */
+  features?: Readonly<Record<string, boolean>>;
   /** PNG launcher icon; relative to the configuration that supplies it. */
   icon?: string;
   /** Android manifest permissions. Runtime permission prompts remain app-specific. */

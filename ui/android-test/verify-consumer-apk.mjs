@@ -31,11 +31,11 @@ if (versionCode === "3") {
   assert.match(badging, /^minSdkVersion:'33'$/mu);
   assert.match(
     badging,
-    /^uses-feature: name='android.hardware.touchscreen'$/mu,
+    /^\s*uses-feature: name='android\.hardware\.touchscreen'$/mu,
   );
   assert.match(
     badging,
-    /^uses-feature-not-required: name='android.hardware.usb.host'$/mu,
+    /^\s*uses-feature-not-required: name='android\.hardware\.usb\.host'$/mu,
   );
 } else {
   assert.match(badging, /^minSdkVersion:'24'$/mu);

@@ -18,6 +18,24 @@ import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 public final class MuonHostedPageTest {
+    @Test public void geolocationRequiresAnExplicitLocationPermissionAndTrustedOrigin() throws Exception {
+        JSONObject web = new JSONObject().put("locationPermissions",
+                new JSONArray().put(android.Manifest.permission.ACCESS_COARSE_LOCATION));
+        MuonWebDeployment hosted = new MuonWebDeployment("https://app.example/", web);
+        assertEquals(1, hosted.locationPermissions.length);
+        assertTrue(hosted.trusted("https://app.example"));
+        assertFalse(hosted.trusted("https://location.example"));
+        assertFalse(hosted.localNetworkPermission);
+        assertEquals(0, new MuonWebDeployment("https://app.example/", null).locationPermissions.length);
+        try {
+            new MuonWebDeployment("https://app.example/", new JSONObject()
+                    .put("locationPermissions", new JSONArray().put(android.Manifest.permission.CAMERA)));
+            org.junit.Assert.fail("Camera permission must never answer a geolocation prompt");
+        } catch (org.json.JSONException expected) {
+            assertTrue(expected.getMessage().contains("location"));
+        }
+    }
+
     @Test public void opensTheConfiguredHostedDocument() throws Exception {
         JSONObject config = new JSONObject(MuonAppConfig.readAsset(
                 InstrumentationRegistry.getInstrumentation().getTargetContext(),"muon/config.json"));

@@ -262,6 +262,14 @@ export const buildAndroidApplication = async (
         resourceOrigins: input.web?.resourceOrigins,
         loopbackResourcePaths: input.web?.loopbackResourcePaths ?? [],
         documentStartScript: input.web?.documentStartScript !== undefined,
+        locationPermissions: input.permissions.filter(
+          (p) =>
+            p === "android.permission.ACCESS_COARSE_LOCATION" ||
+            p === "android.permission.ACCESS_FINE_LOCATION",
+        ),
+        localNetworkPermission: input.permissions.includes(
+          "android.permission.ACCESS_LOCAL_NETWORK",
+        ),
       },
       values: input.values,
       systemBars: input.systemBars,

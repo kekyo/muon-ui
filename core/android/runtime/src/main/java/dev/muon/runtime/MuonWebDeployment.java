@@ -22,6 +22,8 @@ final class MuonWebDeployment {
     final String origin;
     final boolean restricted;
     final boolean hasDocumentScript;
+    final String[] locationPermissions;
+    final boolean localNetworkPermission;
     private final Set<String> resources = new HashSet<>();
     private final Set<String> loopbackPaths = new HashSet<>();
 
@@ -31,6 +33,16 @@ final class MuonWebDeployment {
         JSONArray extra = web == null ? null : web.optJSONArray("resourceOrigins");
         restricted = !BUNDLED_ORIGIN.equals(origin) || extra != null;
         hasDocumentScript = web != null && web.optBoolean("documentStartScript");
+        localNetworkPermission = web != null && web.optBoolean("localNetworkPermission");
+        JSONArray location = web == null ? null : web.optJSONArray("locationPermissions");
+        locationPermissions = new String[location == null ? 0 : location.length()];
+        for (int i = 0; i < locationPermissions.length; ++i) {
+            String name = location.getString(i);
+            if (!android.Manifest.permission.ACCESS_COARSE_LOCATION.equals(name)
+                    && !android.Manifest.permission.ACCESS_FINE_LOCATION.equals(name))
+                throw new JSONException("Invalid web location permission");
+            locationPermissions[i] = name;
+        }
         resources.add(origin);
         if (extra != null) {
             for (int i = 0; i < extra.length(); ++i) {

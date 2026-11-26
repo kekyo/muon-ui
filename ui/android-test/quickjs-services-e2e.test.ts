@@ -64,6 +64,7 @@ export default defineService({
   interface: defineServiceInterface({schemaVersion:1, methods:{
     echo:{parameters:['string'],returns:'string',errors:[]},
     echoBytes:{parameters:['bytes'],returns:'bytes',errors:[]},
+    foreground:{parameters:[{array:'string'}],returns:'void',errors:[]},
     info:{parameters:[],returns:'string',errors:[]}
   },events:{}}),
   start: context => {
@@ -77,6 +78,7 @@ export default defineService({
     return {methods:{
       echo:(_call,value)=>value,
       echoBytes:(_call,value)=>value,
+      foreground:async(_call,types)=>await context.android.setForegroundServiceTypes(types as ('specialUse'|'microphone')[]),
       info:()=>JSON.stringify({id:context.id,generation:context.generation,label:context.config.label,count})
     },stop:async()=>{clearTimeout(timer);await new Promise<void>(done=>setTimeout(done,1));}};
   }
@@ -180,7 +182,10 @@ export default defineService({
             autostart: true,
             config: { label: "日本語😀", nonce },
             android: {
-              foregroundServiceType: "specialUse",
+              foregroundServiceType: native
+                ? "specialUse"
+                : "specialUse|microphone",
+              ...(native ? {} : { foregroundMode: "on-demand" }),
               specialUseSubtype: "Background service test",
               notification: {
                 channelId: "worker",
@@ -312,6 +317,27 @@ export default defineService({
           `globalThis.service=await muon.services.acquire('worker.v1');return await service.call('echo',[${JSON.stringify(native ? "APK日本語😀" : "APK\0日本語😀")}]);`,
         ),
       ).toBe(native ? "APK日本語😀" : "APK\0日本語😀");
+      if (!native) {
+        const foreground = async () =>
+          (await adb("shell", "dumpsys", "activity", "services", app)).includes(
+            "isForeground=true",
+          );
+        expect(await foreground()).toBe(false);
+        await evaluate(
+          `await service.call('foreground',[['specialUse']]);return true;`,
+        );
+        expect(await foreground()).toBe(true);
+        const denied = await evaluate(
+          `try{await service.call('foreground',[['specialUse','microphone']]);return 'accepted'}catch(e){return e.code}`,
+        );
+        expect(denied).toBe("permission-denied");
+        expect(await foreground()).toBe(true);
+        await evaluate(`await service.call('foreground',[[]]);return true;`);
+        expect(await foreground()).toBe(false);
+        await evaluate(
+          `await service.call('foreground',[['specialUse']]);return true;`,
+        );
+      }
       if (native) {
         expect(
           await evaluate(

@@ -29,6 +29,7 @@ int main() {
     return result;
   };
   auto initial = request({"fs.read", R"({"area":"assets","path":"initial"})", {}});
+  assert(request({"android.setForegroundServiceTypes", R"({"types":["camera"]})", {}}).code == "permission-denied");
   assert(initial.code.empty() && (initial.body == std::vector<uint8_t>{0, 255}));
   assert(request({"fs.write", R"({"area":"assets","path":"initial"})", {5}}).code == "permission-denied");
   assert(request({"fs.mkdir", R"({"area":"data","path":"nested"})", {}}).code.empty());
@@ -46,5 +47,27 @@ int main() {
   bool drained = false;
   scope.Close([&] { drained = true; });
   assert(drained && request({"fs.write", file, {1}}).code == "cancelled");
+  MuonServiceIoSettings android;
+  std::vector<std::string> applied;
+  android.set_foreground_types = [&](const std::string& parameters) {
+    applied.push_back(parameters);
+    return MuonServiceIoReply{};
+  };
+  MuonServiceIo foreground({}, android, post);
+  MuonServiceIoReply result;
+  const auto apply = [&](const std::string& parameters) {
+    return foreground.Run({"android.setForegroundServiceTypes", parameters, {}},
+        [&](MuonServiceIoReply reply) { result = std::move(reply); });
+  };
+  apply(R"({"types":["connectedDevice"]})");
+  pump();
+  assert(result.code.empty() && applied.size() == 1);
+  apply(R"({"types":[]})")();
+  pump();
+  assert(result.code == "cancelled" && applied.size() == 1);
+  foreground.Close([] {});
+  apply(R"({"types":["camera"]})");
+  pump();
+  assert(result.code == "cancelled" && applied.size() == 1);
   std::cout << "Generation-scoped service files, assets, cancellation, and atomic replacement passed\n";
 }

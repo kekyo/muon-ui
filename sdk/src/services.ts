@@ -66,6 +66,8 @@ export type {
 } from './service-connection.ts';
 export { createServiceRuntime, defineService } from './service-runtime.ts';
 export type {
+  AndroidForegroundServiceType,
+  ServiceAndroid,
   ServiceDefinition,
   ServiceImplementation,
   ServiceInvocationContext,

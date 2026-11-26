@@ -73,6 +73,53 @@ const unavailable = async (): Promise<ServiceRuntimeResult> => {
   throw new Error('Unexpected callback');
 };
 
+it('requests the exact Android foreground types and preserves platform refusals', async () => {
+  const io = vi.fn(async () => ({ metadata: null, body: new Uint8Array() }));
+  let change!: (
+    types: readonly ('camera' | 'connectedDevice')[]
+  ) => Promise<void>;
+  const runtime = createServiceRuntime(
+    defineService({
+      interface: defineServiceInterface({
+        schemaVersion: 1,
+        methods: {},
+        events: {},
+      }),
+      start: (context) => {
+        change = context.android.setForegroundServiceTypes;
+        return { methods: {}, stop: async () => {} };
+      },
+    }),
+    { io, callback: unavailable, emit: () => {} }
+  );
+  await runtime.start(input);
+  expect(io).not.toHaveBeenCalled();
+  await change(['connectedDevice']);
+  expect(io).toHaveBeenLastCalledWith(
+    'android.setForegroundServiceTypes',
+    { types: ['connectedDevice'] },
+    new Uint8Array(),
+    expect.anything()
+  );
+  io.mockRejectedValueOnce(
+    Object.assign(new Error('Camera permission required'), {
+      code: 'permission-denied',
+    })
+  );
+  await expect(change(['connectedDevice', 'camera'])).rejects.toMatchObject({
+    code: 'permission-denied',
+  });
+  await change([]);
+  expect(io).toHaveBeenLastCalledWith(
+    'android.setForegroundServiceTypes',
+    { types: [] },
+    new Uint8Array(),
+    expect.anything()
+  );
+  await runtime.stop({ reason: 'reference-released' });
+  await expect(change(['camera'])).rejects.toMatchObject({ code: 'cancelled' });
+});
+
 it('delivers the generation start reason and independent cleanup signal when shutdown races startup', async () => {
   const entered = deferred<void>();
   const observed: unknown[] = [];

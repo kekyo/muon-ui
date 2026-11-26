@@ -104,6 +104,35 @@ it("packages one factory as separate logical Android components for both ABIs", 
   ]);
 });
 
+it("packages on-demand promotion with every declared type and rejects unknown foreground modes", async () => {
+  const worker = {
+    runtime: "native",
+    artifact: manifest,
+    android: {
+      foregroundServiceType: "camera|microphone",
+      foregroundMode: "on-demand",
+      notification: android.notification,
+    },
+  };
+  const targets = ["android-arm64-v8a"] as const;
+  const services = await resolveAndroidServices(
+    await resolveMuonServices({ worker }, root, targets),
+    ["arm64-v8a"],
+    [],
+  );
+  expect(services[0]!.android.foregroundMode).toBe("on-demand");
+  expect(getAndroidServicePermissions(services)).toEqual(
+    expect.arrayContaining([
+      "android.permission.FOREGROUND_SERVICE_CAMERA",
+      "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+    ]),
+  );
+  worker.android.foregroundMode = "unrecognized";
+  await expect(resolveMuonServices({ worker }, root, targets)).rejects.toThrow(
+    "foregroundMode",
+  );
+});
+
 it("does not add the permission of another foreground type to a short service", async () => {
   const definitions = await resolveMuonServices(
     {

@@ -9,6 +9,8 @@ package dev.muon.runtime;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.ServiceConnection;
 import android.content.IntentFilter;
 import androidx.core.content.ContextCompat;
 import android.content.Intent;
@@ -77,6 +79,7 @@ final class MuonServiceProcess {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Map<String, JSONObject> definitions = new TreeMap<>();
     private final Map<String, MuonNativeService> components = new HashMap<>();
+    private final Map<String, GenerationBinding> bindings = new HashMap<>();
     private final Map<IBinder, Client> clients = new HashMap<>();
     private final Map<String, Client> owners = new HashMap<>();
     private final Messenger messenger = new Messenger(new Handler(Looper.getMainLooper(), this::receive));
@@ -104,6 +107,25 @@ final class MuonServiceProcess {
         SourceStart(long generation) {
             this.generation = generation;
             deadline = SystemClock.elapsedRealtime() + 10000;
+        }
+    }
+
+    /** Holds an on-demand component across promotion, demotion and page replacement. */
+    private final class GenerationBinding implements ServiceConnection {
+        final String id;
+        final long generation;
+        GenerationBinding(String id, long generation) { this.id = id; this.generation = generation; }
+        @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+            if (bindings.get(id) == this)
+                ((MuonNativeService.LocalBinder) binder).component().startBound(MuonServiceProcess.this, generation);
+        }
+        @Override public void onNullBinding(ComponentName name) { lost(); }
+        @Override public void onBindingDied(ComponentName name) { lost(); }
+        @Override public void onServiceDisconnected(ComponentName name) { lost(); }
+        private void lost() {
+            if (bindings.get(id) != this) return;
+            String reason = "Android disconnected the service component";
+            if (!nativeStartFailed(nativeHandle, id, generation, reason)) runtimeStop(id, generation, reason, false);
         }
     }
 
@@ -507,7 +529,8 @@ final class MuonServiceProcess {
         long attemptEpoch = boot || retry ? resumeEpoch : -1;
         try {
             JSONObject options = definition(id).getJSONObject("android");
-            if (boot) {
+            boolean onDemand = "on-demand".equals(options.optString("foregroundMode"));
+            if (boot && !onDemand) {
                 String type = restrictedBootType(options.getString("foregroundServiceType"));
                 if (type != null) {
                     deferStart(id, generation, attemptEpoch, "BOOT_COMPLETED cannot start foreground service type " + type);
@@ -526,7 +549,12 @@ final class MuonServiceProcess {
             String component = options.getString("component");
             Intent intent = new Intent().setClassName(context, component)
                     .putExtra("generation", generation).putExtra("bootAttemptEpoch", attemptEpoch);
-            if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
+            if (onDemand) {
+                GenerationBinding binding = new GenerationBinding(id, generation);
+                if (!context.bindService(intent, binding, Context.BIND_AUTO_CREATE))
+                    throw new IllegalStateException("Android refused the service binding");
+                bindings.put(id, binding);
+            } else if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
             else context.startService(intent);
         } catch (JSONException | RuntimeException error) {
             startFailed(id, generation, attemptEpoch, error);
@@ -541,6 +569,28 @@ final class MuonServiceProcess {
         }
         MuonNativeService component = components.get(id);
         if (component != null) component.stopGeneration(generation);
+        GenerationBinding binding = bindings.get(id);
+        if (binding != null && binding.generation == generation) {
+            bindings.remove(id);
+            context.unbindService(binding);
+        }
+    }
+
+    // JNI dispatcher operation. A null result means Android accepted the new types.
+    private String[] setForegroundServiceTypes(String id, long generation, String parameters) {
+        GenerationBinding binding = bindings.get(id);
+        if (binding == null) return new String[]{"permission-denied", "On-demand foreground execution is not configured"};
+        MuonNativeService component = components.get(id);
+        if (component == null || generation != binding.generation) return new String[]{"cancelled", "Service generation has stopped"};
+        try {
+            String declared = definition(id).getJSONObject("android").getString("foregroundServiceType");
+            component.setForegroundTypes(generation, declared, parameters);
+            return null;
+        } catch (JSONException | IllegalArgumentException error) {
+            return new String[]{"invalid-input", error.toString()};
+        } catch (SecurityException | IllegalStateException error) {
+            return new String[]{"permission-denied", error.toString()};
+        }
     }
 
     void foregroundReady(MuonNativeService component, String id, long generation) {

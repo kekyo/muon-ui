@@ -454,7 +454,7 @@ Desktop services run in a separate process from the UI. A resident reference kee
 
 ## Android requirements
 
-Android services run in a process separate from the UI, as foreground services with visible notifications. Every service built for Android must declare its purpose and notification. For example, an implementation communicating with a connected device can use:
+Android services run in a process separate from the UI. Each service declares its foreground purposes and the notification to display while they are active. For example, a service communicating with a connected device can use the following configuration.
 
 ```json
 {
@@ -472,6 +472,10 @@ Android services run in a process separate from the UI, as foreground services w
 Add this `android` property under `services.<id>`. Select the type matching the actual work and meet its permission and runtime requirements. `specialUse` also requires `specialUseSubtype`. See [Android service types](https://developer.android.com/develop/background-work/services/fgs/service-types).
 
 Once a service is running, Android can limit its execution time according to its type. [Foreground service timeouts](https://developer.android.com/develop/background-work/services/fgs/timeout)
+
+By default, starting the service activates all declared types and displays its notification. Set `services.<id>.android.foregroundMode` to `"on-demand"` to select the types as work changes. A page can then acquire the service and query its state. Its notification appears when the service requests foreground execution.
+
+In a QuickJS service, call `await context.android.setForegroundServiceTypes(['connectedDevice'])` after the user grants the required permissions and before opening the input. To add a rear camera, declare `camera` and pass `['connectedDevice', 'camera']`. Pass `['camera']` when USB work ends, then `[]` after closing all inputs. An empty list removes the notification. If Android rejects a promotion because the app lacks permission or is ineligible to start foreground work, the call rejects with `permission-denied`. [Android foreground service launch requirements](https://developer.android.com/develop/background-work/services/fgs/launch)
 
 Closing the UI differs from an OS stop of the entire application. Android's Active apps stop action terminates the whole app without guaranteed cleanup callbacks. Reference counts do not override that action. See [user-initiated stopping](https://developer.android.com/develop/background-work/services/fgs/handle-user-stopping).
 

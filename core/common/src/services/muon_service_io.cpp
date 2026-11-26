@@ -37,14 +37,31 @@ static void Drained(const std::shared_ptr<MuonServiceIoState>& state) {
 std::function<void()> MuonServiceIo::Run(MuonServiceIoRequest request, std::function<void(MuonServiceIoReply)> complete) {
   const auto state = state_;
   const bool http = request.operation == "http.request";
+  const bool foreground = request.operation == "android.setForegroundServiceTypes";
   const auto cancel = std::make_shared<MuonServiceIoCancellation>();
   const auto reply = std::make_shared<MuonServiceIoReply>();
   const bool full = state->pending.size() >= 64 || (http && state->active_http >= 8);
-  if (state->closed || full || !state->settings.submit) {
+  if (state->closed || full || (foreground ? !state->settings.set_foreground_types : !state->settings.submit)) {
     reply->code = state->closed ? "cancelled" : full ? "resource-exhausted" : "permission-denied";
     reply->message = "Service I/O admission is closed";
     state->post([reply, complete = std::move(complete)] { complete(std::move(*reply)); });
     return [] {};
+  }
+  if (foreground) {
+    state->pending.insert(cancel);
+    state->post([state, cancel, request = std::move(request), complete = std::move(complete)] {
+      MuonServiceIoReply result;
+      if (cancel->cancelled.load()) result = {"null", {}, "cancelled", "Service operation was cancelled"};
+      else if (!request.body.empty()) result = {"null", {}, "invalid-input", "Foreground types take no binary input"};
+      else {
+        try { result = state->settings.set_foreground_types(request.parameters); }
+        catch (const std::exception& error) { result = {"null", {}, "io-error", error.what()}; }
+      }
+      state->pending.erase(cancel);
+      complete(std::move(result));
+      Drained(state);
+    });
+    return [cancel] { cancel->Cancel(); };
   }
   if (request.operation.starts_with("server.")) {
     if (!state->server && state->settings.server) state->server = state->settings.server(state->settings.policy);

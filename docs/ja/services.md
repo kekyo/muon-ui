@@ -452,7 +452,7 @@ PCではサービスをUIとは別のプロセスで動かします。すべて�
 
 ## Androidでの動作条件
 
-AndroidではサービスをUIとは別のプロセスで動かし、foreground serviceとして通知を表示します。Android向けにビルドする各サービスには、用途と通知を指定します。たとえば接続機器との通信を実装する場合は次の形です。
+Android ではサービスを UI とは別のプロセスで動かします。各サービスには、前景で実行する処理の種類と、その間に表示する通知を指定します。たとえば接続機器と通信するサービスは次のように設定します。
 
 ```json
 {
@@ -470,6 +470,10 @@ AndroidではサービスをUIとは別のプロセスで動かし、foreground 
 この`android`を`services.<id>`に追加します。実際の機能に合うtypeを選び、そのtypeが要求する権限・実行条件を満たしてください。`specialUse`には用途を示す`specialUseSubtype`も必要です。宣言できるtypeと条件は[Androidのservice type一覧](https://developer.android.com/develop/background-work/services/fgs/service-types)を参照してください。
 
 実行中のサービスにも、種類に応じてAndroidの実行時間制限が適用されます。[フォアグラウンドサービスのタイムアウト](https://developer.android.com/develop/background-work/services/fgs/timeout)
+
+既定では、サービスの起動時に宣言したすべての種類を有効にし、通知を表示します。処理に応じて切り替える場合は、`services.<id>.android.foregroundMode` に `"on-demand"` を指定します。この設定では、画面からサービスに接続して状態を照会できます。通知は、サービスが前景での実行を要求したときに表示されます。
+
+QuickJS サービスでは、利用者が画面で権限を許可した後、入力を開く前に `await context.android.setForegroundServiceTypes(['connectedDevice'])` を呼びます。背面カメラも使うなら、宣言に `camera` を加え、実行中の種類を `['connectedDevice', 'camera']` に更新します。USB 機器の使用を終えたら `['camera']`、すべての入力を閉じたら `[]` を渡します。空の配列を渡すと通知が消えます。Android が追加の権限や起動条件を満たしていないと判断した場合、呼び出しは `permission-denied` で失敗します。[Android の前景サービスの起動条件](https://developer.android.com/develop/background-work/services/fgs/launch)
 
 画面を閉じる操作と、OSによるアプリ全体の停止は異なります。Androidの「アクティブなアプリ」から停止するとアプリ全体が終了し、終了コールバックも保証されません。muonは参照数だけを理由にOSの停止を回避しません。[ユーザーによる停止の仕様](https://developer.android.com/develop/background-work/services/fgs/handle-user-stopping)
 

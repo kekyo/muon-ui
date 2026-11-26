@@ -8,8 +8,29 @@ import { basename, resolve } from "node:path";
 import {
   inspectPluginBinary,
   validatePluginLibraryDependencies,
+  type PluginArtifactManifest,
+  type ServiceArtifactManifest,
 } from "muon-plugin-sdk/artifact";
 import type { MuonAndroidAbi, MuonAndroidPackagedPlugin } from "./build.js";
+
+/** Check that every packaged ABI can load on the application's oldest supported device.
+ * @param manifest Verified plugin or native service manifest.
+ * @param abis ABIs selected for this application.
+ * @param minSdk Application installation floor.
+ */
+export const assertAndroidArtifactApi = (
+  manifest: PluginArtifactManifest | ServiceArtifactManifest,
+  abis: readonly MuonAndroidAbi[],
+  minSdk: number,
+): void => {
+  for (const abi of abis) {
+    const required = manifest.targets[`android-${abi}`]?.runtime.androidApi;
+    if (required !== undefined && required > minSdk)
+      throw new Error(
+        `${manifest.name} (${abi}) requires Android API ${required}, but android.minSdk is ${minSdk}.`,
+      );
+  }
+};
 
 const runtimeLibraries = new Set([
   "libcardio.so",

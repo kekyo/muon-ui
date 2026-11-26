@@ -26,6 +26,41 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
+it.each(['make', 'cmake'] as const)(
+  'compiles the requested Android API with %s and records it in the distributable',
+  async (buildSystem) => {
+    const root = await mkdtemp(join(tmpdir(), 'muon-android-api-'));
+    directories.push(root);
+    await createPluginProject({
+      directory: root,
+      name: 'floor',
+      language: 'c',
+      buildSystem,
+    });
+    const path = join(root, 'muon-plugin.build.json');
+    const config = JSON.parse(await readFile(path, 'utf8'));
+    config.androidApi = 33;
+    await writeFile(path, JSON.stringify(config));
+    const source = join(root, config.sources[0]);
+    await writeFile(
+      source,
+      '#if __ANDROID_API__ != 33\n#error incorrect_minimum_android_api\n#endif\n' +
+        (await readFile(source, 'utf8'))
+    );
+    const target = 'android-arm64-v8a';
+    const result = await readPluginArtifact(
+      await buildPlugin({ configPath: path, target }),
+      [target]
+    );
+    expect(result.manifest.targets[target]?.runtime.androidApi).toBe(33);
+    config.androidApi = 23;
+    await writeFile(path, JSON.stringify(config));
+    await expect(buildPlugin({ configPath: path, target })).rejects.toThrow(
+      /Android API/
+    );
+  }
+);
+
 it('builds the generated Makefile directly with the exported SDK environment', async () => {
   const root = await mkdtemp(join(tmpdir(), 'muon-manual-make-'));
   directories.push(root);

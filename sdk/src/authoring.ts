@@ -36,6 +36,7 @@ export interface PluginBuildConfig {
   /** Plugin registration name. */ readonly name: string;
   /** C99 or C++20; defaults to C++20. */ readonly language?: 'c' | 'c++';
   /** Uses shared cardio; defaults to true for C++. */ readonly cardio?: boolean;
+  /** Minimum Android API used to compile and package every Android target. */ readonly androidApi?: number;
   /** Complete public function catalog. */ readonly functions: readonly string[];
   /** Targets supported by this source project. */ readonly targets: readonly MuonPluginTarget[];
   /** Source files for the standard Make build, relative to the configuration. */ readonly sources?: readonly string[];
@@ -163,7 +164,7 @@ const createProject = async (
 /** Selected source project and output environment. */
 export interface BuildPluginOptions extends Omit<
   PluginToolchainOptions,
-  'language' | 'cardio' | 'buildSystem' | 'tools'
+  'language' | 'cardio' | 'buildSystem' | 'tools' | 'androidApi'
 > {
   /** Explicit source configuration file. */ readonly configPath: string;
   /** Artifact output directory, defaults to .muon-plugin next to the config. */ readonly outputDirectory?: string;
@@ -223,8 +224,11 @@ const buildArtifact = async (
   if (!['make', 'cmake', 'custom'].includes(system))
     throw new Error(`Unsupported plugin build system: ${system}`);
   const workingDirectory = resolve(source, config.build?.directory ?? '.');
+  const androidApi =
+    config.androidApi === undefined ? muonPluginAndroidApi : config.androidApi;
   const report = await diagnosePluginToolchain({
     ...options,
+    androidApi,
     language,
     cardio,
     buildSystem: system,
@@ -316,7 +320,7 @@ const buildArtifact = async (
       platform.push(
         `-DCMAKE_TOOLCHAIN_FILE=${join(ndk, 'build/cmake/android.toolchain.cmake')}`,
         `-DANDROID_ABI=${options.target.slice(8)}`,
-        `-DANDROID_PLATFORM=${muonPluginAndroidApi}`,
+        `-DANDROID_PLATFORM=${androidApi}`,
         '-DANDROID_STL=c++_shared'
       );
     } else {
@@ -387,6 +391,9 @@ const buildArtifact = async (
         ),
         language: metadata.runtime.cpp ? 'c++' : 'c',
         cardio: metadata.runtime.cardio,
+        ...(metadata.runtime.androidApi === undefined
+          ? {}
+          : { androidApi: metadata.runtime.androidApi }),
       };
     }
   } catch (error) {
@@ -394,6 +401,7 @@ const buildArtifact = async (
   }
   inputs[options.target] = {
     library: output,
+    ...(target.os === 'android' ? { androidApi } : {}),
     dependencies: await renderedPaths(config.dependencies?.[options.target]),
     linkLibraries: await renderedPaths(config.linkLibraries?.[options.target]),
     language,

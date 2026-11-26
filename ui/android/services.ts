@@ -5,13 +5,16 @@
 
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { inspectPluginBinary } from "muon-plugin-sdk/artifact";
+import {
+  inspectPluginBinary,
+  muonPluginAndroidApi,
+} from "muon-plugin-sdk/artifact";
 import type {
   MuonAndroidServiceConfig,
   MuonResolvedService,
 } from "../common/service-config.ts";
 import type { MuonAndroidAbi, MuonAndroidPackagedPlugin } from "./build.ts";
-import { resolveAndroidPlugins } from "./plugins.ts";
+import { assertAndroidArtifactApi, resolveAndroidPlugins } from "./plugins.ts";
 
 /** Common Android settings for one independently declared service component. */
 interface MuonAndroidPackagedServiceBase {
@@ -62,12 +65,14 @@ const reserved = new Set([
  * @param definitions - Common service declarations already validated by the SDK.
  * @param abis - ABIs included in the APK.
  * @param plugins - Page plugins sharing Android's native library namespace.
+ * @param minSdk - Application installation floor, defaulting to the runtime minimum.
  * @returns Package inputs after rejecting ambiguous shared library filenames.
  */
 export const resolveAndroidServices = async (
   definitions: readonly MuonResolvedService[],
   abis: readonly MuonAndroidAbi[],
   plugins: readonly MuonAndroidPackagedPlugin[],
+  minSdk = muonPluginAndroidApi,
 ): Promise<readonly MuonAndroidPackagedService[]> => {
   const services: MuonAndroidPackagedService[] = [];
   for (const definition of definitions) {
@@ -92,6 +97,7 @@ export const resolveAndroidServices = async (
     if (definition.runtime === "quickjs") {
       const native = await resolveAndroidPlugins(
         definition.plugins.map((plugin) => {
+          assertAndroidArtifactApi(plugin.artifact.manifest, abis, minSdk);
           const libraries: Partial<Record<MuonAndroidAbi, string>> = {};
           const dependencies: Partial<
             Record<MuonAndroidAbi, readonly string[]>
@@ -127,6 +133,7 @@ export const resolveAndroidServices = async (
       });
       continue;
     }
+    assertAndroidArtifactApi(definition.artifact.manifest, abis, minSdk);
     const libraries: Partial<Record<MuonAndroidAbi, string>> = {};
     const dependencies: Partial<Record<MuonAndroidAbi, readonly string[]>> = {};
     const names = new Set<string>();

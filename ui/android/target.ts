@@ -27,7 +27,8 @@ import {
   createAppIconOptionsSource,
   resolveMuonAppIconPath,
 } from "../common/app-icon.js";
-import { resolveAndroidPlugins } from "./plugins.js";
+import { assertAndroidArtifactApi, resolveAndroidPlugins } from "./plugins.js";
+import { muonPluginAndroidApi } from "muon-plugin-sdk/artifact";
 import { resolveMuonServices } from "../common/service-config.ts";
 import {
   getAndroidServicePermissions,
@@ -326,6 +327,11 @@ export const buildMuonAndroidTarget = async (input: {
   const nativeCatalogs = new Map(catalogs);
   const nativeDefinitions: object[] = [];
   for (const [name, artifact] of artifacts) {
+    assertAndroidArtifactApi(
+      artifact.manifest,
+      abis,
+      minSdk ?? muonPluginAndroidApi,
+    );
     if (nativeCatalogs.has(name))
       throw new Error(`Duplicate Android plugin definition: ${name}`);
     nativeCatalogs.set(name, artifact.manifest.functions);
@@ -442,6 +448,7 @@ export const buildMuonAndroidTarget = async (input: {
     ),
     abis,
     plugins,
+    minSdk ?? muonPluginAndroidApi,
   );
   for (const permission of getAndroidServicePermissions(services)) {
     if (!permissions.includes(permission)) permissions.push(permission);

@@ -50,6 +50,7 @@ beforeAll(async () => {
     ),
   );
   configuration.functions = fixture.functions;
+  configuration.androidApi = 33;
   await copyFile(
     join(repository, "core/common-test/muon_service_native_plugin_fixture.c"),
     join(project, configuration.sources[0]),
@@ -111,6 +112,7 @@ it("packages one native plugin for two ABIs while keeping service grants separat
     await definitions(),
     ["arm64-v8a", "x86_64"],
     [],
+    33,
   );
   const first = services[0]!;
   const second = services[1]!;
@@ -130,12 +132,19 @@ it("packages one native plugin for two ABIs while keeping service grants separat
   expect(first.plugins[0]!.config).toEqual([{ key: "mode", value: "shared" }]);
 });
 
+it("rejects service plugins newer than the minimum supported Android device", async () => {
+  await expect(
+    resolveAndroidServices(await definitions(), ["arm64-v8a"], [], 32),
+  ).rejects.toThrow(/fixture.*API 33.*32/);
+});
+
 it("rejects a different page library using the service plugin SONAME", async () => {
   const resolved = await definitions();
   const services = await resolveAndroidServices(
     resolved,
     ["arm64-v8a", "x86_64"],
     [],
+    33,
   );
   const first = services[0]!;
   if (first.runtime !== "quickjs") throw new Error("Expected QuickJS service");
@@ -153,6 +162,7 @@ it("rejects a different page library using the service plugin SONAME", async () 
           libraries: { "arm64-v8a": conflict },
         },
       ],
+      33,
     ),
   ).rejects.toThrow(/Conflicting Android library/);
 });

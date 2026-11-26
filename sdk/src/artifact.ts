@@ -25,6 +25,7 @@ import {
   type PluginLibraryInspection,
 } from './dependencies.js';
 export { inspectPluginBinary } from './binary.js';
+export { muonPluginAndroidApi } from './targets.js';
 export {
   validatePluginLibraryDependencies,
   validateServiceLibraryDependencies,
@@ -233,7 +234,9 @@ const readArtifact = async <
     if (
       descriptor.os === 'android' &&
       (runtime.ndk !== muonPluginNdkVersion ||
-        runtime.androidApi !== muonPluginAndroidApi)
+        typeof runtime.androidApi !== 'number' ||
+        !Number.isSafeInteger(runtime.androidApi) ||
+        runtime.androidApi < muonPluginAndroidApi)
     )
       throw new Error('Plugin NDK or Android API does not match this runtime.');
     const read = async (
@@ -304,6 +307,7 @@ const readArtifact = async <
 
 /** Inputs for one target produced by any build system. */
 export interface PackagePluginTargetInput {
+  /** Minimum API used to compile this Android target; defaults to the shared runtime floor. */ readonly androidApi?: number;
   /** Final library path. */ readonly library: string;
   /** Final ordinary runtime dependency paths. */ readonly dependencies?: readonly string[];
   /** Import/static libraries for native consumers. */ readonly linkLibraries?: readonly string[];
@@ -430,7 +434,13 @@ const packageArtifact = async (
                 cpp: descriptor.os === 'android' ? 'c++_shared' : 'libstdc++',
               }),
           ...(descriptor.os === 'android'
-            ? { ndk: muonPluginNdkVersion, androidApi: muonPluginAndroidApi }
+            ? {
+                ndk: muonPluginNdkVersion,
+                androidApi:
+                  input.androidApi === undefined
+                    ? muonPluginAndroidApi
+                    : input.androidApi,
+              }
             : {}),
         },
       };

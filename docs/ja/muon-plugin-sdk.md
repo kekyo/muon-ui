@@ -74,7 +74,7 @@ npx muon-plugin build native/counter/muon-plugin.build.json --target linux-arm64
 
 C++では対象と同じcardioヘッダー・定義・共有ライブラリを使用します。SDKに同梱されたcardioはリンク用で、アプリではmuon側のランタイムを使います。異なるcardioやC++ランタイムをプラグインに同梱しないでください。SDKはABIとcardioのヘッダー識別子を照合しますが、任意のコンパイラ間や将来のSDKとのバイナリ互換性は保証しません。
 
-Androidの下限はAPI 24で、C++ランタイムは`c++_shared`です。依存.soも16 KiBページへ対応させます。[AndroidのC++ランタイム](https://developer.android.com/ndk/guides/cpp-support)と[ページサイズへの対応](https://developer.android.com/guide/practices/page-sizes)を参照してください。
+Android の既定の下限は API 24 です。新しい NDK API を使うプラグインやネイティブサービスは、ビルド設定の `androidApi` に必要な API レベルを指定します。たとえば 33 を指定すると、SDK は API 33 向けにコンパイルし、その値を配布用マニフェストに記録します。組み込むアプリは `android.minSdk` に同じ値以上を指定してください。C++ ランタイムは `c++_shared` を使用し、依存する共有ライブラリも 16 KiB ページに対応させます。[NDK の Android プラットフォーム設定](https://developer.android.com/ndk/guides/cmake#android_platform)・[Android の C++ ランタイム](https://developer.android.com/ndk/guides/cpp-support)・[ページサイズへの対応](https://developer.android.com/guide/practices/page-sizes)
 
 ## アプリ内だけで使う
 

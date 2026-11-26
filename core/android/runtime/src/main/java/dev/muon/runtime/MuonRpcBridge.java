@@ -185,6 +185,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             new LinkedBlockingQueue<>();
     private final MuonAndroidPlatformService platformService;
     private final boolean pluginEnabled;
+    private final MuonWebDeployment deployment;
     private String rendererMetadataJson = "";
     private long nativeHandle;
     private JavaScriptReplyProxy replyProxy;
@@ -198,6 +199,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             @NonNull MuonAppConfig config) {
         this.listener = listener;
         pluginEnabled = config.pluginEnabled;
+        deployment = config.web;
         platformService = new MuonAndroidPlatformService(activity, webView, config);
         try {
             nativeHandle = nativeCreateHost(this, MuonPackagedPlugin.load(activity), config.internalAllow,
@@ -223,7 +225,7 @@ final class MuonRpcBridge implements WebViewCompat.WebMessageListener, AutoClose
             @NonNull Uri sourceOrigin,
             boolean isMainFrame,
             @NonNull JavaScriptReplyProxy currentReplyProxy) {
-        if (!pluginEnabled || !isMainFrame || !MuonAppConfig.TRUSTED_ORIGIN.equals(sourceOrigin.toString())) {
+        if (!pluginEnabled || !isMainFrame || !deployment.trusted(sourceOrigin.toString())) {
             return;
         }
         replyProxy = currentReplyProxy;

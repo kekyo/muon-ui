@@ -9,7 +9,6 @@ package dev.muon.runtime;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
-import android.net.Uri;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowInsets;
@@ -47,6 +46,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     private FrameLayout content;
     private String bootstrap;
     private String startPage;
+    private MuonWebDeployment deployment;
     private boolean pageLoadStarted;
     private boolean pluginEnabled;
     private boolean nativeReady;
@@ -59,6 +59,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     }
 
     void start(@NonNull String bootstrap, @NonNull MuonAppConfig config) {
+        deployment = config.web;
         this.bootstrap = bootstrap;
         try {
             for (String feature : new String[] {
@@ -71,7 +72,9 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
             }
             startPage = config.startPage;
             pluginEnabled = config.pluginEnabled;
-            assets = new MuonAssetRequestHandler(activity);
+            if (deployment.hasDocumentScript) this.bootstrap += "\n;if (window === window.top) {\n"
+                    + MuonAppConfig.readAsset(activity, "muon/document-start.js") + "\n}\n";
+            assets = new MuonAssetRequestHandler(activity, deployment);
             assets.configureServiceWorkers();
             webView = new WebView(activity);
             content = new FrameLayout(activity);
@@ -86,6 +89,12 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
                     if (documentStarted) { bridge.releasePageContext(); }
                     documentStarted = true;
+                    if (!deployment.allowsNavigation(url)) view.stopLoading();
+                }
+
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    return request.isForMainFrame() && !deployment.allowsNavigation(request.getUrl().toString());
                 }
 
                 @Override
@@ -135,10 +144,10 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
         }
         if (pluginEnabled) {
             WebViewCompat.addWebMessageListener(webView, RPC_OBJECT_NAME,
-                    Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN), bridge);
+                    Collections.singleton(deployment.origin), bridge);
             script = WebViewCompat.addDocumentStartJavaScript(webView,
                     bridge.getDocumentStartScript() + "\n" + bootstrap,
-                    Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN));
+                    Collections.singleton(deployment.origin));
         }
         listener.beforePageLoad(webView, bridge);
         nativeReady = true;
@@ -174,22 +183,14 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
         if (source == null) { return; }
         if (cssScript != null) { cssScript.remove(); }
         cssScript = WebViewCompat.addDocumentStartJavaScript(webView, source,
-                Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN));
+                Collections.singleton(deployment.origin));
         if (nativeReady && !pageLoadStarted) {
             // A real first snapshot is installed before the application's first document.
             pageLoadStarted = true;
             webView.loadUrl(startPage);
-        } else if (pageLoadStarted && isTrustedPage(webView.getUrl())) {
+        } else if (pageLoadStarted && deployment.trusted(webView.getUrl())) {
             webView.evaluateJavascript(source, null);
         }
-    }
-
-    private static boolean isTrustedPage(@Nullable String url) {
-        if (url == null) { return false; }
-        Uri page = Uri.parse(url);
-        Uri origin = Uri.parse(MuonAppConfig.TRUSTED_ORIGIN);
-        return origin.getScheme().equals(page.getScheme())
-                && origin.getHost().equals(page.getHost()) && page.getPort() == origin.getPort();
     }
 
     @Nullable String retainRequestedState() {

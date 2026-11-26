@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { resolveAndroidWebDeployment } from "./web.ts";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveMuonPluginAccessOptions } from "../common/plugin-access.js";
@@ -199,14 +200,30 @@ export const buildMuonAndroidTarget = async (input: {
         `${label} is unavailable in Android application builds; android.${key} must be false or omitted.`,
       );
   }
-  const { warnings } = validateMuonAndroidConfig(config);
+  const browser = object(config.browser, "browser");
+  const prefix = input.assets.prefix;
+  if (prefix !== "" && prefix !== "main" && !prefix.startsWith("main/"))
+    throw new Error("Android assetPrefix must use the main asset host.");
+  const assetPath = prefix.replace(/^main\/?/u, "").replace(/\/+$/u, "");
+  const rawStartPage = string(
+    browser.startPage ??
+      options.browserStartPage ??
+      `https://main.asset.muon.invalid/${assetPath === "" ? "" : `${assetPath}/`}index.html`,
+    "browser.startPage",
+  );
+  const { startPage, web } = await resolveAndroidWebDeployment(
+    rawStartPage,
+    android.web,
+    options.android?.web === undefined ? input.configDirectory : root,
+  );
+  const pageConfig = { ...config, browser: { ...browser, startPage } };
+  const { warnings } = validateMuonAndroidConfig(pageConfig);
   for (const warning of warnings) process.stderr.write(`Warning: ${warning}\n`);
   if (
     config.node !== undefined &&
     Object.keys(object(config.node, "node")).length > 0
   )
     throw new Error("node is unavailable in Android application builds.");
-  const browser = object(config.browser, "browser");
   const notifications = resolveMuonNotificationConfig(config.notifications);
   const androidNotifications = resolveAndroidNotificationConfig(
     android.notifications,
@@ -358,7 +375,7 @@ export const buildMuonAndroidTarget = async (input: {
     });
   }
   const pluginConfiguration = resolveMuonAndroidPluginAccess(
-    config,
+    pageConfig,
     options.runtimePluginConfig,
     [
       ...(android.plugins === undefined ? [] : (android.plugins as unknown[])),
@@ -388,29 +405,6 @@ export const buildMuonAndroidTarget = async (input: {
       return [key, value];
     }),
   );
-  const prefix = input.assets.prefix;
-  if (prefix !== "" && prefix !== "main" && !prefix.startsWith("main/"))
-    throw new Error("Android assetPrefix must use the main asset host.");
-  const assetPath = prefix.replace(/^main\/?/u, "").replace(/\/+$/u, "");
-  const rawStartPage = string(
-    browser.startPage ??
-      options.browserStartPage ??
-      `https://main.asset.muon.invalid/${assetPath === "" ? "" : `${assetPath}/`}index.html`,
-    "browser.startPage",
-  );
-  const startPage = rawStartPage.replace(
-    /^asset:\/\/main\//u,
-    "https://main.asset.muon.invalid/",
-  );
-  const url = new URL(startPage);
-  if (
-    url.origin !== "https://main.asset.muon.invalid" ||
-    url.username ||
-    url.password
-  )
-    throw new Error(
-      "Android browser.startPage must use asset://main/ or https://main.asset.muon.invalid/.",
-    );
   if (!(await stat(input.assets.sourcePath)).isDirectory())
     throw new Error(
       "Android web assets must be a directory; ZIP assets are not supported.",
@@ -465,6 +459,7 @@ export const buildMuonAndroidTarget = async (input: {
     assetsDirectory: input.assets.sourcePath,
     assetPath,
     startPage,
+    web,
     applicationId,
     label: string(
       options.android?.label ?? options.appName ?? android.label ?? defaultName,

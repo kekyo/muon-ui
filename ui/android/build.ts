@@ -27,6 +27,7 @@ import { runScriptOnceToText, type FunCityLogEntry } from "funcity";
 import { runAndroidCommand } from "./command.js";
 import { prepareAndroid } from "./toolchain.js";
 import type { MuonAndroidInitialSystemBars } from "../../core/android/system-bars-config.js";
+import type { MuonAndroidWebDeployment } from "./web.ts";
 import type {
   MuonAndroidNotificationConfig,
   MuonAndroidNotificationIcon,
@@ -80,6 +81,7 @@ export interface MuonAndroidApplicationInput {
   /** Directory containing previously built web assets. */ assetsDirectory: string;
   /** Relative URL path prefix under the trusted asset host. */ assetPath: string;
   /** Trusted HTTPS entry URL. */ startPage: string;
+  /** Resolved resource scopes, main-frame adapter and optional deployment CA. */ web?: MuonAndroidWebDeployment;
   /** Application identifier independent of Muon's Java namespace. */ applicationId: string;
   /** Launcher label. */ label: string;
   /** Monotonic Android update number. */ versionCode: number;
@@ -220,10 +222,14 @@ export const buildAndroidApplication = async (
     }
   }
   await mkdir(assets, { recursive: true });
-  await cp(input.assetsDirectory, join(assets, input.assetPath), {
-    recursive: true,
-    dereference: true,
-  });
+  const entry = new URL(input.startPage);
+  const hosted = entry.origin !== "https://main.asset.muon.invalid";
+  if (!hosted) {
+    await cp(input.assetsDirectory, join(assets, input.assetPath), {
+      recursive: true,
+      dereference: true,
+    });
+  }
   const frameworkAssets = join(assets, "muon");
   try {
     await stat(frameworkAssets);
@@ -232,6 +238,12 @@ export const buildAndroidApplication = async (
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   await mkdir(frameworkAssets, { recursive: true });
+  if (input.web?.documentStartScript) {
+    await copyFile(
+      input.web.documentStartScript,
+      join(frameworkAssets, "document-start.js"),
+    );
+  }
   await cp(
     join(tools.componentsDirectory, "licenses"),
     join(frameworkAssets, "licenses"),
@@ -246,6 +258,11 @@ export const buildAndroidApplication = async (
     join(frameworkAssets, "config.json"),
     JSON.stringify({
       startPage: input.startPage,
+      web: {
+        resourceOrigins: input.web?.resourceOrigins,
+        loopbackResourcePaths: input.web?.loopbackResourcePaths ?? [],
+        documentStartScript: input.web?.documentStartScript !== undefined,
+      },
       values: input.values,
       systemBars: input.systemBars,
       notifications: input.notifications,
@@ -371,7 +388,22 @@ export const buildAndroidApplication = async (
   );
   const { internet, cleartextHosts } = getAndroidServiceNetwork(input.services);
   const permissions = new Set(input.permissions);
-  if (internet) permissions.add("android.permission.INTERNET");
+  if (
+    input.web?.loopbackResourcePaths.length &&
+    !cleartextHosts.includes("127.0.0.1")
+  )
+    cleartextHosts.push("127.0.0.1");
+  if (
+    internet ||
+    hosted ||
+    input.web?.resourceOrigins?.length ||
+    cleartextHosts.length
+  )
+    permissions.add("android.permission.INTERNET");
+  const certificate = input.web?.certificate;
+  const caHost = certificate
+    ? entry.hostname.replace(/^\[|\]$/gu, "")
+    : undefined;
   await writeFile(
     join(project, "app/src/main/AndroidManifest.xml"),
     await render(
@@ -385,7 +417,7 @@ export const buildAndroidApplication = async (
             required: String(required),
           })),
         ],
-        ["serviceCleartext", cleartextHosts.length > 0],
+        ["networkConfig", cleartextHosts.length > 0 || !!certificate],
         ["notificationsEnabled", input.notifications.enabled],
         ["servicesEnabled", servicesEnabled],
         ["usbEnabled", usbEnabled],
@@ -404,13 +436,24 @@ export const buildAndroidApplication = async (
     ),
   );
   const resources = join(project, "app/src/main/res");
-  if (cleartextHosts.length) {
+  if (cleartextHosts.length || certificate) {
+    if (certificate) {
+      await mkdir(join(resources, "raw"), { recursive: true });
+      await writeFile(join(resources, "raw/muon_web_ca.der"), certificate);
+    }
+    const otherHosts = cleartextHosts.filter((host) => host !== caHost);
     await mkdir(join(resources, "xml"), { recursive: true });
     await writeFile(
       join(resources, "xml/muon_service_network.xml"),
       await render(
         join(project, "service-network-security.xml.fc"),
-        new Map([["hosts", cleartextHosts.map(xml)]]),
+        new Map<string, unknown>([
+          ["hasHosts", otherHosts.length > 0],
+          ["hosts", otherHosts.map(xml)],
+          ["hasCa", !!certificate],
+          ["caHost", xml(caHost ?? "")],
+          ["caCleartext", String(cleartextHosts.includes(caHost ?? ""))],
+        ]),
       ),
     );
   }

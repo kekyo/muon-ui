@@ -432,6 +432,7 @@ export const buildMuonAndroidTarget = async (input: {
     pluginConfiguration.plugins,
     abis,
     resolved.pluginsDirectory,
+    [...artifacts.values()],
   );
   const services = await resolveAndroidServices(
     await resolveMuonServices(

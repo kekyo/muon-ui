@@ -56,6 +56,10 @@ export interface PluginBuildConfig {
   /** Development-only libraries to copy; paths may use funcity build variables. */ readonly linkLibraries?: Partial<
     Record<MuonPluginTarget, readonly string[]>
   >;
+  /** Explicit packaged basenames of Android dependencies with no ELF DT_SONAME, by target. */
+  readonly androidDependenciesWithoutSoname?: Partial<
+    Record<MuonPluginTarget, readonly string[]>
+  >;
 }
 /** Source configuration for an independent native service factory. */
 export interface ServiceBuildConfig extends Omit<
@@ -389,6 +393,9 @@ const buildArtifact = async (
       inputs[key as MuonPluginTarget] = {
         library: entry.library,
         dependencies: entry.dependencies,
+        androidDependenciesWithoutSoname: metadata.dependencies
+          .filter((file) => file.androidSoname === 'absent')
+          .map((file) => basename(file.path)),
         linkLibraries: metadata.linkLibraries.map((file) =>
           join(outputDirectory, file.path)
         ),
@@ -406,6 +413,8 @@ const buildArtifact = async (
     library: output,
     ...(target.os === 'android' ? { androidApi } : {}),
     dependencies: await renderedPaths(config.dependencies?.[options.target]),
+    androidDependenciesWithoutSoname:
+      config.androidDependenciesWithoutSoname?.[options.target] ?? [],
     linkLibraries: await renderedPaths(config.linkLibraries?.[options.target]),
     language,
     cardio,

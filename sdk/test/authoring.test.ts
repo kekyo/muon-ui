@@ -76,6 +76,81 @@ it('builds the generated Makefile directly with the exported SDK environment', a
   );
 });
 
+it('packages a declared Android vendor library without a SONAME and keeps its original bytes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'muon-android-vendor-'));
+  directories.push(root);
+  const target = 'android-arm64-v8a';
+  const environment = await getNativeBuildEnvironment({ target });
+  await createPluginProject({
+    directory: root,
+    name: 'meter',
+    language: 'c',
+    buildSystem: 'cmake',
+  });
+  await writeFile(
+    join(root, 'vendor.c'),
+    'int vendor_read(void) { return 42; }\n'
+  );
+  const vendor = join(root, 'libmeter_vendor.so');
+  const buildVendor = async (extra: string[]) => {
+    await execute(
+      environment.CC!,
+      [
+        '-shared',
+        '-fPIC',
+        '-Wl,-z,max-page-size=16384',
+        ...extra,
+        join(root, 'vendor.c'),
+        '-o',
+        vendor,
+      ],
+      { env: environment }
+    );
+  };
+  await buildVendor([]);
+  const project = join(root, 'CMakeLists.txt');
+  await writeFile(
+    project,
+    (await readFile(project, 'utf8')) +
+      '\ntarget_link_directories(meter PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")\n' +
+      'target_link_libraries(meter PRIVATE "-Wl,--no-as-needed" meter_vendor "-Wl,--as-needed")\n'
+  );
+  const path = join(root, 'muon-plugin.build.json');
+  const config = JSON.parse(await readFile(path, 'utf8'));
+  config.dependencies = { [target]: ['{{source}}/libmeter_vendor.so'] };
+  await writeFile(path, JSON.stringify(config));
+  await expect(buildPlugin({ configPath: path, target })).rejects.toThrow(
+    /SONAME/
+  );
+  config.androidDependenciesWithoutSoname = {
+    [target]: ['libmeter_vendor.so'],
+  };
+  await writeFile(path, JSON.stringify(config));
+  const manifest = await buildPlugin({ configPath: path, target });
+  const artifact = await readPluginArtifact(manifest, [target]);
+  expect(artifact.targets[target]?.binary.needed).toContain(
+    'libmeter_vendor.so'
+  );
+  expect(artifact.manifest.targets[target]?.dependencies[0]).toMatchObject({
+    androidSoname: 'absent',
+  });
+  const packaged = artifact.targets[target]!.dependencies[0]!;
+  expect(await readFile(packaged)).toEqual(await readFile(vendor));
+  await writeFile(packaged, 'different bytes');
+  await expect(readPluginArtifact(manifest, [target])).rejects.toThrow(
+    /SHA-256/
+  );
+  // Start the next producer check with a fresh destination; the intentionally changed package is invalid.
+  await buildVendor(['-Wl,-soname,a-different.so']);
+  await expect(
+    buildPlugin({
+      configPath: path,
+      target,
+      outputDirectory: join(root, 'different'),
+    })
+  ).rejects.toThrow(/SONAME/);
+});
+
 it.each(['c', 'c++'] as const)(
   'builds %s projects with Make and independent CMake, and invokes their ABI',
   async (language) => {

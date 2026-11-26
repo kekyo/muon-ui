@@ -3,8 +3,11 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { execFile } from "node:child_process";
 import {
+  appendFile,
   copyFile,
+  mkdir,
   mkdtemp,
   readFile,
   rm,
@@ -14,8 +17,13 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { buildPlugin, createPluginProject } from "muon-plugin-sdk";
+import {
+  buildPlugin,
+  createPluginProject,
+  getNativeBuildEnvironment,
+} from "muon-plugin-sdk";
 import { resolveMuonServices } from "../common/service-config.ts";
 import { resolveAndroidServices } from "../android/services.ts";
 
@@ -55,9 +63,41 @@ beforeAll(async () => {
     join(repository, "core/common-test/muon_service_native_plugin_fixture.c"),
     join(project, configuration.sources[0]),
   );
-  await writeFile(path, JSON.stringify(configuration));
-  for (const target of ["android-arm64-v8a", "android-x86_64"] as const)
+  await writeFile(
+    join(project, "vendor.c"),
+    "int vendor_read(void) { return 42; }\n",
+  );
+  await appendFile(
+    join(project, "Makefile"),
+    '\nLDLIBS += -L"$(MUON_PLUGIN_PROJECT)vendor/$(MUON_TARGET)" -Wl,--no-as-needed -lvendor_math -Wl,--as-needed\n',
+  );
+  configuration.dependencies = {};
+  configuration.androidDependenciesWithoutSoname = {};
+  for (const target of ["android-arm64-v8a", "android-x86_64"] as const) {
+    const env = await getNativeBuildEnvironment({ target });
+    const directory = join(project, "vendor", target);
+    await mkdir(directory, { recursive: true });
+    await promisify(execFile)(
+      env.CC!,
+      [
+        "-shared",
+        "-fPIC",
+        "-Wl,-z,max-page-size=16384",
+        join(project, "vendor.c"),
+        "-o",
+        join(directory, "libvendor_math.so"),
+      ],
+      { env },
+    );
+    configuration.dependencies[target] = [
+      "vendor/{{target}}/libvendor_math.so",
+    ];
+    configuration.androidDependenciesWithoutSoname[target] = [
+      "libvendor_math.so",
+    ];
+    await writeFile(path, JSON.stringify(configuration));
     manifest = await buildPlugin({ configPath: path, target });
+  }
   await writeFile(
     join(root, "service.ts"),
     `
@@ -125,6 +165,10 @@ it("packages one native plugin for two ABIs while keeping service grants separat
     ["fixture.api.echo", "fixture.api.echoBytes"],
   ]);
   expect(first.plugins[0]!.libraries).toEqual(second.plugins[0]!.libraries);
+  for (const abi of ["arm64-v8a", "x86_64"] as const)
+    expect(first.plugins[0]!.dependencies?.[abi]?.[0]).toMatch(
+      /libvendor_math\.so$/,
+    );
   expect(Object.keys(first.plugins[0]!.libraries)).toEqual([
     "arm64-v8a",
     "x86_64",

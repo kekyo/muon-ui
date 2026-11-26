@@ -76,6 +76,8 @@ C++では対象と同じcardioヘッダー・定義・共有ライブラリを�
 
 Android の既定の下限は API 24 です。新しい NDK API を使うプラグインやネイティブサービスは、ビルド設定の `androidApi` に必要な API レベルを指定します。たとえば 33 を指定すると、SDK は API 33 向けにコンパイルし、その値を配布用マニフェストに記録します。組み込むアプリは `android.minSdk` に同じ値以上を指定してください。C++ ランタイムは `c++_shared` を使用し、依存する共有ライブラリも 16 KiB ページに対応させます。[NDK の Android プラットフォーム設定](https://developer.android.com/ndk/guides/cmake#android_platform)・[Android の C++ ランタイム](https://developer.android.com/ndk/guides/cpp-support)・[ページサイズへの対応](https://developer.android.com/guide/practices/page-sizes)
 
+Android でビルド済みの共有ライブラリを同梱するときは、ELF に記録された名前（SONAME）と同じファイル名で `dependencies` に指定します。外部から提供されたライブラリに SONAME がない場合は、そのファイル名をビルド設定の `androidDependenciesWithoutSoname` にも ABI ごとに指定してください。たとえば `{ "android-arm64-v8a": ["libvendor.so"] }` と指定します。この指定は通常の依存ライブラリに使えます。SDK は元のバイナリの SHA-256 を配布用マニフェストに記録し、APK ビルダーは同じ ABI に同名で内容の異なるライブラリがあればビルドを中止します。[Android リンカーによる SONAME の扱い](https://github.com/aosp-mirror/platform_bionic/blob/main/android-changes-for-ndk-developers.md#missing-soname-enforced-for-api-level--23)
+
 ## アプリ内だけで使う
 
 プラグインをNPMパッケージにする必要はありません。アプリの`muon.json`にソース設定への相対パスを記述します。CLIとViteは、ソースをビルドしてから関数カタログを読み込みます。生成物はアプリの`.muon/plugins/`へ置きます。

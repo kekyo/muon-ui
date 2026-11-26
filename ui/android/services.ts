@@ -144,6 +144,7 @@ export const resolveAndroidServices = async (
         }),
         abis,
         ".",
+        definition.plugins.map((plugin) => plugin.artifact),
       );
       services.push({
         ...common,

@@ -122,7 +122,15 @@ You can also provide Android settings through Vite's `build.android`. Precedence
 
 Relative paths in `muon.json` resolve from that file's directory. Paths supplied by Vite/API resolve from the project root. To select an SDK for `prepare`, use the environment, `muon.json`, or `--sdk-path`.
 
-The default web asset URL is `https://main.asset.muon.invalid/index.html`. A subpath in Vite's `base` is preserved. Set `browser.startPage` to a URL on this origin or `asset://main/…`. External start pages, ZIP assets, and multiple asset hosts are unsupported.
+Bundled pages default to `https://main.asset.muon.invalid/index.html`, including Vite's base subpath when set. Set `browser.startPage` to an asset URL (`asset://main/…`) or to the HTTPS URL of a hosted page. Only a main frame on the startup origin receives native APIs.
+
+Use `android.web.resourceOrigins` to allow additional HTTPS origins for resources such as images. For an on-device HTTP service, list directories such as `/video/` in `android.web.loopbackResourcePaths`. To adapt an existing site, point `android.web.documentStartScript` at a JavaScript file. Muon packages it in the APK and runs it immediately after the runtime initializes in a trusted main document.
+
+If the site uses a private certificate authority, set `android.web.certificateAuthority` to its public PEM or DER certificate. The certificate is trusted only for the launch hostname. On Android 17 and later, declare `android.permission.ACCESS_LOCAL_NETWORK` for a LAN-hosted start page. If loading fails before the grant, the user can grant access and retry from the native error screen. [Android network security configuration](https://developer.android.com/privacy-and-security/security-config) and [local network permission](https://developer.android.com/privacy-and-security/local-network-permission).
+
+For `navigator.geolocation`, declare `android.permission.ACCESS_COARSE_LOCATION` and, if precise location is required, `android.permission.ACCESS_FINE_LOCATION`. Android prompts when the foreground page requests location.
+
+Allow `muon.android.accelerometer` methods for foreground motion. `start()` requests gravity-inclusive samples at an interval of 100 ms. Actual intervals depend on the device. `waitForChange(revision)` returns the next state change or sample, and `getState()` reads the latest snapshot. Both measurement and receipt timestamps use microseconds since boot. Acquisition suspends while the Activity is paused and resumes on return. `stop()` or navigating away releases the document's registration. [Android motion sensors](https://developer.android.com/develop/sensors-and-location/sensors/sensors_motion).
 
 Muon APIs initialize before your application JavaScript. No custom adapter import is needed. In simple mode:
 

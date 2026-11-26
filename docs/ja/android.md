@@ -122,7 +122,15 @@ npx muon build --target android --assets ./dist
 
 `muon.json`内の相対パスの基準は、そのファイルのディレクトリです。Vite/APIから渡すパスはプロジェクトルートを基準にします。`prepare`でSDKを切り替える場合は、環境変数、`muon.json`または`--sdk-path`を指定してください。
 
-Webアセットの既定URLは`https://main.asset.muon.invalid/index.html`です。Viteの`base`がサブパスなら、そのパスを反映します。`browser.startPage`はこのoriginのURLか`asset://main/…`で指定します。外部サイトを起動ページにする指定、ZIPアセット、複数アセットhostは未対応です。
+同梱ページの既定の起動 URL は `https://main.asset.muon.invalid/index.html` です。Vite の `base` にサブパスがあれば、そのパスも使います。同梱ページには `asset://main/…`、サーバーから配信するページには HTTPS の URL を `browser.startPage` に指定します。ネイティブ API を使えるのは、起動 URL と同じオリジンで開いたメインフレームです。
+
+`android.web.resourceOrigins` には、ページが画像などを取得する追加の HTTPS オリジンを指定します。端末内の HTTP サービスから動画を取得する場合は、`android.web.loopbackResourcePaths` に `/video/` のようなディレクトリを指定します。既存の Web アプリに起動時の処理を加えるには、`android.web.documentStartScript` に JavaScript ファイルを指定します。muon はこのファイルを APK に同梱し、許可したメインフレームで muon API の初期化直後に実行します。
+
+私設認証局を使うときは、`android.web.certificateAuthority` に PEM または DER 形式の公開 CA 証明書を指定します。この証明書を信頼する範囲は起動 URL のホストです。Android 17 以降で LAN 上の起動ページに接続する場合は、`android.permissions` に `android.permission.ACCESS_LOCAL_NETWORK` を加えてください。初回の読み込みで権限が足りなければ、エラー画面の「Allow local network access」から許可して再試行できます。[Android の証明書設定](https://developer.android.com/privacy-and-security/security-config)・[LAN へのアクセス権限](https://developer.android.com/privacy-and-security/local-network-permission)
+
+位置情報には `navigator.geolocation` を使います。`android.permissions` に `android.permission.ACCESS_COARSE_LOCATION` を指定し、精密な位置が必要なアプリでは `android.permission.ACCESS_FINE_LOCATION` も指定します。利用者が画面で位置情報を要求した時点で Android の許可画面が開きます。
+
+加速度を使うページには `muon.android.accelerometer` の操作を許可します。`start()` は重力を含む加速度を約 100 ミリ秒間隔で要求します。実際の間隔は端末によって異なります。`waitForChange(revision)` は次の状態変化か測定値を返し、`getState()` では最新の状態を読めます。測定時刻と受信時刻の単位は、端末起動からのマイクロ秒です。ホーム画面に移ると測定は一時停止し、アプリに戻ると再開します。`stop()` を呼ぶかページを閉じると購読が終了します。[Android の加速度センサー](https://developer.android.com/develop/sensors-and-location/sensors/sensors_motion)
 
 Muon APIはアプリのJavaScriptより先に初期化されます。独自adapterのimportは不要です。simpleモードでTypeScriptから使う例を示します。
 

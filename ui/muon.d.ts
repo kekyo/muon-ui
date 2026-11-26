@@ -643,7 +643,8 @@ declare global {
     /** A requested and suspended sensor resumes when the Activity returns. */
     readonly status: {
       /** Current registration state. */
-      readonly state: 'stopped' | 'suspended' | 'active' | 'unavailable' | 'failed';
+      readonly state:
+        "stopped" | "suspended" | "active" | "unavailable" | "failed";
       /** Stable failure code when acquisition cannot proceed. */
       readonly error: string | null;
       /** Requested sampling interval in microseconds. */
@@ -672,7 +673,10 @@ declare global {
      * @param options - Optional cancellation of this wait.
      * @returns The latest snapshot after the supplied revision.
      */
-    readonly waitForChange: (revision: number, options?: { signal?: AbortSignal }) => Promise<MuonAndroidAccelerationSnapshot>;
+    readonly waitForChange: (
+      revision: number,
+      options?: { signal?: AbortSignal },
+    ) => Promise<MuonAndroidAccelerationSnapshot>;
   }
 
   /** Operations specific to the Android WebView backend. */

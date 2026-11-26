@@ -54,6 +54,7 @@ final class MuonAssetRequestHandler implements AutoCloseable {
 
     void configureWebViewSettings(@NonNull WebSettings settings) {
         settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setBlockNetworkLoads(!networkLoadsAllowed);

@@ -218,6 +218,12 @@ Under MIT.
 
 ## History
 
+- 0.38.0
+  - Android apps can launch a hosted HTTPS page and trust a private certificate authority for that host. Only the main frame on the startup origin can call native APIs. Bundled pages now retain `localStorage` when Android recreates the activity. [Android WebView configuration](./docs/en/android.md#configuration-and-muon-apis)
+  - Foreground Android pages can request runtime permissions, use geolocation, and read the accelerometer. Services can open USB devices after the user grants access from a page, and extensions can detect when devices are attached or removed. [Android permissions and USB devices](./docs/en/android.md#android-runtime-permissions-and-usb-devices)
+  - QuickJS services can call `context.retainWork()` to finish jobs after the page closes. On Android, the new `on-demand` mode lets a service choose which of its declared foreground service types are active. [Background services](./docs/en/services.md)
+  - Android apps can set their minimum API level, declare required or optional device features, and bundle JAR and AAR libraries. Native plugins and services can target a newer Android API level with `androidApi`. [Plugin SDK targets](./docs/en/muon-plugin-sdk.md#select-targets)
+  - CI now runs desktop tests in parallel with package and Android checks and reuses compiled objects for Debian and Windows builds.
 - 0.37.0
   - Clarified how network access, local asset URLs, plugin permissions, and remote debugging differ between desktop CEF and Android WebView. [Configuration reference](./docs/en/muon-json-reference.md)
   - Linux package tests now check that the runtime prepared from the `muon-ui` npm package starts on Wayland with system GTK. They also verify the dependencies declared by Debian packages.

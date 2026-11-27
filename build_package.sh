@@ -214,6 +214,17 @@ build_linux_target() {
   log_path="${PACKAGE_LOG_DIR}/${target_name}.log"
 
   assert_prereq_image "${arch}"
+  local -a compiler_cache=()
+  if [[ -n "${CCACHE_DIR:-}" && ( "${CMAKE_C_COMPILER_LAUNCHER:-}" == ccache || "${CMAKE_CXX_COMPILER_LAUNCHER:-}" == ccache ) ]]; then
+    mkdir -p "${CCACHE_DIR}"
+    compiler_cache=(
+      -v "$(realpath "${CCACHE_DIR}"):/ccache:z"
+      -e "CCACHE_DIR=/ccache"
+      -e "CCACHE_COMPILERCHECK=${CCACHE_COMPILERCHECK:-mtime}"
+      -e "CMAKE_C_COMPILER_LAUNCHER=${CMAKE_C_COMPILER_LAUNCHER:-}"
+      -e "CMAKE_CXX_COMPILER_LAUNCHER=${CMAKE_CXX_COMPILER_LAUNCHER:-}"
+    )
+  fi
   mkdir -p "${PACKAGE_LOG_DIR}"
   printf 'Building Linux package target: %s (%s), log: %s\n' "${target_name}" "${platform}" "${log_path}"
   set +e
@@ -221,6 +232,7 @@ build_linux_target() {
     --platform "${platform}" \
     --userns=keep-id \
     --security-opt label=disable \
+    "${compiler_cache[@]}" \
     -e "HOME=/tmp" \
     -e "MUON_PACKAGE_ARCH=${arch}" \
     -e "MUON_PACKAGE_TARGET=${target_name}" \

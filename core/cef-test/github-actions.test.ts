@@ -154,7 +154,9 @@ describe("GitHub Actions CI", () => {
       );
     expect(workspaceTests.sort()).toEqual([...rootPackage.workspaces].sort());
     for (const name of [
-      "Test independent plugin toolchains and prepare consumer runtime",
+      "Test independent plugin toolchains",
+      "Build distribution runtimes",
+      "Test staged consumer runtimes",
       "Test Linux packages from the independent npm consumer",
       "Enable KVM for Android E2E",
       "Test Android runtime and independent npm consumer",

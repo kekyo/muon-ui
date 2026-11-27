@@ -1940,6 +1940,34 @@ export const waitForPageTargetUrl = async (
   throw new Error(`Timed out waiting for page target URL: ${expectedUrl}`);
 };
 
+/**
+ * Connects to the main application document used by the popup lifecycle tests.
+ * @returns Its target ID and an open driver bound to that same target.
+ */
+export const connectToMainPage = async (): Promise<{
+  targetId: string;
+  driver: CdpDriver;
+}> => {
+  const target = await waitForPageTargetUrl(MUON_APP_URL, targetTimeoutMs);
+  const driver = await connectToMuonCdp({
+    port: MUON_PORT,
+    targetId: target.id,
+    timeoutMs: cdpCommandTimeoutMs,
+  });
+  try {
+    // CDP can list the app URL while the renderer still has its initial blank document.
+    await expect
+      .poll(() => driver.evaluate("document.location.href"), {
+        timeout: cdpCommandTimeoutMs,
+      })
+      .toBe(MUON_APP_URL);
+    return { targetId: target.id, driver };
+  } catch (error) {
+    driver.close();
+    throw error;
+  }
+};
+
 export const waitForNewPageTarget = async (
   previousTargetIds: Set<string>,
   timeoutMs: number,

@@ -33,6 +33,8 @@ import {
 
 /** Android foreground execution and its user-visible notification. */
 export interface MuonAndroidServiceConfig {
+  /** Promote at startup (default), or let the service select types as work changes. */
+  readonly foregroundMode?: "automatic" | "on-demand";
   /** Android foreground service types separated by |, without whitespace. */
   readonly foregroundServiceType: string;
   /** Purpose required when foregroundServiceType includes specialUse. */
@@ -134,7 +136,12 @@ const androidConfig = (
   const value = record(input, label);
   knownKeys(
     value,
-    ["foregroundServiceType", "specialUseSubtype", "notification"],
+    [
+      "foregroundServiceType",
+      "foregroundMode",
+      "specialUseSubtype",
+      "notification",
+    ],
     label,
   );
   const foregroundServiceType = text(
@@ -142,6 +149,13 @@ const androidConfig = (
     `${label}.foregroundServiceType`,
   );
   const types = foregroundServiceType.split("|");
+  const foregroundMode = value.foregroundMode;
+  if (
+    foregroundMode !== undefined &&
+    foregroundMode !== "automatic" &&
+    foregroundMode !== "on-demand"
+  )
+    throw new Error(`${label}.foregroundMode must be automatic or on-demand.`);
   if (
     new Set(types).size !== types.length ||
     types.some((type) => !foregroundTypes.has(type))
@@ -165,6 +179,7 @@ const androidConfig = (
     throw new Error(`${label}.specialUseSubtype requires the specialUse type.`);
   return {
     foregroundServiceType,
+    ...(foregroundMode === undefined ? {} : { foregroundMode }),
     ...(specialUseSubtype === undefined ? {} : { specialUseSubtype }),
     notification: {
       channelId: text(

@@ -104,6 +104,7 @@ globalThis.__muonServiceRuntime = createServiceRuntime(definition, {
   io: globalThis.__muonServiceIo,
   callback: globalThis.__muonServiceCallback,
   emit: globalThis.__muonServiceEmit,
+  setWorkActive: globalThis.__muonServiceSetWorkActive,
 });
 `,
     {

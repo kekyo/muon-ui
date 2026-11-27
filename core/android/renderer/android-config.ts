@@ -109,23 +109,31 @@ const validateBrowserConfig = (browser: ConfigObject | undefined): void => {
   }
 };
 
-const validatePluginConfig = (plugin: ConfigObject | undefined): void => {
+const validatePluginConfig = (
+  plugin: ConfigObject | undefined,
+  startPage: unknown
+): void => {
   if (plugin === undefined) {
     return;
   }
   rejectConfiguredValue(plugin, 'path', 'plugin.path');
 
   if (hasOwn(plugin, 'pages') && plugin.pages !== undefined) {
+    const bundled = 'https://main.asset.muon.invalid';
+    const origin =
+      typeof startPage === 'string'
+        ? new URL(startPage.replace(/^asset:\/\/main\//u, bundled + '/')).origin
+        : bundled;
     if (
       !Array.isArray(plugin.pages) ||
       plugin.pages.some(
         (page) =>
-          page !== 'asset://main/**' &&
-          page !== 'https://main.asset.muon.invalid/**'
+          page !== origin + '/**' &&
+          !(origin === bundled && page === 'asset://main/**')
       )
     ) {
       throw new Error(
-        'muon.json plugin.pages supports only the whole trusted asset origin (asset://main/** or https://main.asset.muon.invalid/**), or [] to disable RPC.'
+        'muon.json plugin.pages supports only the whole trusted startup origin, or [] to disable RPC.'
       );
     }
   }
@@ -181,8 +189,12 @@ export const validateMuonAndroidConfig = (
   }
 
   const warnings: string[] = [];
-  validateBrowserConfig(requireOptionalSection(config, 'browser', 'browser'));
-  validatePluginConfig(requireOptionalSection(config, 'plugin', 'plugin'));
+  const browser = requireOptionalSection(config, 'browser', 'browser');
+  validateBrowserConfig(browser);
+  validatePluginConfig(
+    requireOptionalSection(config, 'plugin', 'plugin'),
+    browser?.startPage
+  );
   validateNetworkConfig(
     requireOptionalSection(config, 'network', 'network'),
     warnings

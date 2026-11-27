@@ -11,6 +11,29 @@ import {
 } from '../src/index.js';
 import { validatePluginLibraryDependencies } from '../src/dependencies.js';
 
+it('resolves the Android NDK media library from the OS and rejects a packaged replacement', () => {
+  const info = {
+    exports: [],
+    needed: ['libmediandk.so'],
+    soname: undefined,
+    runpath: [],
+  };
+  for (const target of ['android-arm64-v8a', 'android-x86_64'] as const) {
+    expect(() =>
+      validatePluginLibraryDependencies(
+        [{ path: 'libcapture.so', info }],
+        target
+      )
+    ).not.toThrow();
+    expect(() =>
+      validatePluginLibraryDependencies(
+        [{ path: 'libmediandk.so', info }],
+        target
+      )
+    ).toThrow(/reserved/);
+  }
+});
+
 it.each([
   ['linux-amd64', 'ld-linux-x86-64.so.2'],
   ['linux-armhf', 'ld-linux-armhf.so.3'],

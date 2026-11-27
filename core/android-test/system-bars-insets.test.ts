@@ -102,6 +102,9 @@ describe('Android insets subscriptions', () => {
         'muon.services': 'services-capability',
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings-capability',
+        'muon.android.permissions': 'permissions-capability',
+        'muon.android.accelerometer': 'accelerometer-capability',
+        'muon.android.usb': 'usb-capability',
         'muon.android.notifications': 'android-notifications-capability',
         'muon.notifications': 'notifications-capability',
       }
@@ -162,6 +165,9 @@ describe('Android insets subscriptions', () => {
         'muon.services': 'services-capability',
         'muon.android.systemBars': 'bars',
         'muon.android.settings': 'settings-capability',
+        'muon.android.permissions': 'permissions-capability',
+        'muon.android.accelerometer': 'accelerometer-capability',
+        'muon.android.usb': 'usb-capability',
         'muon.android.notifications': 'android-notifications-capability',
         'muon.notifications': 'android-notifications-capability',
       }

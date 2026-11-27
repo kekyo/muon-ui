@@ -35,6 +35,7 @@ import {
   cdpCommandTimeoutMs,
   cdpStartupTimeoutMs,
   configuredDevToolsShortcuts,
+  connectToMainPage,
   connectToMuonCdp,
   constants,
   createBrowserShortcutConfig,
@@ -118,7 +119,6 @@ import type {
   BrowserInitialWindowState,
   BrowserWindowBounds,
   CdpDriver,
-  CdpTarget,
   KeyboardShortcutEvent,
 } from "./shared.js";
 
@@ -186,24 +186,6 @@ const isCdpWebSocketFailure = (error: unknown): boolean =>
   /CDP WebSocket (?:(?:connection )?failed|closed|is closed)/u.test(
     error.message,
   );
-
-const getMainPageTarget = async (): Promise<CdpTarget> => {
-  const target = (
-    await listCdpTargets({
-      port: MUON_PORT,
-      timeoutMs: cdpCommandTimeoutMs,
-    })
-  ).find(
-    (candidate) =>
-      candidate.type === "page" &&
-      candidate.url === MUON_APP_URL &&
-      candidate.webSocketDebuggerUrl !== undefined,
-  );
-  if (target === undefined) {
-    throw new Error("Main page CDP target was not found");
-  }
-  return target;
-};
 
 const evaluateWithWindowsCdpReconnect = async <T>(
   driver: CdpDriver,
@@ -5928,11 +5910,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     let driver: CdpDriver | undefined = undefined;
     let popupDriver: CdpDriver | undefined = undefined;
     try {
-      driver = await connectToMuonCdp({
-        port: MUON_PORT,
-        timeoutMs: cdpCommandTimeoutMs,
-      });
-      const mainTarget = await getMainPageTarget();
+      const main = await connectToMainPage();
+      driver = main.driver;
       const popupTarget = await openPopupTarget(
         driver,
         MUON_APP_URL,
@@ -5956,7 +5935,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       driver?.close();
       driver = undefined;
 
-      await waitForTargetClosed(mainTarget.id, targetTimeoutMs);
+      await waitForTargetClosed(main.targetId, targetTimeoutMs);
       await expect(waitForProcessExitOrTimeout(running, 1000)).resolves.toBe(
         false,
       );
@@ -5993,11 +5972,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     let driver: CdpDriver | undefined = undefined;
     let popupDriver: CdpDriver | undefined = undefined;
     try {
-      driver = await connectToMuonCdp({
-        port: MUON_PORT,
-        timeoutMs: cdpCommandTimeoutMs,
-      });
-      const mainTarget = await getMainPageTarget();
+      const main = await connectToMainPage();
+      driver = main.driver;
       const popupTarget = await openPopupTarget(
         driver,
         MUON_APP_URL,
@@ -6021,7 +5997,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       driver?.close();
       driver = undefined;
 
-      await waitForTargetClosed(mainTarget.id, targetTimeoutMs);
+      await waitForTargetClosed(main.targetId, targetTimeoutMs);
       await expect(waitForProcessExitOrTimeout(running, 1000)).resolves.toBe(
         false,
       );
@@ -6053,14 +6029,8 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
     let driver: CdpDriver | undefined = undefined;
     let popupDriver: CdpDriver | undefined = undefined;
     try {
-      driver = await connectToMuonCdp({
-        port: MUON_PORT,
-        timeoutMs: cdpCommandTimeoutMs,
-      });
-      await expect(driver.evaluate("document.location.href")).resolves.toBe(
-        MUON_APP_URL,
-      );
-      const mainTarget = await getMainPageTarget();
+      const main = await connectToMainPage();
+      driver = main.driver;
       await driver.evaluate(`document.title = "muon main remains open";`);
       const popupTarget = await openPopupTarget(
         driver,
@@ -6082,7 +6052,7 @@ describeMuonPluginBridge("muon plugin bridge - runtime APIs", () => {
       await expect(waitForProcessExitOrTimeout(running, 1000)).resolves.toBe(
         false,
       );
-      const mainTitle = await readMainDocumentTitle(driver, mainTarget.id);
+      const mainTitle = await readMainDocumentTitle(driver, main.targetId);
       driver = mainTitle.driver;
       expect(mainTitle.title).toBe("muon main remains open");
     } catch (error) {

@@ -49,11 +49,20 @@ export const muonPluginTargets: readonly MuonPluginTarget[] = [
 /**
  * Gets native build requirements without probing the build machine.
  * @param target - Explicit output target, independent of the host architecture.
+ * @param androidApi - Minimum device API for Android compiler drivers.
  * @returns The compiler, dependency and linker requirements.
  */
 export const getPluginTarget = (
-  target: MuonPluginTarget
+  target: MuonPluginTarget,
+  androidApi = muonPluginAndroidApi
 ): MuonPluginTargetDescriptor => {
+  if (
+    target.startsWith('android-') &&
+    (!Number.isSafeInteger(androidApi) || androidApi < muonPluginAndroidApi)
+  )
+    throw new Error(
+      `Minimum Android API must be an integer of at least ${muonPluginAndroidApi}.`
+    );
   if (!muonPluginTargets.includes(target))
     throw new Error(`Unsupported muon plugin target: ${target}`);
   const os = target.startsWith('windows-')
@@ -67,8 +76,8 @@ export const getPluginTarget = (
     'linux-arm64': 'aarch64-linux-gnu-',
     'windows-i686': 'i686-w64-mingw32-',
     'windows-amd64': 'x86_64-w64-mingw32-',
-    'android-arm64-v8a': `aarch64-linux-android${muonPluginAndroidApi}-`,
-    'android-x86_64': `x86_64-linux-android${muonPluginAndroidApi}-`,
+    'android-arm64-v8a': `aarch64-linux-android${androidApi}-`,
+    'android-x86_64': `x86_64-linux-android${androidApi}-`,
   }[target];
   return {
     target,

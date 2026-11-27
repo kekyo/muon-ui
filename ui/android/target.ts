@@ -3,6 +3,7 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { resolveAndroidWebDeployment } from "./web.ts";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveMuonPluginAccessOptions } from "../common/plugin-access.js";
@@ -27,7 +28,8 @@ import {
   createAppIconOptionsSource,
   resolveMuonAppIconPath,
 } from "../common/app-icon.js";
-import { resolveAndroidPlugins } from "./plugins.js";
+import { assertAndroidArtifactApi, resolveAndroidPlugins } from "./plugins.js";
+import { muonPluginAndroidApi } from "muon-plugin-sdk/artifact";
 import { resolveMuonServices } from "../common/service-config.ts";
 import {
   getAndroidServicePermissions,
@@ -198,14 +200,30 @@ export const buildMuonAndroidTarget = async (input: {
         `${label} is unavailable in Android application builds; android.${key} must be false or omitted.`,
       );
   }
-  const { warnings } = validateMuonAndroidConfig(config);
+  const browser = object(config.browser, "browser");
+  const prefix = input.assets.prefix;
+  if (prefix !== "" && prefix !== "main" && !prefix.startsWith("main/"))
+    throw new Error("Android assetPrefix must use the main asset host.");
+  const assetPath = prefix.replace(/^main\/?/u, "").replace(/\/+$/u, "");
+  const rawStartPage = string(
+    browser.startPage ??
+      options.browserStartPage ??
+      `https://main.asset.muon.invalid/${assetPath === "" ? "" : `${assetPath}/`}index.html`,
+    "browser.startPage",
+  );
+  const { startPage, web } = await resolveAndroidWebDeployment(
+    rawStartPage,
+    android.web,
+    options.android?.web === undefined ? input.configDirectory : root,
+  );
+  const pageConfig = { ...config, browser: { ...browser, startPage } };
+  const { warnings } = validateMuonAndroidConfig(pageConfig);
   for (const warning of warnings) process.stderr.write(`Warning: ${warning}\n`);
   if (
     config.node !== undefined &&
     Object.keys(object(config.node, "node")).length > 0
   )
     throw new Error("node is unavailable in Android application builds.");
-  const browser = object(config.browser, "browser");
   const notifications = resolveMuonNotificationConfig(config.notifications);
   const androidNotifications = resolveAndroidNotificationConfig(
     android.notifications,
@@ -268,6 +286,36 @@ export const buildMuonAndroidTarget = async (input: {
     return abi;
   });
   if (abis.length === 0) throw new Error("android.abis must not be empty.");
+  const libraries = strings(android.libraries ?? [], "android.libraries").map(
+    (name) => {
+      if (!/\.(jar|aar)$/u.test(name))
+        throw new Error("android.libraries requires JAR or AAR files.");
+      return resolve(
+        options.android?.libraries === undefined ? input.configDirectory : root,
+        name,
+      );
+    },
+  );
+  const minSdk = android.minSdk;
+  if (
+    minSdk !== undefined &&
+    (typeof minSdk !== "number" || !Number.isSafeInteger(minSdk) || minSdk < 1)
+  )
+    throw new Error("android.minSdk must be a positive integer.");
+  const features = Object.fromEntries(
+    Object.entries(object(android.features, "android.features")).map(
+      ([name, required]) => {
+        if (
+          !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$/u.test(name) ||
+          typeof required !== "boolean"
+        )
+          throw new Error(
+            "android.features must map dotted feature names to booleans.",
+          );
+        return [name, required] as const;
+      },
+    ),
+  );
   const catalogs = await readAndroidPluginMetadata(
     android.plugins ?? [],
     abis,
@@ -296,6 +344,11 @@ export const buildMuonAndroidTarget = async (input: {
   const nativeCatalogs = new Map(catalogs);
   const nativeDefinitions: object[] = [];
   for (const [name, artifact] of artifacts) {
+    assertAndroidArtifactApi(
+      artifact.manifest,
+      abis,
+      minSdk ?? muonPluginAndroidApi,
+    );
     if (nativeCatalogs.has(name))
       throw new Error(`Duplicate Android plugin definition: ${name}`);
     nativeCatalogs.set(name, artifact.manifest.functions);
@@ -322,7 +375,7 @@ export const buildMuonAndroidTarget = async (input: {
     });
   }
   const pluginConfiguration = resolveMuonAndroidPluginAccess(
-    config,
+    pageConfig,
     options.runtimePluginConfig,
     [
       ...(android.plugins === undefined ? [] : (android.plugins as unknown[])),
@@ -352,29 +405,6 @@ export const buildMuonAndroidTarget = async (input: {
       return [key, value];
     }),
   );
-  const prefix = input.assets.prefix;
-  if (prefix !== "" && prefix !== "main" && !prefix.startsWith("main/"))
-    throw new Error("Android assetPrefix must use the main asset host.");
-  const assetPath = prefix.replace(/^main\/?/u, "").replace(/\/+$/u, "");
-  const rawStartPage = string(
-    browser.startPage ??
-      options.browserStartPage ??
-      `https://main.asset.muon.invalid/${assetPath === "" ? "" : `${assetPath}/`}index.html`,
-    "browser.startPage",
-  );
-  const startPage = rawStartPage.replace(
-    /^asset:\/\/main\//u,
-    "https://main.asset.muon.invalid/",
-  );
-  const url = new URL(startPage);
-  if (
-    url.origin !== "https://main.asset.muon.invalid" ||
-    url.username ||
-    url.password
-  )
-    throw new Error(
-      "Android browser.startPage must use asset://main/ or https://main.asset.muon.invalid/.",
-    );
   if (!(await stat(input.assets.sourcePath)).isDirectory())
     throw new Error(
       "Android web assets must be a directory; ZIP assets are not supported.",
@@ -396,6 +426,7 @@ export const buildMuonAndroidTarget = async (input: {
     pluginConfiguration.plugins,
     abis,
     resolved.pluginsDirectory,
+    [...artifacts.values()],
   );
   const services = await resolveAndroidServices(
     await resolveMuonServices(
@@ -412,6 +443,7 @@ export const buildMuonAndroidTarget = async (input: {
     ),
     abis,
     plugins,
+    minSdk ?? muonPluginAndroidApi,
   );
   for (const permission of getAndroidServicePermissions(services)) {
     if (!permissions.includes(permission)) permissions.push(permission);
@@ -427,6 +459,7 @@ export const buildMuonAndroidTarget = async (input: {
     assetsDirectory: input.assets.sourcePath,
     assetPath,
     startPage,
+    web,
     applicationId,
     label: string(
       options.android?.label ?? options.appName ?? android.label ?? defaultName,
@@ -439,6 +472,9 @@ export const buildMuonAndroidTarget = async (input: {
     ),
     abis,
     permissions,
+    minSdk,
+    features,
+    libraries,
     systemBars,
     notifications,
     androidNotifications,

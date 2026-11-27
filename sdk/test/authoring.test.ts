@@ -26,6 +26,41 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 
+it.each(['make', 'cmake'] as const)(
+  'compiles the requested Android API with %s and records it in the distributable',
+  async (buildSystem) => {
+    const root = await mkdtemp(join(tmpdir(), 'muon-android-api-'));
+    directories.push(root);
+    await createPluginProject({
+      directory: root,
+      name: 'floor',
+      language: 'c',
+      buildSystem,
+    });
+    const path = join(root, 'muon-plugin.build.json');
+    const config = JSON.parse(await readFile(path, 'utf8'));
+    config.androidApi = 33;
+    await writeFile(path, JSON.stringify(config));
+    const source = join(root, config.sources[0]);
+    await writeFile(
+      source,
+      '#if __ANDROID_API__ != 33\n#error incorrect_minimum_android_api\n#endif\n' +
+        (await readFile(source, 'utf8'))
+    );
+    const target = 'android-arm64-v8a';
+    const result = await readPluginArtifact(
+      await buildPlugin({ configPath: path, target }),
+      [target]
+    );
+    expect(result.manifest.targets[target]?.runtime.androidApi).toBe(33);
+    config.androidApi = 23;
+    await writeFile(path, JSON.stringify(config));
+    await expect(buildPlugin({ configPath: path, target })).rejects.toThrow(
+      /Android API/
+    );
+  }
+);
+
 it('builds the generated Makefile directly with the exported SDK environment', async () => {
   const root = await mkdtemp(join(tmpdir(), 'muon-manual-make-'));
   directories.push(root);
@@ -39,6 +74,81 @@ it('builds the generated Makefile directly with the exported SDK environment', a
   expect(inspectPluginBinary(binary, 'linux-amd64').exports).toContain(
     'muon_init_plugin'
   );
+});
+
+it('packages a declared Android vendor library without a SONAME and keeps its original bytes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'muon-android-vendor-'));
+  directories.push(root);
+  const target = 'android-arm64-v8a';
+  const environment = await getNativeBuildEnvironment({ target });
+  await createPluginProject({
+    directory: root,
+    name: 'meter',
+    language: 'c',
+    buildSystem: 'cmake',
+  });
+  await writeFile(
+    join(root, 'vendor.c'),
+    'int vendor_read(void) { return 42; }\n'
+  );
+  const vendor = join(root, 'libmeter_vendor.so');
+  const buildVendor = async (extra: string[]) => {
+    await execute(
+      environment.CC!,
+      [
+        '-shared',
+        '-fPIC',
+        '-Wl,-z,max-page-size=16384',
+        ...extra,
+        join(root, 'vendor.c'),
+        '-o',
+        vendor,
+      ],
+      { env: environment }
+    );
+  };
+  await buildVendor([]);
+  const project = join(root, 'CMakeLists.txt');
+  await writeFile(
+    project,
+    (await readFile(project, 'utf8')) +
+      '\ntarget_link_directories(meter PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")\n' +
+      'target_link_libraries(meter PRIVATE "-Wl,--no-as-needed" meter_vendor "-Wl,--as-needed")\n'
+  );
+  const path = join(root, 'muon-plugin.build.json');
+  const config = JSON.parse(await readFile(path, 'utf8'));
+  config.dependencies = { [target]: ['{{source}}/libmeter_vendor.so'] };
+  await writeFile(path, JSON.stringify(config));
+  await expect(buildPlugin({ configPath: path, target })).rejects.toThrow(
+    /SONAME/
+  );
+  config.androidDependenciesWithoutSoname = {
+    [target]: ['libmeter_vendor.so'],
+  };
+  await writeFile(path, JSON.stringify(config));
+  const manifest = await buildPlugin({ configPath: path, target });
+  const artifact = await readPluginArtifact(manifest, [target]);
+  expect(artifact.targets[target]?.binary.needed).toContain(
+    'libmeter_vendor.so'
+  );
+  expect(artifact.manifest.targets[target]?.dependencies[0]).toMatchObject({
+    androidSoname: 'absent',
+  });
+  const packaged = artifact.targets[target]!.dependencies[0]!;
+  expect(await readFile(packaged)).toEqual(await readFile(vendor));
+  await writeFile(packaged, 'different bytes');
+  await expect(readPluginArtifact(manifest, [target])).rejects.toThrow(
+    /SHA-256/
+  );
+  // Start the next producer check with a fresh destination; the intentionally changed package is invalid.
+  await buildVendor(['-Wl,-soname,a-different.so']);
+  await expect(
+    buildPlugin({
+      configPath: path,
+      target,
+      outputDirectory: join(root, 'different'),
+    })
+  ).rejects.toThrow(/SONAME/);
 });
 
 it.each(['c', 'c++'] as const)(
@@ -171,6 +281,35 @@ it('rejects unavailable targets and incomplete toolchains before running the bui
       environment: { PATH: '' },
     })
   ).rejects.toThrow(/sudo apt install[\s\S]*pkg-config/);
+});
+
+it('replaces the catalog when rebuilding its only target', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'muon-catalog-rebuild-'));
+  directories.push(root);
+  await createPluginProject({
+    directory: root,
+    name: 'current',
+    language: 'c',
+  });
+  const configPath = join(root, 'muon-plugin.build.json');
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  const target = 'linux-amd64';
+  await buildPlugin({ configPath, target });
+  const source = join(root, config.sources[0]);
+  await writeFile(
+    source,
+    (await readFile(source, 'utf8')).replaceAll('increment', 'advance')
+  );
+  config.functions = ['muon.current.advance'];
+  await writeFile(configPath, JSON.stringify(config));
+  const path = await buildPlugin({ configPath, target });
+  expect((await readPluginArtifact(path, [target])).manifest.functions).toEqual(
+    config.functions
+  );
+  await buildPlugin({ configPath, target: 'android-arm64-v8a' });
+  config.functions = ['muon.current.changed'];
+  await writeFile(configPath, JSON.stringify(config));
+  await expect(buildPlugin({ configPath, target })).rejects.toThrow(/catalog/);
 });
 
 it('uses a custom build with vendor sources without writing into the source tree', async () => {

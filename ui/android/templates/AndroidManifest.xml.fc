@@ -3,6 +3,9 @@
 {{for permission permissions}}
     <uses-permission android:name="{{permission}}" />
 {{end}}
+{{for feature features}}
+    <uses-feature android:name="{{feature.name}}" android:required="{{feature.required}}" />
+{{end}}
     <queries>
         <intent>
             <action android:name="android.settings.APPLICATION_DETAILS_SETTINGS" />
@@ -18,7 +21,7 @@
     <application android:allowBackup="false" android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher" android:supportsRtl="true"
         android:theme="@style/MuonTheme"
-{{if serviceCleartext}}
+{{if networkConfig}}
         android:networkSecurityConfig="@xml/muon_service_network"
 {{end}}
         android:usesCleartextTraffic="false">
@@ -31,6 +34,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+{{if usbEnabled}}
+        <provider android:name="dev.muon.runtime.MuonUsbDeviceProvider"
+            android:authorities="${applicationId}.muon.usb" android:exported="false" />
+{{end}}
 {{if servicesEnabled}}
         <receiver android:name="dev.muon.runtime.MuonServiceBootReceiver"
             android:exported="false" android:process=":muon_services">

@@ -53,6 +53,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     private final MuonAndroidFilesystemService filesystemService;
     private final MuonAndroidSystemBarsService systemBarsService;
     private final MuonAndroidSettingsService settingsService;
+    private final MuonAndroidAccelerometer accelerometer;
+    private final MuonAndroidDeviceService deviceService;
     private final MuonAndroidNotificationPermissionService notificationPermissionService;
     private final MuonAndroidNotificationService notificationService;
     private MuonServiceClient serviceClient;
@@ -65,6 +67,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
             @NonNull WebView webView,
             @NonNull MuonAppConfig config) {
         this.activity = activity;
+        accelerometer = new MuonAndroidAccelerometer(activity);
+        deviceService = new MuonAndroidDeviceService(activity);
         configValues = config.values;
         this.webView = webView;
         filesystemService = new MuonAndroidFilesystemService(
@@ -95,6 +99,14 @@ final class MuonAndroidPlatformService implements AutoCloseable {
         if (functionPath.startsWith("muon.fs.")) {
             filesystemService.invoke(
                     callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.android.accelerometer.")) {
+            accelerometer.invoke(callId, functionPath, arguments, attachments, completion);
+            return;
+        }
+        if (functionPath.startsWith("muon.android.permissions.") || functionPath.startsWith("muon.android.usb.")) {
+            deviceService.invoke(callId, functionPath, arguments, attachments, completion);
             return;
         }
         if (functionPath.startsWith("muon.services.")) {
@@ -179,6 +191,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     }
 
     void cancel(int callId) {
+        accelerometer.cancel(callId);
+        deviceService.cancel(callId);
         filesystemService.cancel(callId);
         systemBarsService.cancel(callId);
         notificationPermissionService.cancel(callId);
@@ -186,6 +200,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     }
 
     void cancelAll() {
+        accelerometer.releasePage();
+        deviceService.cancelAll();
         filesystemService.cancelAll();
         systemBarsService.cancelAll();
         notificationPermissionService.cancelAll();
@@ -230,6 +246,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     }
 
     void setResumed(boolean value) {
+        accelerometer.setResumed(value);
+        deviceService.setResumed(value);
         settingsService.setResumed(value);
         notificationPermissionService.setResumed(value);
         resumed = value;
@@ -241,7 +259,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
     int getActiveNotificationWatchCount() { return notificationService.getActiveWatchCount(); }
 
     boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
-        return notificationPermissionService.onRequestPermissionsResult(code, permissions, results);
+        return deviceService.onRequestPermissionsResult(code, permissions, results)
+                || notificationPermissionService.onRequestPermissionsResult(code, permissions, results);
     }
 
     MuonAndroidSystemBarsService getSystemBarsService() { return systemBarsService; }
@@ -260,6 +279,8 @@ final class MuonAndroidPlatformService implements AutoCloseable {
 
     @Override
     public void close() {
+        accelerometer.releasePage();
+        deviceService.close();
         filesystemService.close();
         systemBarsService.close();
         settingsService.close();

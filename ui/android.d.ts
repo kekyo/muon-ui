@@ -42,6 +42,17 @@ export interface MuonAndroidPluginOptions {
 
 /** Android application options, overriding the muon.json android section. */
 export interface MuonAndroidOptions {
+  /** Android WebView deployment for the main origin selected by browser.startPage. */
+  web?: {
+    /** Additional HTTPS origins for subresources. A hosted page defaults to its own origin. */
+    readonly resourceOrigins?: readonly string[];
+    /** HTTP resource directory prefixes on 127.0.0.1 for an application-owned listening service. */
+    readonly loopbackResourcePaths?: readonly string[];
+    /** Application-owned script installed after muon in the trusted main frame, before page scripts. */
+    readonly documentStartScript?: string;
+    /** Public PEM or DER certificate authority trusted only for the hosted startup hostname. */
+    readonly certificateAuthority?: string;
+  };
   /** Initial system bars and safe-area policy, applied before JavaScript starts. */
   systemBars?: MuonAndroidSystemBarsOptions;
   /** Android channels and monochrome small icon; enablement is in notifications.enabled. */
@@ -72,6 +83,12 @@ export interface MuonAndroidOptions {
   versionName?: string;
   /** Native ABIs to package; defaults to both supported ABIs. */
   abis?: readonly MuonAndroidAbi[];
+  /** Minimum Android API allowed to install the app, at least the runtime minimum and at most the target API. */
+  minSdk?: number;
+  /** Manifest uses-feature names mapped to true for required hardware or false for optional features. */
+  features?: Readonly<Record<string, boolean>>;
+  /** Prebuilt JARs and Android library archives supplying classes, resources or manifest components. */
+  libraries?: readonly string[];
   /** PNG launcher icon; relative to the configuration that supplies it. */
   icon?: string;
   /** Android manifest permissions. Runtime permission prompts remain app-specific. */

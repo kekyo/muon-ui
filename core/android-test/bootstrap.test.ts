@@ -6,6 +6,31 @@ import type { MuonWebViewJavaScriptBridge } from '../android/renderer/webview-rp
 describe('packaged Android renderer', () => {
   it.each([
     [
+      'muon.android.permissions.request',
+      [['android.permission.CAMERA']],
+      ['["android.permission.CAMERA"]'],
+      { 'android.permission.CAMERA': true },
+    ],
+    [
+      'muon.android.usb.listDevices',
+      [],
+      [],
+      [
+        {
+          connectionId: 'attachment',
+          vendorId: 123,
+          productId: 456,
+          permitted: false,
+        },
+      ],
+    ],
+    [
+      'muon.android.usb.requestPermission',
+      ['attachment'],
+      ['attachment'],
+      true,
+    ],
+    [
       'muon.android.settings.open',
       ['notifications', { fallback: 'app-details' }],
       ['{"target":"notifications","fallback":"app-details"}'],

@@ -28,6 +28,8 @@
             <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
         </service>
         <activity android:name="dev.muon.runtime.MuonWindowActivity" android:exported="false" />
+        <provider android:name="dev.muon.runtime.MuonUsbDeviceProvider"
+            android:authorities="${applicationId}.muon.usb" android:exported="false" />
         <activity
             android:name="dev.muon.runtime.MuonActivity"
             android:exported="true">

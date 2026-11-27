@@ -8,6 +8,7 @@ const androidSystem = [
   'libdl.so',
   'liblog.so',
   'libandroid.so',
+  'libmediandk.so',
   'libjnigraphics.so',
   'libz.so',
   'libEGL.so',

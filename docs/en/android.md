@@ -108,7 +108,10 @@ You can also provide Android settings through Vite's `build.android`. Precedence
 | `versionCode` | Integer from 1 to 2100000000; defaults to 1. Increase for each release |
 | `versionName` | Display version; defaults to `package.json` version |
 | `abis` | Included ABIs; both supported ABIs by default |
+| `minSdk` | Lowest Android API level that can install the app. Accepts an integer from the runtime minimum (24 by default) through the target API level. [Android API levels](https://developer.android.com/guide/topics/manifest/uses-sdk-element) |
+| `features` | Maps hardware or software feature names to `true` (required) or `false` (optional). For example, `{"android.hardware.usb.host": true}` requires USB host support. Defaults to an empty map. [Android feature declarations](https://developer.android.com/guide/topics/manifest/uses-feature-element) |
 | `icon` | PNG image path |
+| `libraries` | JAR and AAR paths to include in the APK. Android merges AAR manifests and resources into the app. Supply native libraries as verified plugins or their dependencies. [Android libraries](https://developer.android.com/studio/projects/android-library) |
 | `permissions` | Fully qualified permissions requested by the app. Defaults to an empty array. [Build-time permissions and runtime grants](#build-time-permissions-and-runtime-grants) |
 | `sdkPath` | SDK directory; otherwise detected from `ANDROID_HOME`, `ANDROID_SDK_ROOT`, or adb on PATH |
 | `plugins` | Prebuilt plugins described below; empty by default |
@@ -119,7 +122,15 @@ You can also provide Android settings through Vite's `build.android`. Precedence
 
 Relative paths in `muon.json` resolve from that file's directory. Paths supplied by Vite/API resolve from the project root. To select an SDK for `prepare`, use the environment, `muon.json`, or `--sdk-path`.
 
-The default web asset URL is `https://main.asset.muon.invalid/index.html`. A subpath in Vite's `base` is preserved. Set `browser.startPage` to a URL on this origin or `asset://main/…`. External start pages, ZIP assets, and multiple asset hosts are unsupported.
+Bundled pages default to `https://main.asset.muon.invalid/index.html`, including Vite's base subpath when set. Set `browser.startPage` to an asset URL (`asset://main/…`) or to the HTTPS URL of a hosted page. Only a main frame on the startup origin receives native APIs.
+
+Use `android.web.resourceOrigins` to allow additional HTTPS origins for resources such as images. For an on-device HTTP service, list directories such as `/video/` in `android.web.loopbackResourcePaths`. To adapt an existing site, point `android.web.documentStartScript` at a JavaScript file. Muon packages it in the APK and runs it immediately after the runtime initializes in a trusted main document.
+
+If the site uses a private certificate authority, set `android.web.certificateAuthority` to its public PEM or DER certificate. The certificate is trusted only for the launch hostname. On Android 17 and later, declare `android.permission.ACCESS_LOCAL_NETWORK` for a LAN-hosted start page. If loading fails before the grant, the user can grant access and retry from the native error screen. [Android network security configuration](https://developer.android.com/privacy-and-security/security-config) and [local network permission](https://developer.android.com/privacy-and-security/local-network-permission).
+
+For `navigator.geolocation`, declare `android.permission.ACCESS_COARSE_LOCATION` and, if precise location is required, `android.permission.ACCESS_FINE_LOCATION`. Android prompts when the foreground page requests location.
+
+Allow `muon.android.accelerometer` methods for foreground motion. `start()` requests gravity-inclusive samples at an interval of 100 ms. Actual intervals depend on the device. `waitForChange(revision)` returns the next state change or sample, and `getState()` reads the latest snapshot. Both measurement and receipt timestamps use microseconds since boot. Acquisition suspends while the Activity is paused and resumes on return. `stop()` or navigating away releases the document's registration. [Android motion sensors](https://developer.android.com/develop/sensors-and-location/sensors/sensors_motion).
 
 Muon APIs initialize before your application JavaScript. No custom adapter import is needed. In simple mode:
 
@@ -164,7 +175,15 @@ apkanalyzer manifest permissions dist-muon/android/com.example.notes-1-debug.apk
 apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
 ```
 
-Declaring a permission in the manifest does not prompt the user. For example, Muon adds `FOREGROUND_SERVICE_LOCATION` for a location service. The app must also declare and obtain `ACCESS_COARSE_LOCATION` or `ACCESS_FINE_LOCATION`. Starting the service from the background may also require an `ACCESS_BACKGROUND_LOCATION` grant. Muon has no general-purpose JavaScript API for requesting Android runtime permissions. [Location service requirements](https://developer.android.com/develop/background-work/services/fgs/service-types#location) · [Android notification permissions](https://developer.android.com/develop/ui/compose/notifications/notification-permission) · [Network security configuration](https://developer.android.com/privacy-and-security/security-config)
+Declaring a permission in the manifest does not prompt the user. For example, Muon adds `FOREGROUND_SERVICE_LOCATION` for a location service. The app must also declare and obtain `ACCESS_COARSE_LOCATION` or `ACCESS_FINE_LOCATION`. Starting the service from the background may also require an `ACCESS_BACKGROUND_LOCATION` grant. The foreground page can request declared permissions using the methods below. [Location service requirements](https://developer.android.com/develop/background-work/services/fgs/service-types#location) · [Android notification permissions](https://developer.android.com/develop/ui/compose/notifications/notification-permission) · [Network security configuration](https://developer.android.com/privacy-and-security/security-config)
+
+### Android runtime permissions and USB devices
+
+Add the methods used by the page to its list of allowed built-in functions. `muon.android.permissions.getState(names)` reads the current grants for permissions declared in the manifest. `request(names)` prompts from the foreground Activity and returns an object mapping each permission name to a boolean. An interrupted request rejects its promise. [Request runtime permissions](https://developer.android.com/training/permissions/requesting)
+
+USB host applications can enumerate attachments with `muon.android.usb.listDevices()`. For USB video devices, obtain the Android camera grant first, then pass the selected attachment’s `connectionId` to `muon.android.usb.requestPermission(connectionId)`. The ID expires on detach. Android service code can open the granted device in its own process with `MuonUsbDeviceProvider.open(context, connectionId)` and must close the connection after use. Enumeration and permission requests work before a foreground service starts. [Android USB host](https://developer.android.com/develop/connectivity/usb/host)
+
+An Android extension can call `MuonUsbDeviceProvider.observe(context, changed)` to receive attachment and removal notifications on its process's main looper. Read the current JSON snapshot with `MuonUsbDeviceProvider.list(context)` after a notification. Its attachment IDs match those available to the page. Call `close()` on the returned registration when observation ends. [Android USB host](https://developer.android.com/develop/connectivity/usb/host)
 
 ### Import with validate mode
 

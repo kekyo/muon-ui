@@ -159,6 +159,12 @@ uint64_t MuonServiceController::SetAutostart(const std::string& id, bool enabled
   return result;
 }
 
+bool MuonServiceController::SetWorkActive(const std::string& id, uint64_t generation, bool active) {
+  const auto accepted = impl_->lifecycle.SetWorkActive(id, generation, active);
+  Dispatch(impl_);
+  return accepted;
+}
+
 void MuonServiceController::RequestRuntimeStop(const std::string& id,
                                                uint64_t generation,
                                                const std::string& reason, MuonServiceStopCause cause) {

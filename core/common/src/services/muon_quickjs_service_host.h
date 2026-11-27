@@ -54,6 +54,9 @@ struct MuonQuickJsServicePlatform {
   std::function<MuonQuickJsServiceExtension(const MuonQuickJsServiceSpec&, uint64_t,
       MuonQuickJsEngine&, std::function<void()>,
       std::function<void(const std::string&)>)> attach = {};
+  /** Update transient demand for work accepted by this generation. A stale
+   * generation is rejected. An empty callback omits the feature. */
+  std::function<bool(const std::string&, uint64_t, bool)> set_work_active = {};
 };
 
 struct MuonQuickJsServiceHostImpl; /**< Private generation and queue ownership. */

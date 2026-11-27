@@ -996,11 +996,22 @@ printf '  Machine:                           Advanced Micro Devices X86-64\\n'
           MUON_FAKE_CONTAINER_LOG: containerLog,
           MUON_FAKE_NPM_LOG: npmLog,
           MUON_FAKE_TSC_PATH: tscPath,
+          CCACHE_DIR: join(root, "compiler cache"),
+          CMAKE_C_COMPILER_LAUNCHER: "ccache",
+          CMAKE_CXX_COMPILER_LAUNCHER: "ccache",
         },
       },
     );
 
     const containerInvocation = await readFile(containerLog, "utf8");
+    expect(containerInvocation.split("\n")).toEqual(
+      expect.arrayContaining([
+        `${join(root, "compiler cache")}:/ccache:z`,
+        "CCACHE_DIR=/ccache",
+        "CMAKE_C_COMPILER_LAUNCHER=ccache",
+        "CMAKE_CXX_COMPILER_LAUNCHER=ccache",
+      ]),
+    );
     expect(containerInvocation).toContain(
       `${join(root, "deps", "tra-ffic")}:/workspace-deps/tra-ffic:ro,Z`,
     );

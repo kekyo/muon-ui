@@ -25,6 +25,27 @@ static size_t Count(const std::vector<MuonServiceEvent>& events,
       }));
 }
 
+static bool ActiveWorkOutlivesItsPage() {
+  auto manager = MuonServiceLifecycle({{"capture", false, std::nullopt}});
+  const auto page = manager.Acquire("capture", "first-page");
+  if (!page) return false;
+  manager.CompleteStart("capture", page->generation, "");
+  if (!manager.SetWorkActive("capture", page->generation, true)) return false;
+  manager.ReleaseOwner("first-page");
+  const auto retained = *manager.GetSnapshot("capture");
+  if (!Expect(retained.state == MuonServiceState::Running && retained.client_references == 0 &&
+              !retained.resident && !retained.autostart, "accepted work must outlive its page without autostart")) return false;
+  const auto next = manager.Acquire("capture", "next-page");
+  if (!next || next->generation != retained.generation) return false;
+  manager.Release(*next);
+  if (manager.SetWorkActive("capture", retained.generation + 1, false)) return false;
+  manager.SetWorkActive("capture", retained.generation, false);
+  manager.CompleteStop("capture", retained.generation);
+  return Expect(manager.GetSnapshot("capture")->state == MuonServiceState::Stopped &&
+                !manager.SetWorkActive("capture", retained.generation, true),
+                "completing the final job must stop the unreferenced generation");
+}
+
 static bool DefaultsAndOverrides() {
   auto manager = MuonServiceLifecycle({
       {"off", false, std::nullopt}, {"on", true, std::nullopt},
@@ -561,6 +582,7 @@ static bool OsStopDuringPolicySave() {
 int main() {
   const auto tests = std::vector<std::pair<const char*, bool (*)()>>{
       {"defaults and overrides", DefaultsAndOverrides},
+      {"active work outlives its page", ActiveWorkOutlivesItsPage},
       {"retry denied resident start", RetryDeniedResidentStart},
       {"shared acquisition", SharedAcquisition},
       {"exact reference identity", ExactReferenceIdentity},

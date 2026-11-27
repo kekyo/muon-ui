@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
+{{if hasHosts}}
     <domain-config cleartextTrafficPermitted="true">
 {{for host hosts}}
         <domain includeSubdomains="false">{{host}}</domain>
 {{end}}
     </domain-config>
+{{end}}
+{{if hasCa}}
+    <domain-config cleartextTrafficPermitted="{{caCleartext}}">
+        <domain includeSubdomains="false">{{caHost}}</domain>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/muon_web_ca" />
+        </trust-anchors>
+    </domain-config>
+{{end}}
 </network-security-config>

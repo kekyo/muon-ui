@@ -116,6 +116,14 @@ static const std::vector<std::string> kFilesystemFunctionPaths = {
 };
 
 static const std::vector<std::string> kPlatformFunctionPaths = {
+    "muon.android.accelerometer.getState",
+    "muon.android.accelerometer.start",
+    "muon.android.accelerometer.stop",
+    "muon.android.accelerometer.waitForChange",
+    "muon.android.permissions.getState",
+    "muon.android.permissions.request",
+    "muon.android.usb.listDevices",
+    "muon.android.usb.requestPermission",
     "muon.services.acquire",
     "muon.services.release",
     "muon.services.getState",
@@ -1485,6 +1493,17 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
     return false;
   }
   auto settings_policy = std::shared_ptr<MuonPluginPolicy>{};
+  auto permissions_policy = std::shared_ptr<MuonPluginPolicy>{};
+  auto accelerometer_policy = std::shared_ptr<MuonPluginPolicy>{};
+  auto usb_policy = std::shared_ptr<MuonPluginPolicy>{};
+  if (!CreateBuiltinPolicy(state, {"muon.android.permissions.getState", "muon.android.permissions.request"},
+                           &permissions_policy, error_message) ||
+      !CreateBuiltinPolicy(state, {"muon.android.accelerometer.getState", "muon.android.accelerometer.start", "muon.android.accelerometer.stop", "muon.android.accelerometer.waitForChange"},
+                           &accelerometer_policy, error_message) ||
+      !CreateBuiltinPolicy(state, {"muon.android.usb.listDevices", "muon.android.usb.requestPermission"},
+                           &usb_policy, error_message)) {
+    return false;
+  }
   if (!CreateBuiltinPolicy(state,
                           {"muon.android.settings.isAvailable", "muon.android.settings.open"},
                           &settings_policy, error_message)) {
@@ -1582,6 +1601,9 @@ static bool InitializeHost(MuonAndroidRpcHost* state,
       !add_policy("browser-capability", browser_policy) ||
       !add_policy("system-bars-capability", system_bars_policy) ||
       !add_policy("settings-capability", settings_policy) ||
+      !add_policy("permissions-capability", permissions_policy) ||
+      !add_policy("accelerometer-capability", accelerometer_policy) ||
+      !add_policy("usb-capability", usb_policy) ||
       (state->notifications_enabled &&
        (!add_policy("android-notifications-capability", notification_policy) ||
         !add_policy("notifications-capability", common_notification_policy))) ||

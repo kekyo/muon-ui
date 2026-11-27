@@ -7,7 +7,7 @@
   "scripts": {
     "build": "vite build",
     "build:windows-cdp-relay": "node build-windows-cdp-relay.mjs",
-    "test:vitest": "xvfb-run -a node ../../scripts/run-dbus-session-command.mjs node ../../scripts/run-xvfb-command.mjs vitest run --exclude plugin-e2e-windows.test.ts --exclude windows-path.test.ts --exclude windows-builder-path.test.ts --exclude notifications-windows.test.ts --exclude server-windows.test.ts --exclude service-host-windows.test.ts --exclude services-windows.test.ts",
+    "test:vitest": "xvfb-run -a node ../../scripts/run-dbus-session-command.mjs node ../../scripts/run-xvfb-command.mjs node run-linux-vitest.mjs",
     "test:notifications-desktop": "MUON_TEST_NOTIFICATION_DESKTOP=1 vitest run notifications-linux.test.ts",
     "test:notifications-portal": "MUON_TEST_NOTIFICATION_DESKTOP=1 vitest run notifications-portal.test.ts",
     "test:notifications-launch": "MUON_TEST_NOTIFICATION_DESKTOP=1 vitest run notifications-linux-launch.test.ts",

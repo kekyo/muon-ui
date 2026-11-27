@@ -28,7 +28,7 @@ import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
-/** Serves the trusted asset origin without filtering ordinary WebView network traffic. */
+/** Serves bundled assets and applies the deployment's resource policy to pages and service workers. */
 final class MuonAssetRequestHandler implements AutoCloseable {
     private static final String TRUSTED_SCHEME = "https";
     private static final String TRUSTED_HOST = "main.asset.muon.invalid";
@@ -40,9 +40,15 @@ final class MuonAssetRequestHandler implements AutoCloseable {
 
     private final WebViewAssetLoader assetLoader;
     private final boolean networkLoadsAllowed;
+    @Nullable private final MuonWebDeployment deployment;
     private ServiceWorkerControllerCompat serviceWorkerController;
 
     MuonAssetRequestHandler(@NonNull Context context) {
+        this(context, null);
+    }
+
+    MuonAssetRequestHandler(@NonNull Context context, @Nullable MuonWebDeployment deployment) {
+        this.deployment = deployment;
         assetLoader = new WebViewAssetLoader.Builder()
                 .setDomain(TRUSTED_HOST)
                 .addPathHandler(TRUSTED_PATH_PREFIX,
@@ -54,6 +60,7 @@ final class MuonAssetRequestHandler implements AutoCloseable {
 
     void configureWebViewSettings(@NonNull WebSettings settings) {
         settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setBlockNetworkLoads(!networkLoadsAllowed);
@@ -89,6 +96,9 @@ final class MuonAssetRequestHandler implements AutoCloseable {
     @Nullable WebResourceResponse shouldInterceptRequest(
             @NonNull WebResourceRequest request) {
         Uri url = request.getUrl();
+        if (deployment != null && !(request.isForMainFrame() ? deployment.allowsNavigation(url.toString()) : deployment.allowsResource(url))) {
+            return createErrorResponse(403, "Forbidden", new byte[0], false);
+        }
         if (!isTrustedAssetUrl(url)) {
             return null;
         }

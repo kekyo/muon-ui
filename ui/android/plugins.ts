@@ -3,13 +3,36 @@
 // Under MIT.
 // https://github.com/kekyo/muon-ui
 
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import {
   inspectPluginBinary,
   validatePluginLibraryDependencies,
+  type PluginArtifactManifest,
+  type ResolvedPluginArtifact,
+  type ServiceArtifactManifest,
 } from "muon-plugin-sdk/artifact";
 import type { MuonAndroidAbi, MuonAndroidPackagedPlugin } from "./build.js";
+
+/** Check that every packaged ABI can load on the application's oldest supported device.
+ * @param manifest Verified plugin or native service manifest.
+ * @param abis ABIs selected for this application.
+ * @param minSdk Application installation floor.
+ */
+export const assertAndroidArtifactApi = (
+  manifest: PluginArtifactManifest | ServiceArtifactManifest,
+  abis: readonly MuonAndroidAbi[],
+  minSdk: number,
+): void => {
+  for (const abi of abis) {
+    const required = manifest.targets[`android-${abi}`]?.runtime.androidApi;
+    if (required !== undefined && required > minSdk)
+      throw new Error(
+        `${manifest.name} (${abi}) requires Android API ${required}, but android.minSdk is ${minSdk}.`,
+      );
+  }
+};
 
 const runtimeLibraries = new Set([
   "libcardio.so",
@@ -33,12 +56,15 @@ const text = (value: unknown, label: string): string => {
  * @param input - Parsed android.plugins value.
  * @param abis - Selected APK ABIs.
  * @param directory - Base directory of the configuration supplying the plugins.
+ * @param artifacts - Verified manifests for packaged plugin inputs. Only their ordinary
+ * dependency declarations can authorize Android's basename fallback for a library without a SONAME.
  * @returns Runtime registry entries with absolute library paths.
  */
 export const resolveAndroidPlugins = async (
   input: unknown,
   abis: readonly MuonAndroidAbi[],
   directory: string,
+  artifacts: readonly ResolvedPluginArtifact[] = [],
 ): Promise<MuonAndroidPackagedPlugin[]> => {
   if (!Array.isArray(input))
     throw new Error("android.plugins must be an array.");
@@ -121,9 +147,20 @@ export const resolveAndroidPlugins = async (
     };
   });
   for (const abi of abis) {
+    const expectedHashes = new Map<string, string>();
+    for (const artifact of artifacts) {
+      const target = `android-${abi}` as const;
+      const paths = artifact.targets[target]?.dependencies;
+      for (const [index, file] of (
+        artifact.manifest.targets[target]?.dependencies ?? []
+      ).entries()) {
+        if (file.androidSoname === "absent" && paths?.[index])
+          expectedHashes.set(paths[index], file.sha256);
+      }
+    }
     const files = new Map<
       string,
-      { path: string; data: Buffer; plugin: boolean }
+      { path: string; data: Buffer; plugin: boolean; absentSoname: boolean }
     >();
     for (const plugin of result) {
       const paths = [
@@ -136,6 +173,12 @@ export const resolveAndroidPlugins = async (
         if (!/^lib[A-Za-z0-9_.+-]+\.so$/u.test(name))
           throw new Error("Invalid Android dependency filename: " + name);
         const data = await readFile(path);
+        const expected = expectedHashes.get(path);
+        if (
+          expected !== undefined &&
+          createHash("sha256").update(data).digest("hex") !== expected
+        )
+          throw new Error("Android dependency SHA-256 mismatch: " + name);
         const previous = files.get(name);
         if (previous && !previous.data.equals(data))
           throw new Error("Conflicting Android library: " + name);
@@ -143,12 +186,17 @@ export const resolveAndroidPlugins = async (
           path,
           data,
           plugin: index === 0 || previous?.plugin === true,
+          absentSoname:
+            expected !== undefined || previous?.absentSoname === true,
         });
       }
     }
     const inspected = [...files.entries()].map(([name, file]) => {
       const info = inspectPluginBinary(file.data, `android-${abi}`);
-      if (info.soname !== name)
+      if (
+        info.soname !== name &&
+        !(file.absentSoname && !file.plugin && info.soname === undefined)
+      )
         throw new Error(name + " ELF SONAME must match its packaged name.");
       if (file.plugin && !info.exports.includes("muon_init_plugin"))
         throw new Error(name + " must export muon_init_plugin.");

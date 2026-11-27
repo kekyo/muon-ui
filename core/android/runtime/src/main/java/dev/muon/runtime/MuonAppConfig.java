@@ -7,7 +7,6 @@
 package dev.muon.runtime;
 
 import android.content.Context;
-import android.net.Uri;
 import androidx.annotation.NonNull;
 import org.json.JSONException;
 import org.json.JSONArray;
@@ -19,7 +18,7 @@ import java.nio.charset.StandardCharsets;
 
 /** Reads the immutable application configuration packaged by the host build. */
 final class MuonAppConfig {
-    static final String TRUSTED_ORIGIN = "https://main.asset.muon.invalid";
+    final MuonWebDeployment web;
     final String startPage;
     final JSONObject values;
     final JSONObject systemBars;
@@ -35,12 +34,7 @@ final class MuonAppConfig {
 
     MuonAppConfig(@NonNull JSONObject config) throws JSONException {
         startPage = config.getString("startPage");
-        Uri url = Uri.parse(startPage);
-        if (!"https".equals(url.getScheme())
-                || !"main.asset.muon.invalid".equals(url.getHost())
-                || url.getPort() != -1 || url.getUserInfo() != null) {
-            throw new JSONException("The Android start page must use the trusted asset origin");
-        }
+        web = new MuonWebDeployment(startPage, config.optJSONObject("web"));
         values = config.getJSONObject("values");
         JSONObject services = config.optJSONObject("services");
         servicesConfigured = services != null && services.length() != 0;

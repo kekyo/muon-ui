@@ -5,6 +5,7 @@
 
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import sharp from "sharp";
@@ -61,6 +62,111 @@ const project = async (config: unknown): Promise<string> => {
 };
 
 describe("public Android builds", () => {
+  it("packages only the public certificate from a configured HTTPS deployment CA", async () => {
+    const certificateAuthority = fileURLToPath(
+      new URL(
+        "../../core/service-host/test-assets/localhost-cert.pem",
+        import.meta.url,
+      ),
+    );
+    const root = await project({
+      browser: { startPage: "https://demo.example/start" },
+      android: { web: { certificateAuthority } },
+    });
+    await buildMuonApp({ root, targets: ["android"] });
+    const bytes = buildAndroid.mock.calls[0]![0].web.certificate;
+    expect(bytes[0]).toBe(0x30);
+    expect(bytes.includes("PRIVATE KEY")).toBe(false);
+  });
+  it("opens a hosted HTTPS main page with separate resource origins and a packaged page adapter", async () => {
+    const root = await project({
+      browser: { startPage: "https://APP.example:443/screen?mode=demo" },
+      plugin: {
+        mode: "simple",
+        pages: ["https://app.example/**"],
+        plugins: [],
+      },
+      android: {
+        web: {
+          resourceOrigins: [
+            "https://STATIC.example:443/",
+            "https://static.example",
+          ],
+          loopbackResourcePaths: ["/media/"],
+          documentStartScript: "adapter.js",
+        },
+      },
+    });
+    await writeFile(join(root, "adapter.js"), "window.fixture = true;");
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0]).toMatchObject({
+      startPage: "https://app.example/screen?mode=demo",
+      web: {
+        resourceOrigins: ["https://static.example"],
+        loopbackResourcePaths: ["/media/"],
+        documentStartScript: join(root, "adapter.js"),
+      },
+      pluginAccess: { enabled: true },
+    });
+  });
+
+  it.each([
+    { resourceOrigins: ["https://static.example/path"] },
+    { resourceOrigins: ["http://static.example"] },
+    { resourceOrigins: ["https://*.example"] },
+    { loopbackResourcePaths: ["/a/../"] },
+  ])(
+    "rejects invalid Android resource scopes before packaging",
+    async (web) => {
+      const root = await project({ android: { web } });
+      await expect(
+        buildMuonApp({ root, targets: ["android"] }),
+      ).rejects.toThrow(/android.web/);
+    },
+  );
+  it("packages declared Android libraries for Java classes and manifest components", async () => {
+    const root = await project({
+      android: { libraries: ["camera.aar", "codec.jar"] },
+    });
+    await writeFile(join(root, "camera.aar"), "fixture");
+    await writeFile(join(root, "codec.jar"), "fixture");
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0].libraries).toEqual([
+      join(root, "camera.aar"),
+      join(root, "codec.jar"),
+    ]);
+  });
+  it("rejects an Android library with an unsupported file type", async () => {
+    const root = await project({ android: { libraries: ["camera.dex"] } });
+    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
+      /libraries/,
+    );
+  });
+  it("builds for the requested minimum API and required or optional hardware", async () => {
+    const features = {
+      "android.hardware.usb.host": true,
+      "android.hardware.camera": false,
+    };
+    const root = await project({ android: { minSdk: 33, features } });
+    await buildMuonApp({ root, targets: ["android"] });
+    expect(buildAndroid.mock.calls[0]![0]).toMatchObject({
+      minSdk: 33,
+      features,
+    });
+  });
+
+  it.each([
+    { minSdk: "33" },
+    { minSdk: 32.5 },
+    { features: { "android.hardware.camera": "false" } },
+    { features: { "": true } },
+  ])("rejects invalid Android device requirements %j", async (android) => {
+    const root = await project({ android });
+    await expect(buildMuonApp({ root, targets: ["android"] })).rejects.toThrow(
+      /minSdk|features/,
+    );
+  });
+
   it("allows release through an acquire capability without exposing unrelated operations", async () => {
     const root = await project({
       plugin: {
@@ -406,7 +512,7 @@ describe("public Android builds", () => {
     [{ android: { versionCode: 0 } }, /versionCode/],
     [{ android: { abis: ["armeabi-v7a"] } }, /abis/],
     [{ android: { permissions: ["invalid permission"] } }, /permissions/],
-    [{ browser: { startPage: "https://example.com" } }, /startPage/],
+    [{ browser: { startPage: "http://example.com" } }, /startPage/],
     [{ config: { notAString: 1 } }, /config.*string/],
     [{ plugin: { mode: "validate" } }, /plugin.mode/],
   ])(

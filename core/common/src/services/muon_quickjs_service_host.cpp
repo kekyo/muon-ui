@@ -503,10 +503,26 @@ static JSValue CancelIo(JSContext* context, JSValueConst, int count, JSValueCons
   } catch (const std::exception& error) { return BridgeError(context, "invalid-input", error.what()); }
 }
 
+static JSValue SetWorkActive(JSContext* context, JSValueConst, int count, JSValueConst* values) {
+  try {
+    const auto entry = Current(context);
+    const auto owner = entry->owner.lock();
+    if (count != 1 || !JS_IsBool(values[0])) return JS_ThrowTypeError(context, "Expected a boolean work state");
+    if (!owner || entry->state != QuickJsState::Running || !owner->platform.set_work_active ||
+        !owner->platform.set_work_active(entry->spec.id, entry->generation, JS_ToBool(context, values[0]) != 0))
+      return BridgeError(context, "unavailable", "Service generation no longer accepts work");
+    return JS_UNDEFINED;
+  } catch (const std::exception& error) { return BridgeError(context, "unavailable", error.what()); }
+}
+
 static void InstallBridge(const std::shared_ptr<QuickJsEntry>& entry) {
   auto* context = entry->engine->Context();
   JS_SetContextOpaque(context, entry.get());
   const auto global = QuickJsOwnedValue(context, JS_GetGlobalObject(context));
+  if (entry->owner.lock()->platform.set_work_active &&
+      JS_SetPropertyStr(context, global.value, "__muonServiceSetWorkActive",
+          JS_NewCFunction(context, SetWorkActive, "__muonServiceSetWorkActive", 1)) < 0)
+    throw std::runtime_error("Unable to register service work retention");
   for (const auto& [name, function] : std::map<std::string, JSCFunction*>{
       {"__muonServiceCallback", RequestCallback}, {"__muonServiceEmit", Emit},
       {"__muonRequestIo", RequestIo}, {"__muonCancelIo", CancelIo}, {"__muonServiceLog", Log}, {"setTimeout", SetTimeout}, {"clearTimeout", ClearTimeout}}) {

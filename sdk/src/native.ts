@@ -129,6 +129,7 @@ export interface NativeBuildEnvironmentOptions {
   /** Output ABI; never inferred from the host for cross compilation. */ target: MuonPluginTarget;
   /** Installed SDK root. */ sdkDirectory?: string;
   /** Android SDK location. */ androidSdkPath?: string;
+  /** Minimum device API for Android compiler drivers. */ androidApi?: number;
   /** Target sysroot for cross compiler pkg-config lookups. */ sysroot?: string;
   /** Process environment, defaults to process.env. */ environment?: NodeJS.ProcessEnv;
 }
@@ -143,7 +144,7 @@ export const getNativeBuildEnvironment = async (
   options: NativeBuildEnvironmentOptions
 ): Promise<NodeJS.ProcessEnv> => {
   const sdk = options.sdkDirectory ?? getSdkDirectory();
-  const descriptor = getPluginTarget(options.target);
+  const descriptor = getPluginTarget(options.target, options.androidApi);
   const native = join(sdk, 'native', descriptor.target);
   const environment = { ...(options.environment ?? process.env) };
   let cc = descriptor.cc;

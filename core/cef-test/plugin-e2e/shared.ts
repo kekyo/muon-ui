@@ -810,11 +810,19 @@ const windowsRemoteProcessOperationTimeoutMs = 10000;
 export const runningProcesses: RunningMuon[] = [];
 let sharedLocalStateDirectory: string | undefined = undefined;
 export const execFileAsync = promisify(execFile);
+// The launcher excludes the .muon-test-config tree from its runtime fingerprint.
+// Keep each X11 session's changing configuration inside that tree.
+const runtimeGroup = process.env.MUON_CEF_E2E_GROUP === "runtime";
+const localConfigDirectory = join(
+  ".muon-test-config",
+  runtimeGroup ? "runtime" : ".",
+);
 const nativeInputSenderCacheDirectory = resolve(
   "..",
   "node_modules",
   ".cache",
   "muon",
+  runtimeGroup ? "runtime-e2e" : ".",
 );
 const nativeInputSenderSourcePath = join(
   nativeInputSenderCacheDirectory,
@@ -1930,6 +1938,34 @@ export const waitForPageTargetUrl = async (
     await delay(100);
   }
   throw new Error(`Timed out waiting for page target URL: ${expectedUrl}`);
+};
+
+/**
+ * Connects to the main application document used by the popup lifecycle tests.
+ * @returns Its target ID and an open driver bound to that same target.
+ */
+export const connectToMainPage = async (): Promise<{
+  targetId: string;
+  driver: CdpDriver;
+}> => {
+  const target = await waitForPageTargetUrl(MUON_APP_URL, targetTimeoutMs);
+  const driver = await connectToMuonCdp({
+    port: MUON_PORT,
+    targetId: target.id,
+    timeoutMs: cdpCommandTimeoutMs,
+  });
+  try {
+    // CDP can list the app URL while the renderer still has its initial blank document.
+    await expect
+      .poll(() => driver.evaluate("document.location.href"), {
+        timeout: cdpCommandTimeoutMs,
+      })
+      .toBe(MUON_APP_URL);
+    return { targetId: target.id, driver };
+  } catch (error) {
+    driver.close();
+    throw error;
+  }
 };
 
 export const waitForNewPageTarget = async (
@@ -3223,7 +3259,7 @@ export const startMuon = async (
     pluginNames,
     includeStandardPlugins,
   );
-  const configDirectory = join(directory, ".muon-test-config");
+  const configDirectory = join(directory, localConfigDirectory);
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,
@@ -3449,7 +3485,7 @@ export const startGestamentDebugMuon = async (
     force: true,
   });
   const pluginDirectory = await createPluginDirectory(DEBUG_MUON_DIRECTORY, []);
-  const configDirectory = join(DEBUG_MUON_DIRECTORY, ".muon-test-config");
+  const configDirectory = join(DEBUG_MUON_DIRECTORY, localConfigDirectory);
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,

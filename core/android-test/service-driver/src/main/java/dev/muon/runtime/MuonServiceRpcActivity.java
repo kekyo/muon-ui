@@ -46,7 +46,7 @@ public final class MuonServiceRpcActivity extends Activity {
         });
         try {
             JSONObject config = new JSONObject(MuonAppConfig.readAsset(this, "muon/config.json"));
-            config.put("startPage", MuonAppConfig.TRUSTED_ORIGIN + "/empty.html?owner=" + owner);
+            config.put("startPage", MuonWebDeployment.BUNDLED_ORIGIN + "/empty.html?owner=" + owner);
             host.start(MuonAppConfig.readAsset(this, "muon/renderer.js"), new MuonAppConfig(config));
             host.setResumed(true);
         } catch (Exception error) { throw new IllegalStateException(error); }

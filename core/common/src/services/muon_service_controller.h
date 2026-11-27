@@ -70,6 +70,14 @@ class MuonServiceController final {
   /** @param owner Authenticated session that disconnected.
    *  @return Number of reservations recovered for that owner. */
   size_t ReleaseOwner(const std::string& owner);
+
+  /** Retain or release a running generation for accepted work without a page or persisted setting.
+   * @param id Configured service identity.
+   * @param generation Generation owning the work.
+   * @param active Whether this generation has unfinished work.
+   * @return True when the running generation accepted the change.
+   */
+  bool SetWorkActive(const std::string& id, uint64_t generation, bool active);
   /** @param id Configured service identity.
    *  @param enabled Persistent user preference to commit.
    *  @return Nonzero persistence operation identity, or zero if rejected. */

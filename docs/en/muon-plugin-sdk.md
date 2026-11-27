@@ -74,7 +74,9 @@ List supported outputs in the source configuration's `targets`. An application b
 
 C++ plugins must use the target's matching cardio headers, definitions, and shared library. The SDK's cardio binary is a link input; the application uses muon's runtime. Do not bundle replacements for cardio or the C++ runtime. The SDK checks the plugin ABI and cardio header identifier, but does not promise binary compatibility across arbitrary compilers or future SDK versions.
 
-Android uses API 24 and `c++_shared`. Dependency libraries must also support 16 KiB pages. See [Android C++ runtimes](https://developer.android.com/ndk/guides/cpp-support) and [page-size support](https://developer.android.com/guide/practices/page-sizes).
+Android defaults to API 24. Set `androidApi` in a plugin or native service build configuration to use a newer NDK API. For example, setting it to 33 compiles for API 33 and records that requirement in the distributed manifest. Set the consuming app's `android.minSdk` to that level or higher. The C++ runtime is `c++_shared`, and dependency libraries must also support 16 KiB pages. [NDK platform selection](https://developer.android.com/ndk/guides/cmake#android_platform), [Android C++ runtimes](https://developer.android.com/ndk/guides/cpp-support), [page-size support](https://developer.android.com/guide/practices/page-sizes).
+
+When bundling a prebuilt Android shared library, list it in `dependencies` with a filename matching its ELF SONAME. If an external library has no SONAME, also list its packaged filename under `androidDependenciesWithoutSoname` for each ABI, for example `{ "android-arm64-v8a": ["libvendor.so"] }`. This setting applies to ordinary dependencies. The SDK records the SHA-256 of the original binary in the distribution manifest. The APK builder rejects files with the same name and different contents for one ABI. [Android linker handling of missing SONAMEs](https://github.com/aosp-mirror/platform_bionic/blob/main/android-changes-for-ndk-developers.md#missing-soname-enforced-for-api-level--23)
 
 ## Keep a plugin inside an application
 

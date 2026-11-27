@@ -108,7 +108,10 @@ npx muon build --target android --assets ./dist
 | `versionCode` | 1～2100000000の整数。既定は1。リリースごとに増やす |
 | `versionName` | 表示バージョン。既定は`package.json`のversion |
 | `abis` | 収録するABI。既定は両対応ABI |
+| `minSdk` | インストールに必要な最小APIレベル。ランタイムの最小API（既定は24）からターゲットAPIまでの整数を指定できる。[AndroidのAPIレベル](https://developer.android.com/guide/topics/manifest/uses-sdk-element) |
+| `features` | 機能名ごとに、必須なら`true`、任意なら`false`を指定する。例えば`{"android.hardware.usb.host": true}`はUSBホストを必須にする。既定は空。[Androidの機能宣言](https://developer.android.com/guide/topics/manifest/uses-feature-element) |
 | `icon` | PNG画像のパス |
+| `libraries` | APKに組み込むJAR・AARのパス。AARのManifestとリソースはアプリに統合される。ネイティブライブラリはプラグインまたはその依存物として指定する。[Androidライブラリ](https://developer.android.com/studio/projects/android-library) |
 | `permissions` | アプリが明示する権限の完全名の配列。既定は空。[ビルド時に追加される権限と実行時の許可](#ビルド時に追加される権限と実行時の許可) |
 | `sdkPath` | SDKの場所。省略時は`ANDROID_HOME`、`ANDROID_SDK_ROOT`、PATH上のadbから検出 |
 | `plugins` | 後述の事前ビルド済みプラグイン。既定は空 |
@@ -119,7 +122,15 @@ npx muon build --target android --assets ./dist
 
 `muon.json`内の相対パスの基準は、そのファイルのディレクトリです。Vite/APIから渡すパスはプロジェクトルートを基準にします。`prepare`でSDKを切り替える場合は、環境変数、`muon.json`または`--sdk-path`を指定してください。
 
-Webアセットの既定URLは`https://main.asset.muon.invalid/index.html`です。Viteの`base`がサブパスなら、そのパスを反映します。`browser.startPage`はこのoriginのURLか`asset://main/…`で指定します。外部サイトを起動ページにする指定、ZIPアセット、複数アセットhostは未対応です。
+同梱ページの既定の起動 URL は `https://main.asset.muon.invalid/index.html` です。Vite の `base` にサブパスがあれば、そのパスも使います。同梱ページには `asset://main/…`、サーバーから配信するページには HTTPS の URL を `browser.startPage` に指定します。ネイティブ API を使えるのは、起動 URL と同じオリジンで開いたメインフレームです。
+
+`android.web.resourceOrigins` には、ページが画像などを取得する追加の HTTPS オリジンを指定します。端末内の HTTP サービスから動画を取得する場合は、`android.web.loopbackResourcePaths` に `/video/` のようなディレクトリを指定します。既存の Web アプリに起動時の処理を加えるには、`android.web.documentStartScript` に JavaScript ファイルを指定します。muon はこのファイルを APK に同梱し、許可したメインフレームで muon API の初期化直後に実行します。
+
+私設認証局を使うときは、`android.web.certificateAuthority` に PEM または DER 形式の公開 CA 証明書を指定します。この証明書を信頼する範囲は起動 URL のホストです。Android 17 以降で LAN 上の起動ページに接続する場合は、`android.permissions` に `android.permission.ACCESS_LOCAL_NETWORK` を加えてください。初回の読み込みで権限が足りなければ、エラー画面の「Allow local network access」から許可して再試行できます。[Android の証明書設定](https://developer.android.com/privacy-and-security/security-config)・[LAN へのアクセス権限](https://developer.android.com/privacy-and-security/local-network-permission)
+
+位置情報には `navigator.geolocation` を使います。`android.permissions` に `android.permission.ACCESS_COARSE_LOCATION` を指定し、精密な位置が必要なアプリでは `android.permission.ACCESS_FINE_LOCATION` も指定します。利用者が画面で位置情報を要求した時点で Android の許可画面が開きます。
+
+加速度を使うページには `muon.android.accelerometer` の操作を許可します。`start()` は重力を含む加速度を約 100 ミリ秒間隔で要求します。実際の間隔は端末によって異なります。`waitForChange(revision)` は次の状態変化か測定値を返し、`getState()` では最新の状態を読めます。測定時刻と受信時刻の単位は、端末起動からのマイクロ秒です。ホーム画面に移ると測定は一時停止し、アプリに戻ると再開します。`stop()` を呼ぶかページを閉じると購読が終了します。[Android の加速度センサー](https://developer.android.com/develop/sensors-and-location/sensors/sensors_motion)
 
 Muon APIはアプリのJavaScriptより先に初期化されます。独自adapterのimportは不要です。simpleモードでTypeScriptから使う例を示します。
 
@@ -164,7 +175,15 @@ apkanalyzer manifest permissions dist-muon/android/com.example.notes-1-debug.apk
 apkanalyzer manifest print dist-muon/android/com.example.notes-1-debug.apk
 ```
 
-Manifestへの宣言だけでは実行時の許可ダイアログは開きません。例えば位置情報サービスでは、muonが追加する `FOREGROUND_SERVICE_LOCATION` に加えて、アプリ開発者が `ACCESS_COARSE_LOCATION` または `ACCESS_FINE_LOCATION` を宣言し、利用者の許可を得る必要があります。バックグラウンドからの開始には、条件に応じて `ACCESS_BACKGROUND_LOCATION` の許可も必要です。muonの公開JS APIには任意のAndroid権限の許可を求める機能はありません。[位置情報サービスの要件](https://developer.android.com/develop/background-work/services/fgs/service-types#location)・[Androidの通知権限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)・[ネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
+Manifestへの宣言だけでは実行時の許可ダイアログは開きません。例えば位置情報サービスでは、muonが追加する `FOREGROUND_SERVICE_LOCATION` に加えて、アプリ開発者が `ACCESS_COARSE_LOCATION` または `ACCESS_FINE_LOCATION` を宣言し、利用者の許可を得る必要があります。バックグラウンドからの開始には、条件に応じて `ACCESS_BACKGROUND_LOCATION` の許可も必要です。画面からは次の手順で宣言済みの権限を要求できます。[位置情報サービスの要件](https://developer.android.com/develop/background-work/services/fgs/service-types#location)・[Androidの通知権限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)・[ネットワークセキュリティ設定](https://developer.android.com/privacy-and-security/security-config)
+
+### Androidの実行時権限とUSB機器
+
+操作を許可するページの組み込み関数リストに、使うメソッド名を追加します。`muon.android.permissions.getState(names)` は Manifest に宣言した各権限の現在の許可状態を返します。`request(names)` は画面が前面にある間に利用者へ許可を求め、権限名をキー、許可の有無を値とするオブジェクトを返します。OS が要求を中断した場合は Promise が失敗します。[Android の実行時権限](https://developer.android.com/training/permissions/requesting)
+
+USB ホストを使うアプリでは `muon.android.usb.listDevices()` が接続中の機器を列挙します。USB ビデオ機器はカメラ権限を得た後、利用者が選んだ機器の `connectionId` を `muon.android.usb.requestPermission(connectionId)` に渡します。この ID は取り外すと失効します。Android サービスのコードは `MuonUsbDeviceProvider.open(context, connectionId)` で許可済みの機器を開き、使用後に接続を閉じます。列挙と許可要求には前景サービスの起動は不要です。[Android の USB ホスト](https://developer.android.com/develop/connectivity/usb/host)
+
+Java の Android 拡張は、`MuonUsbDeviceProvider.observe(context, changed)` で接続・切断の通知を受け取れます。通知を受けたら `MuonUsbDeviceProvider.list(context)` で現在の機器一覧を読みます。JSON に含まれる接続 ID は画面から取得したものと共通です。通知は拡張を登録したプロセスのメインスレッドに届きます。監視を終えるときは戻り値の `close()` を呼びます。[Android の USB ホスト](https://developer.android.com/develop/connectivity/usb/host)
 
 ### validateモードでimportする
 

@@ -31,6 +31,31 @@ declare module "muon:notifications" {
   export const acknowledgeEvent: MuonNotificationsApi["acknowledgeEvent"];
 }
 
+declare module "muon:android.permissions" {
+  /** Check current grants for manifest permissions. */
+  export const getState: MuonAndroidPermissionsApi["getState"];
+  /** Ask for runtime permissions from the foreground Activity. */
+  export const request: MuonAndroidPermissionsApi["request"];
+}
+
+declare module "muon:android.accelerometer" {
+  /** Read the current foreground acquisition state. */
+  export const getState: MuonAndroidAccelerometerApi["getState"];
+  /** Request gravity-inclusive measurements. */
+  export const start: MuonAndroidAccelerometerApi["start"];
+  /** Release the current document’s sensor registration. */
+  export const stop: MuonAndroidAccelerometerApi["stop"];
+  /** Wait for the next acquisition change or sample. */
+  export const waitForChange: MuonAndroidAccelerometerApi["waitForChange"];
+}
+
+declare module "muon:android.usb" {
+  /** Enumerate attached devices without starting a foreground service. */
+  export const listDevices: MuonAndroidUsbApi["listDevices"];
+  /** Ask the user to grant this application access to one attachment. */
+  export const requestPermission: MuonAndroidUsbApi["requestPermission"];
+}
+
 declare module "muon:android.settings" {
   /** Check whether this app's requested Android settings screen is available. */
   export const isAvailable: MuonAndroidSettingsApi["isAvailable"];

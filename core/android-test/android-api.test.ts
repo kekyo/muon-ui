@@ -13,6 +13,14 @@ import {
 import type { MuonWebViewRpcClient } from '../android/renderer/webview-rpc.js';
 
 const expectedFunctionPaths = [
+  'muon.android.accelerometer.getState',
+  'muon.android.accelerometer.start',
+  'muon.android.accelerometer.stop',
+  'muon.android.accelerometer.waitForChange',
+  'muon.android.permissions.getState',
+  'muon.android.permissions.request',
+  'muon.android.usb.listDevices',
+  'muon.android.usb.requestPermission',
   'muon.browser.reload',
   'muon.browser.toggleFullscreen',
   'muon.browser.enterFullscreen',
@@ -116,6 +124,9 @@ describe('muon Android API metadata', () => {
       'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
+      'muon.android.permissions': 'permissions-capability',
+      'muon.android.accelerometer': 'accelerometer-capability',
+      'muon.android.usb': 'usb-capability',
       'muon.android.notifications': 'android-notifications-capability',
       'muon.notifications': 'notifications-capability',
     });
@@ -148,6 +159,22 @@ describe('muon Android API metadata', () => {
     );
     expect(Reflect.has(api.fs, 'dialogs')).toBe(false);
 
+    const reading = {
+      revision: 5,
+      status: { state: 'active', intervalUs: 100_000, error: null },
+      sample: null,
+    };
+    const controller = new AbortController();
+    call.mockResolvedValueOnce(JSON.stringify(reading));
+    await expect(
+      api.android.accelerometer.waitForChange(4, { signal: controller.signal })
+    ).resolves.toEqual(reading);
+    expect(call).toHaveBeenLastCalledWith(
+      'accelerometer-capability',
+      'muon.android.accelerometer.waitForChange',
+      [4],
+      { signal: controller.signal }
+    );
     await expect(api.browser.reload()).resolves.toBeUndefined();
     expect(call).toHaveBeenCalledWith(
       'browser-capability',
@@ -187,6 +214,9 @@ describe('muon Android API metadata', () => {
       'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
+      'muon.android.permissions': 'permissions-capability',
+      'muon.android.accelerometer': 'accelerometer-capability',
+      'muon.android.usb': 'usb-capability',
       'muon.android.notifications': 'android-notifications-capability',
       'muon.notifications': 'notifications-capability',
     });
@@ -246,6 +276,9 @@ describe('muon Android API metadata', () => {
       'muon.services': 'services-capability',
       'muon.android.systemBars': 'system-bars-capability',
       'muon.android.settings': 'settings-capability',
+      'muon.android.permissions': 'permissions-capability',
+      'muon.android.accelerometer': 'accelerometer-capability',
+      'muon.android.usb': 'usb-capability',
       'muon.android.notifications': 'android-notifications-capability',
       'muon.notifications': 'notifications-capability',
     });
@@ -307,6 +340,9 @@ describe('muon Android API metadata', () => {
         'muon.services': 'services-capability',
         'muon.android.systemBars': 'system-bars-capability',
         'muon.android.settings': 'settings-capability',
+        'muon.android.permissions': 'permissions-capability',
+        'muon.android.accelerometer': 'accelerometer-capability',
+        'muon.android.usb': 'usb-capability',
         'muon.android.notifications': 'android-notifications-capability',
         'muon.notifications': 'notifications-capability',
       });

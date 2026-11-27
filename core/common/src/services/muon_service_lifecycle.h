@@ -197,6 +197,14 @@ class MuonServiceLifecycle final {
    */
   size_t ReleaseOwner(const std::string& owner_id);
 
+  /** Retain this running generation for accepted work, independently of its pages and autostart.
+   * @param service_id Service that owns the work.
+   * @param generation Generation that accepted the work.
+   * @param active Whether any of this generation's jobs still needs it.
+   * @return False if the generation is stale, stopping or unavailable.
+   */
+  bool SetWorkActive(const std::string& service_id, uint64_t generation, bool active);
+
   /**
    * Reports runtime startup after its resources are usable or fully rolled back.
    * @param service_id Started service identity.

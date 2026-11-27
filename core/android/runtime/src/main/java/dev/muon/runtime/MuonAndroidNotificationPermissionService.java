@@ -22,7 +22,6 @@ import org.json.JSONObject;
 
 /** Owns one Activity's notification permission request and reads current OS state. */
 final class MuonAndroidNotificationPermissionService implements AutoCloseable {
-    private static int nextRequestCode = 0x4d00;
     private static final String REQUESTED = "permission-requested";
     private final boolean enabled;
     private final SharedPreferences preferences;
@@ -70,10 +69,7 @@ final class MuonAndroidNotificationPermissionService implements AutoCloseable {
                 completion.completeString(outcome(current, "granted"));
                 return;
             }
-            if (nextRequestCode == Integer.MAX_VALUE) {
-                throw new IllegalStateException("Notification request identifiers are exhausted");
-            }
-            requestCode = nextRequestCode++;
+            requestCode = MuonAndroidDeviceService.allocatePermissionCode();
             pendingCallId = callId;
             pending = completion;
             try {

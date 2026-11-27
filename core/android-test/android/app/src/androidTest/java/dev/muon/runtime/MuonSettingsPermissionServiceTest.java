@@ -29,6 +29,73 @@ import java.util.concurrent.atomic.AtomicReference;
 /** Verifies settings and permission boundaries without requiring a recent WebView. */
 @RunWith(AndroidJUnit4.class)
 public final class MuonSettingsPermissionServiceTest {
+    @Test public void observesDeclaredGrantsAndCurrentUsbAttachmentsBeforeServiceStartup() throws Exception {
+        try (ActivityScenario<MuonWindowActivity> scenario = ActivityScenario.launch(MuonWindowActivity.class)) {
+            Result granted = new Result(), undeclared = new Result(), listed = new Result(), detached = new Result();
+            scenario.onActivity(activity -> {
+                try (MuonAndroidDeviceService service = new MuonAndroidDeviceService(activity)) {
+                    service.setResumed(true);
+                    service.invoke(1, "muon.android.permissions.request",
+                            new JSONArray().put("[\"android.permission.INTERNET\"]"), new byte[0][], granted);
+                    service.invoke(2, "muon.android.permissions.getState",
+                            new JSONArray().put("[\"android.permission.RECORD_AUDIO\"]"), new byte[0][], undeclared);
+                    service.invoke(3, "muon.android.usb.listDevices", new JSONArray(), new byte[0][], listed);
+                    service.invoke(4, "muon.android.usb.requestPermission",
+                            new JSONArray().put("expired-attachment"), new byte[0][], detached);
+                }
+            });
+            assertTrue(new JSONObject(granted.await()).getBoolean("android.permission.INTERNET"));
+            assertTrue(undeclared.await().contains("not declared"));
+            JSONArray devices = new JSONArray(listed.await());
+            for (int i = 0; i < devices.length(); i++) {
+                JSONObject device = devices.getJSONObject(i);
+                assertFalse(device.getString("connectionId").isEmpty());
+                assertFalse(device.has("fileDescriptor"));
+                assertNotNull(device.getJSONArray("interfaceClasses"));
+            }
+            assertTrue(detached.await().contains("usb_disconnected"));
+        }
+    }
+
+    @Test public void observesForegroundAccelerationAndReleasesItWithTheDocument() throws Exception {
+        try (ActivityScenario<MuonWindowActivity> scenario = ActivityScenario.launch(MuonWindowActivity.class)) {
+            AtomicReference<MuonAndroidAccelerometer> sensor = new AtomicReference<>();
+            Result start = new Result(), sample = new Result(), resumed = new Result(), stopped = new Result();
+            scenario.onActivity(activity -> {
+                sensor.set(new MuonAndroidAccelerometer(activity));
+                sensor.get().invoke(1, "muon.android.accelerometer.start", new JSONArray(), new byte[0][], start);
+            });
+            JSONObject initial = new JSONObject(start.await());
+            assertEquals("suspended", initial.getJSONObject("status").getString("state"));
+            scenario.onActivity(activity -> {
+                sensor.get().setResumed(true);
+                sensor.get().invoke(2, "muon.android.accelerometer.getState", new JSONArray(), new byte[0][], resumed);
+            });
+            JSONObject active = new JSONObject(resumed.await());
+            if (active.getJSONObject("status").getString("state").equals("active")) {
+                long revision = active.getLong("revision");
+                scenario.onActivity(activity -> sensor.get().invoke(3, "muon.android.accelerometer.waitForChange",
+                        new JSONArray().put(revision), new byte[0][], sample));
+                JSONObject reading = new JSONObject(sample.await()).getJSONObject("sample");
+                assertTrue(reading.getLong("elapsedUs") > 0);
+                assertTrue(reading.getLong("receivedElapsedUs") >= reading.getLong("elapsedUs"));
+                assertTrue(Double.isFinite(reading.getDouble("z")));
+            } else {
+                assertEquals("unavailable", active.getJSONObject("status").getString("state"));
+            }
+            Result suspended = new Result();
+            scenario.onActivity(activity -> {
+                sensor.get().setResumed(false);
+                sensor.get().invoke(4, "muon.android.accelerometer.getState", new JSONArray(), new byte[0][], suspended);
+                sensor.get().releasePage();
+                sensor.get().setResumed(true);
+                sensor.get().invoke(5, "muon.android.accelerometer.getState", new JSONArray(), new byte[0][], stopped);
+            });
+            assertEquals("suspended", new JSONObject(suspended.await()).getJSONObject("status").getString("state"));
+            assertEquals("stopped", new JSONObject(stopped.await()).getJSONObject("status").getString("state"));
+        }
+    }
+
     private static final class Result implements MuonAndroidPlatformService.Completion {
         final LinkedBlockingQueue<String> values = new LinkedBlockingQueue<>();
         @Override public void completeVoid() { values.add("void"); }

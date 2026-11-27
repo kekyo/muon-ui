@@ -79,7 +79,7 @@ const findExecutable = async (
 export const diagnosePluginToolchain = async (
   options: PluginToolchainOptions
 ): Promise<PluginToolchainReport> => {
-  const target = getPluginTarget(options.target);
+  const target = getPluginTarget(options.target, options.androidApi);
   const sdk = options.sdkDirectory ?? getSdkDirectory();
   const language = options.language ?? 'c++';
   const cardio = options.cardio ?? language === 'c++';

@@ -12,7 +12,21 @@ import { resolveMuonServices } from "../common/service-config.ts";
 import {
   resolveAndroidServices,
   getAndroidServicePermissions,
+  getAndroidServiceNetwork,
 } from "../android/services.ts";
+
+it("allows the loopback listener when no outbound HTTP origins were granted", () => {
+  expect(
+    getAndroidServiceNetwork([{ io: { server: { listen: true } } }]),
+  ).toEqual({
+    internet: true,
+    cleartextHosts: ["127.0.0.1"],
+  });
+  expect(getAndroidServiceNetwork([])).toEqual({
+    internet: false,
+    cleartextHosts: [],
+  });
+});
 
 let root: string;
 let manifest: string;
@@ -88,6 +102,35 @@ it("packages one factory as separate logical Android components for both ABIs", 
     "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
     "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
   ]);
+});
+
+it("packages on-demand promotion with every declared type and rejects unknown foreground modes", async () => {
+  const worker = {
+    runtime: "native",
+    artifact: manifest,
+    android: {
+      foregroundServiceType: "camera|microphone",
+      foregroundMode: "on-demand",
+      notification: android.notification,
+    },
+  };
+  const targets = ["android-arm64-v8a"] as const;
+  const services = await resolveAndroidServices(
+    await resolveMuonServices({ worker }, root, targets),
+    ["arm64-v8a"],
+    [],
+  );
+  expect(services[0]!.android.foregroundMode).toBe("on-demand");
+  expect(getAndroidServicePermissions(services)).toEqual(
+    expect.arrayContaining([
+      "android.permission.FOREGROUND_SERVICE_CAMERA",
+      "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+    ]),
+  );
+  worker.android.foregroundMode = "unrecognized";
+  await expect(resolveMuonServices({ worker }, root, targets)).rejects.toThrow(
+    "foregroundMode",
+  );
 });
 
 it("does not add the permission of another foreground type to a short service", async () => {

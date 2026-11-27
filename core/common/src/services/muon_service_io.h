@@ -38,6 +38,7 @@ struct MuonServiceIoSettings {
   MuonServiceIoSubmit submit{}; /**< Platform asynchronous file executor. */
   std::function<std::shared_ptr<MuonServiceServer>(const std::string&)> server{}; /**< Opens a generation backend only when granted. */
   MuonServiceHttpTransport http{}; /**< OS HTTP/TLS transport. */
+  std::function<MuonServiceIoReply(const std::string&)> set_foreground_types{}; /**< Android generation callback, run on the owner dispatcher. */
 };
 
 /** Owned buffers for one portable I/O request. */

@@ -78,6 +78,7 @@ struct MuonAndroidServices {
   jmethodID cancel_method;
   jmethodID start_method;
   jmethodID stopped_method;
+  jmethodID foreground_types_method;
   jmethodID event_method;
   jmethodID save_method;
   jmethodID disconnected_method;
@@ -213,6 +214,8 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
   runtime->cancel_method = env->GetMethodID(type, "cancelTask", "(J)V");
   runtime->start_method = env->GetMethodID(type, "startComponent", "(Ljava/lang/String;J)V");
   runtime->stopped_method = env->GetMethodID(type, "stopComponent", "(Ljava/lang/String;J)V");
+  runtime->foreground_types_method = env->GetMethodID(type, "setForegroundServiceTypes",
+      "(Ljava/lang/String;JLjava/lang/String;)[Ljava/lang/String;");
   runtime->event_method = env->GetMethodID(type, "onEvent", "(Ljava/lang/String;)V");
   runtime->save_method = env->GetMethodID(type, "saveAutostart", "(Ljava/lang/String;ZJ)V");
   runtime->disconnected_method = env->GetMethodID(type, "onRpcDisconnected", "(Ljava/lang/String;)V");
@@ -246,6 +249,9 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeCreate(
         return state->plugin_startup
             ? state->plugin_startup->Attach(spec.id, generation, engine, std::move(wake), std::move(fault))
             : MuonQuickJsServiceExtension{};
+      },
+      [state](const std::string& id, uint64_t generation, bool active) {
+        return state->controller->SetWorkActive(id, generation, active);
       }});
   std::vector<MuonServiceDefinition> definitions;
   std::vector<MuonServicePluginDefinition> plugin_definitions;
@@ -463,7 +469,31 @@ Java_dev_muon_runtime_MuonServiceProcess_nativeForegroundReady(
   auto complete = [state, id, version](const std::string& error) {
     state->CompleteStart(id, version, error);
   };
-  const auto spec = MuonServiceSpecForGeneration(state->specs.at(id), *snapshot);
+  auto spec = MuonServiceSpecForGeneration(state->specs.at(id), *snapshot);
+  spec.io.set_foreground_types = [state, id, version](const std::string& parameters) {
+    auto* env = state->env;
+    const auto name = MuonAndroidNewJavaString(env, id.c_str());
+    const auto input = MuonAndroidNewJavaString(env, parameters.c_str());
+    const auto error = static_cast<jobjectArray>(env->CallObjectMethod(state->owner, state->foreground_types_method,
+        name, static_cast<jlong>(version), input));
+    env->DeleteLocalRef(name);
+    env->DeleteLocalRef(input);
+    MuonServiceIoReply result;
+    if (env->ExceptionCheck()) {
+      env->ExceptionClear();
+      return MuonServiceIoReply{"null", {}, "io-error", "Android foreground service operation failed"};
+    }
+    if (error) {
+      const auto code = static_cast<jstring>(env->GetObjectArrayElement(error, 0));
+      const auto message = static_cast<jstring>(env->GetObjectArrayElement(error, 1));
+      result.code = ReadString(env, code);
+      result.message = ReadString(env, message);
+      env->DeleteLocalRef(code);
+      env->DeleteLocalRef(message);
+      env->DeleteLocalRef(error);
+    }
+    return result;
+  };
   if (state->runtimes.at(id) == 1) {
     if (!source || remaining <= 0) {
       complete("Service source startup deadline exceeded");

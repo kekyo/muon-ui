@@ -9,15 +9,17 @@ package dev.muon.runtime;
 import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
-import android.net.Uri;
 import android.util.Log;
 import android.view.View;
 import android.view.WindowInsets;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -47,6 +49,9 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     private FrameLayout content;
     private String bootstrap;
     private String startPage;
+    private MuonWebDeployment deployment;
+    private MuonWebPermissions webPermissions;
+    private LinearLayout pageError;
     private boolean pageLoadStarted;
     private boolean pluginEnabled;
     private boolean nativeReady;
@@ -59,6 +64,7 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     }
 
     void start(@NonNull String bootstrap, @NonNull MuonAppConfig config) {
+        deployment = config.web;
         this.bootstrap = bootstrap;
         try {
             for (String feature : new String[] {
@@ -71,9 +77,13 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
             }
             startPage = config.startPage;
             pluginEnabled = config.pluginEnabled;
-            assets = new MuonAssetRequestHandler(activity);
+            if (deployment.hasDocumentScript) this.bootstrap += "\n;if (window === window.top) {\n"
+                    + MuonAppConfig.readAsset(activity, "muon/document-start.js") + "\n}\n";
+            assets = new MuonAssetRequestHandler(activity, deployment);
             assets.configureServiceWorkers();
             webView = new WebView(activity);
+            webPermissions = new MuonWebPermissions(activity,webView,deployment,this::retryPage);
+            webView.setWebChromeClient(webPermissions);
             content = new FrameLayout(activity);
             content.addView(webView, new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
@@ -84,8 +94,15 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
             webView.setWebViewClient(new WebViewClient() {
                 @Override
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                    webPermissions.cancelLocation();
                     if (documentStarted) { bridge.releasePageContext(); }
                     documentStarted = true;
+                    if (!deployment.allowsNavigation(url)) view.stopLoading();
+                }
+
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                    return request.isForMainFrame() && !deployment.allowsNavigation(request.getUrl().toString());
                 }
 
                 @Override
@@ -101,10 +118,16 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
                 }
 
                 @Override
+                public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                    if (request.isForMainFrame() && deployment.trusted(request.getUrl().toString())) showPageError();
+                }
+
+                @Override
                 public void onReceivedHttpError(WebView view, WebResourceRequest request,
                         WebResourceResponse response) {
                     if (request.isForMainFrame()) {
                         listener.mainFrameHttpError(response.getStatusCode());
+                        if (deployment.trusted(request.getUrl().toString())) showPageError();
                     }
                 }
 
@@ -135,10 +158,10 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
         }
         if (pluginEnabled) {
             WebViewCompat.addWebMessageListener(webView, RPC_OBJECT_NAME,
-                    Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN), bridge);
+                    Collections.singleton(deployment.origin), bridge);
             script = WebViewCompat.addDocumentStartJavaScript(webView,
                     bridge.getDocumentStartScript() + "\n" + bootstrap,
-                    Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN));
+                    Collections.singleton(deployment.origin));
         }
         listener.beforePageLoad(webView, bridge);
         nativeReady = true;
@@ -174,22 +197,14 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
         if (source == null) { return; }
         if (cssScript != null) { cssScript.remove(); }
         cssScript = WebViewCompat.addDocumentStartJavaScript(webView, source,
-                Collections.singleton(MuonAppConfig.TRUSTED_ORIGIN));
+                Collections.singleton(deployment.origin));
         if (nativeReady && !pageLoadStarted) {
             // A real first snapshot is installed before the application's first document.
             pageLoadStarted = true;
             webView.loadUrl(startPage);
-        } else if (pageLoadStarted && isTrustedPage(webView.getUrl())) {
+        } else if (pageLoadStarted && deployment.trusted(webView.getUrl())) {
             webView.evaluateJavascript(source, null);
         }
-    }
-
-    private static boolean isTrustedPage(@Nullable String url) {
-        if (url == null) { return false; }
-        Uri page = Uri.parse(url);
-        Uri origin = Uri.parse(MuonAppConfig.TRUSTED_ORIGIN);
-        return origin.getScheme().equals(page.getScheme())
-                && origin.getHost().equals(page.getHost()) && page.getPort() == origin.getPort();
     }
 
     @Nullable String retainRequestedState() {
@@ -219,7 +234,36 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     boolean wasPageLoadStarted() { return pageLoadStarted; }
 
     void setResumed(boolean value) {
+        if (webPermissions != null) webPermissions.resumed = value;
         if (bridge != null) { bridge.setResumed(value); }
+    }
+
+    private void showPageError() {
+        if (webView == null || MuonWebDeployment.BUNDLED_ORIGIN.equals(deployment.origin) || pageError != null) return;
+        pageError = new LinearLayout(activity);
+        pageError.setOrientation(LinearLayout.VERTICAL);
+        pageError.setGravity(android.view.Gravity.CENTER);
+        TextView text = new TextView(activity);
+        text.setText("The application page could not be loaded.");
+        pageError.addView(text);
+        if (webPermissions.needsNetworkPermission()) {
+            Button grant = new Button(activity);
+            grant.setText("Allow local network access");
+            grant.setOnClickListener(v -> webPermissions.requestNetwork());
+            pageError.addView(grant);
+        }
+        Button retry = new Button(activity);
+        retry.setText("Retry");
+        retry.setOnClickListener(v -> retryPage());
+        pageError.addView(retry);
+        webView.setVisibility(View.GONE);
+        content.addView(pageError);
+    }
+
+    private void retryPage() {
+        if (pageError != null) { content.removeView(pageError); pageError = null; }
+        webView.setVisibility(View.VISIBLE);
+        webView.loadUrl(startPage);
     }
 
     void onNotificationIntent(Intent intent) {
@@ -227,10 +271,12 @@ final class MuonWebViewHost implements MuonRpcBridge.Listener {
     }
 
     boolean onRequestPermissionsResult(int code, @NonNull String[] permissions, @NonNull int[] results) {
+        if (webPermissions != null && webPermissions.completed(code)) return true;
         return bridge != null && bridge.onRequestPermissionsResult(code, permissions, results);
     }
 
     void close(boolean changingConfigurations) {
+        if (webPermissions != null) webPermissions.cancelLocation();
         if (script != null) { script.remove(); script = null; }
         if (cssScript != null) { cssScript.remove(); cssScript = null; }
         if (webView != null) {

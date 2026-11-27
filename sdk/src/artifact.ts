@@ -25,6 +25,7 @@ import {
   type PluginLibraryInspection,
 } from './dependencies.js';
 export { inspectPluginBinary } from './binary.js';
+export { muonPluginAndroidApi } from './targets.js';
 export {
   validatePluginLibraryDependencies,
   validateServiceLibraryDependencies,
@@ -43,6 +44,7 @@ import {
 export interface PluginArtifactFile {
   /** Path relative to the manifest directory. */ readonly path: string;
   /** SHA-256 digest of the final bytes. */ readonly sha256: string;
+  /** Explicit Android dependency whose ELF has no DT_SONAME and loads by this file's basename. */ readonly androidSoname?: 'absent';
 }
 /** Runtime requirements declared by the producer. */
 export interface PluginRuntimeRequirements {
@@ -233,7 +235,9 @@ const readArtifact = async <
     if (
       descriptor.os === 'android' &&
       (runtime.ndk !== muonPluginNdkVersion ||
-        runtime.androidApi !== muonPluginAndroidApi)
+        typeof runtime.androidApi !== 'number' ||
+        !Number.isSafeInteger(runtime.androidApi) ||
+        runtime.androidApi < muonPluginAndroidApi)
     )
       throw new Error('Plugin NDK or Android API does not match this runtime.');
     const read = async (
@@ -256,7 +260,21 @@ const readArtifact = async <
         kind === 'service' ? 'muon_get_service_factory' : 'muon_init_plugin';
       if (plugin && !info.exports.includes(entryPoint))
         throw new Error(`${file.path} must export ${entryPoint}.`);
-      if (descriptor.os !== 'windows' && info.soname !== basename(absolute))
+      if (file.androidSoname !== undefined) {
+        if (
+          file.androidSoname !== 'absent' ||
+          descriptor.os !== 'android' ||
+          plugin ||
+          info.soname !== undefined ||
+          !/^lib[A-Za-z0-9_.+-]+\.so$/.test(basename(absolute))
+        )
+          throw new Error(
+            `${file.path} has an invalid Android SONAME declaration.`
+          );
+      } else if (
+        descriptor.os !== 'windows' &&
+        info.soname !== basename(absolute)
+      )
         throw new Error(
           `${file.path} ELF SONAME must match its packaged name.`
         );
@@ -277,11 +295,18 @@ const readArtifact = async <
       dependencies.push(inspected.path);
       inspections.push(inspected);
     }
+    if (
+      new Set(inspections.map((item) => basename(item.path).toLowerCase()))
+        .size !== inspections.length
+    )
+      throw new Error('Duplicate plugin native filename.');
     (kind === 'service'
       ? validateServiceLibraryDependencies
       : validatePluginLibraryDependencies)(inspections, target);
     for (const value of entry.linkLibraries) {
       const file = record(value);
+      if (file.androidSoname !== undefined)
+        throw new Error('A link input cannot declare an Android SONAME.');
       if (
         typeof file.path !== 'string' ||
         digest(await readFile(await packagePath(directory, file.path))) !==
@@ -304,8 +329,10 @@ const readArtifact = async <
 
 /** Inputs for one target produced by any build system. */
 export interface PackagePluginTargetInput {
+  /** Minimum API used to compile this Android target; defaults to the shared runtime floor. */ readonly androidApi?: number;
   /** Final library path. */ readonly library: string;
   /** Final ordinary runtime dependency paths. */ readonly dependencies?: readonly string[];
+  /** Packaged basenames of externally built Android dependencies lacking DT_SONAME. */ readonly androidDependenciesWithoutSoname?: readonly string[];
   /** Import/static libraries for native consumers. */ readonly linkLibraries?: readonly string[];
   /** Implementation language, defaults to C++20. */ readonly language?:
     'c' | 'c++';
@@ -408,8 +435,30 @@ const packageArtifact = async (
         1 + (input.dependencies?.length ?? 0)
       )
         throw new Error('Duplicate plugin native filename.');
-      for (const path of input.dependencies ?? [])
-        dependencies.push(await copy(path, native));
+      const names = input.androidDependenciesWithoutSoname ?? [];
+      const absent = new Set(names);
+      const dependencyNames = (input.dependencies ?? []).map((path) =>
+        basename(path)
+      );
+      if (
+        !Array.isArray(names) ||
+        absent.size !== names.length ||
+        names.some(
+          (name) =>
+            descriptor.os !== 'android' || !dependencyNames.includes(name)
+        )
+      )
+        throw new Error(
+          'Android dependencies without a SONAME must name distinct packaged dependency files.'
+        );
+      for (const path of input.dependencies ?? []) {
+        const file = await copy(path, native);
+        dependencies.push(
+          absent.has(basename(path))
+            ? { ...file, androidSoname: 'absent' }
+            : file
+        );
+      }
       for (const path of input.linkLibraries ?? [])
         linkLibraries.push(await copy(path, `${native}/link`));
       const cardio = input.cardio ?? input.language !== 'c';
@@ -430,7 +479,13 @@ const packageArtifact = async (
                 cpp: descriptor.os === 'android' ? 'c++_shared' : 'libstdc++',
               }),
           ...(descriptor.os === 'android'
-            ? { ndk: muonPluginNdkVersion, androidApi: muonPluginAndroidApi }
+            ? {
+                ndk: muonPluginNdkVersion,
+                androidApi:
+                  input.androidApi === undefined
+                    ? muonPluginAndroidApi
+                    : input.androidApi,
+              }
             : {}),
         },
       };

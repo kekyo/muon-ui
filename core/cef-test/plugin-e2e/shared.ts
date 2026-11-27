@@ -810,11 +810,18 @@ const windowsRemoteProcessOperationTimeoutMs = 10000;
 export const runningProcesses: RunningMuon[] = [];
 let sharedLocalStateDirectory: string | undefined = undefined;
 export const execFileAsync = promisify(execFile);
+// Concurrent X11 sessions use the same runtime binaries but write their own
+// configuration and build their own native input sender.
+const runtimeGroup = process.env.MUON_CEF_E2E_GROUP === "runtime";
+const localConfigDirectoryName = runtimeGroup
+  ? ".muon-test-config-runtime"
+  : ".muon-test-config";
 const nativeInputSenderCacheDirectory = resolve(
   "..",
   "node_modules",
   ".cache",
   "muon",
+  runtimeGroup ? "runtime-e2e" : ".",
 );
 const nativeInputSenderSourcePath = join(
   nativeInputSenderCacheDirectory,
@@ -3223,7 +3230,7 @@ export const startMuon = async (
     pluginNames,
     includeStandardPlugins,
   );
-  const configDirectory = join(directory, ".muon-test-config");
+  const configDirectory = join(directory, localConfigDirectoryName);
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,
@@ -3449,7 +3456,7 @@ export const startGestamentDebugMuon = async (
     force: true,
   });
   const pluginDirectory = await createPluginDirectory(DEBUG_MUON_DIRECTORY, []);
-  const configDirectory = join(DEBUG_MUON_DIRECTORY, ".muon-test-config");
+  const configDirectory = join(DEBUG_MUON_DIRECTORY, localConfigDirectoryName);
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,

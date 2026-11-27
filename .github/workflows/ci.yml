@@ -192,6 +192,8 @@ jobs:
 
       - name: Test desktop workspaces
         if: matrix.suite == 'desktop'
+        env:
+          MUON_PARALLEL_CEF_E2E: '1'
         run: npm test --workspace core/cef --workspace core/cef-test
 
       - name: Test package and Android workspaces

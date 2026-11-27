@@ -810,11 +810,19 @@ const windowsRemoteProcessOperationTimeoutMs = 10000;
 export const runningProcesses: RunningMuon[] = [];
 let sharedLocalStateDirectory: string | undefined = undefined;
 export const execFileAsync = promisify(execFile);
+// The launcher excludes the .muon-test-config tree from its runtime fingerprint.
+// Keep each X11 session's changing configuration inside that tree.
+const runtimeGroup = process.env.MUON_CEF_E2E_GROUP === "runtime";
+const localConfigDirectory = join(
+  ".muon-test-config",
+  runtimeGroup ? "runtime" : ".",
+);
 const nativeInputSenderCacheDirectory = resolve(
   "..",
   "node_modules",
   ".cache",
   "muon",
+  runtimeGroup ? "runtime-e2e" : ".",
 );
 const nativeInputSenderSourcePath = join(
   nativeInputSenderCacheDirectory,
@@ -3223,7 +3231,7 @@ export const startMuon = async (
     pluginNames,
     includeStandardPlugins,
   );
-  const configDirectory = join(directory, ".muon-test-config");
+  const configDirectory = join(directory, localConfigDirectory);
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,
@@ -3449,7 +3457,7 @@ export const startGestamentDebugMuon = async (
     force: true,
   });
   const pluginDirectory = await createPluginDirectory(DEBUG_MUON_DIRECTORY, []);
-  const configDirectory = join(DEBUG_MUON_DIRECTORY, ".muon-test-config");
+  const configDirectory = join(DEBUG_MUON_DIRECTORY, localConfigDirectory);
   const pluginPath = relative(configDirectory, pluginDirectory) || ".";
   const configPath = await writeMuonConfig(
     configDirectory,

@@ -3,7 +3,7 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS baseline
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    binutils build-essential bzip2 ca-certificates cmake coreutils curl file \
+    binutils build-essential bzip2 ca-certificates ccache cmake coreutils curl file \
     gcc-12 g++-12 gettext libasound2-dev libatk-bridge2.0-dev libdrm-dev \
     libffi-dev libgbm-dev libglib2.0-dev libgtk-3-dev libnss3-dev libpcre2-dev \
     libssl-dev libx11-dev libxcb1-dev libxcomposite-dev libxdamage-dev \

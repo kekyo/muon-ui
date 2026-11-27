@@ -16,11 +16,15 @@ permissions:
   contents: read
 
 jobs:
-  build-test:
-    name: Build and test
+  platform-tests:
+    name: Test ${{ matrix.suite }}
     runs-on: ubuntu-24.04
-    # Build and packaging can take 76 minutes before the Android E2E starts.
+    # Leave enough time for cold builds and the Android emulator.
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [desktop, packages]
     permissions:
       contents: read
     steps:
@@ -37,12 +41,14 @@ jobs:
           node-version: 24
 
       - name: Set up Java
+        if: matrix.suite == 'packages'
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25.0.3'
 
       - name: Prepare Android manufacturer toolchain
+        if: matrix.suite == 'packages'
         shell: bash
         run: |
           cli_root="${RUNNER_TEMP}/muon-android-cli"
@@ -158,13 +164,34 @@ jobs:
           npm run build --workspace muon-plugin-sdk
           node sdk/scripts/stage-native.mjs windows-i686
           node sdk/scripts/stage-native.mjs windows-amd64
+
+      - name: Prepare Android plugin SDK targets
+        if: matrix.suite == 'packages'
+        run: |
           node sdk/scripts/stage-native.mjs android-arm64-v8a
           node sdk/scripts/stage-native.mjs android-x86_64
 
-      - name: Build and test
-        run: npm run test
+      - name: Prepare desktop test inputs
+        if: matrix.suite == 'desktop'
+        run: |
+          npm run build:target --workspace muon-builder -- test Release linux-amd64
+          npm run build --workspace muon-builder
+          npm run build --workspace muon-node
+          npm run build:js --workspace muon-ui
+          (cd ui && node scripts/stage-muon-builder.mjs)
+
+      - name: Test desktop workspaces
+        if: matrix.suite == 'desktop'
+        run: npm test --workspace core/cef --workspace core/cef-test
+
+      - name: Test package and Android workspaces
+        if: matrix.suite == 'packages'
+        run: |
+          npm run test:common
+          npm test --workspace sdk --workspace core/android --workspace core/android-test --workspace builder --workspace node --workspace ui
 
       - name: Test independent plugin toolchains and prepare consumer runtime
+        if: matrix.suite == 'packages'
         run: |
           node sdk/scripts/test-target.mjs linux-amd64
           xvfb-run -a node sdk/scripts/test-target.mjs windows-i686
@@ -193,18 +220,21 @@ jobs:
           node sdk/scripts/verify-package.mjs linux-amd64 windows-i686 windows-amd64 android-arm64-v8a android-x86_64
 
       - name: Test Linux packages from the independent npm consumer
+        if: matrix.suite == 'packages'
         run: |
           mkdir -p .run/linux-package-ci
           npm pack --workspace muon-ui --ignore-scripts --pack-destination .run/linux-package-ci
           node ui/cef-test/test-packaged-appimage.mts .run/linux-package-ci/muon-ui-*.tgz linux-amd64
 
       - name: Enable KVM for Android E2E
+        if: matrix.suite == 'packages'
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-muon-kvm.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
       - name: Test Android runtime and independent npm consumer
+        if: matrix.suite == 'packages'
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: '37.0'
@@ -225,6 +255,17 @@ jobs:
             node ui/android-test/test-packaged-application.mjs .run/android-ci/muon-ui-*.tgz --plugins --validate
             node sdk/scripts/test-target.mjs android-x86_64
             xvfb-run -a node sdk/scripts/test-consumer.mjs core/cef/dist-linux-amd64
+
+  build-test:
+    name: Build and test
+    needs: platform-tests
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check test results
+        env:
+          RESULT: ${{ needs.platform-tests.result }}
+        run: test "$RESULT" = success
 
   codeql:
     name: Analyze ${{ matrix.language }}

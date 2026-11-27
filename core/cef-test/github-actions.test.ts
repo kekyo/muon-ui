@@ -67,15 +67,37 @@ describe("GitHub Actions CI", () => {
     expect(workflow.permissions).toEqual({ contents: "read" });
 
     const jobs = requireMapping(workflow.jobs, "Workflow jobs");
-    expect(Object.keys(jobs).sort()).toEqual(["build-test", "codeql"]);
+    expect(Object.keys(jobs).sort()).toEqual([
+      "build-test",
+      "codeql",
+      "platform-tests",
+    ]);
     for (const [jobName, value] of Object.entries(jobs)) {
       const job = requireMapping(value, `Job ${jobName}`);
       expect(job["runs-on"]).toBe(
-        jobName === "build-test" ? "ubuntu-24.04" : "ubuntu-latest",
+        jobName === "codeql" ? "ubuntu-latest" : "ubuntu-24.04",
       );
     }
 
-    const buildTestJob = requireMapping(jobs["build-test"], "Build/test job");
+    const gate = requireMapping(jobs["build-test"], "Build/test result");
+    expect(gate.name).toBe("Build and test");
+    expect(gate.needs).toBe("platform-tests");
+    expect(gate.if).toBe("always()");
+    const check = findStep(
+      requireSequence(gate.steps, "Result steps"),
+      "Check test results",
+    );
+    expect(check.env).toEqual({ RESULT: "${{ needs.platform-tests.result }}" });
+    expect(check.run).toBe('test "$RESULT" = success');
+
+    const buildTestJob = requireMapping(
+      jobs["platform-tests"],
+      "Platform tests",
+    );
+    expect(buildTestJob.strategy).toEqual({
+      "fail-fast": false,
+      matrix: { suite: ["desktop", "packages"] },
+    });
     expect(buildTestJob["timeout-minutes"]).toBe(120);
     expect(buildTestJob.permissions).toEqual({ contents: "read" });
     const buildTestSteps = requireSequence(
@@ -109,7 +131,38 @@ describe("GitHub Actions CI", () => {
     expect(findStep(buildTestSteps, "Install npm dependencies").run).toBe(
       "npm ci",
     );
-    expect(findStep(buildTestSteps, "Build and test").run).toBe("npm run test");
+    const desktop = findStep(buildTestSteps, "Test desktop workspaces");
+    const packages = findStep(
+      buildTestSteps,
+      "Test package and Android workspaces",
+    );
+    expect(desktop.if).toBe("matrix.suite == 'desktop'");
+    expect(packages.if).toBe("matrix.suite == 'packages'");
+    const packageCommands = requireString(packages.run, "Package tests");
+    expect(packageCommands).toContain("npm run test:common");
+    const rootPackage = JSON.parse(
+      await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+    );
+    const workspaceTests = [
+      requireString(desktop.run, "Desktop tests"),
+      packageCommands,
+    ]
+      .flatMap((command) => command.split("\n"))
+      .filter((line) => line.startsWith("npm test "))
+      .flatMap((line) =>
+        [...line.matchAll(/--workspace ([\w/-]+)/g)].map((match) => match[1]),
+      );
+    expect(workspaceTests.sort()).toEqual([...rootPackage.workspaces].sort());
+    for (const name of [
+      "Test independent plugin toolchains and prepare consumer runtime",
+      "Test Linux packages from the independent npm consumer",
+      "Enable KVM for Android E2E",
+      "Test Android runtime and independent npm consumer",
+    ]) {
+      expect(findStep(buildTestSteps, name).if).toBe(
+        "matrix.suite == 'packages'",
+      );
+    }
 
     const cefCache = findStep(buildTestSteps, "Cache CEF");
     expect(cefCache.uses).toBe(
